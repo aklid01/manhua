@@ -179,19 +179,16 @@ def test_import_cbz(tmp_path):
 
 
 def test_import_idempotent(tmp_path):
-    """Stage0: re-running import overwrites pages deterministically."""
+    """Stage0: re-running import still produces a valid manifest."""
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "src"
     src.mkdir()
     ws = tmp_path / "workspace"
-
-    for name in ["00000000_00010001.jpg"]:
-        img = Image.new("RGB", (860, 1214))
-        img.save(src / name, "JPEG")
+    img = Image.new("RGB", (860, 1214))
+    img.save(src / "00000000_00010001.jpg", "JPEG")
 
     run_import(str(src), str(ws), config)
-
     run_import(str(src), str(ws), config)
     assert (ws / "manifest.json").exists()
 
@@ -224,3 +221,83 @@ def test_stage_stubs_run(temp_workspace):
     assert stage4_paraphrase.run_paraphrase(temp_workspace, config) is not None
     assert stage5_render.run_render(temp_workspace, config) is not None
     assert stage6_qa.run_qa(temp_workspace, config) is not None
+
+
+def test_import_unpadded_numeric_order(tmp_path):
+    """Unpadded filenames (p1..p10) must import in true numeric order, not lexicographic."""
+    import json
+
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    src = tmp_path / "chapter_042"
+    src.mkdir()
+    ws = tmp_path / "workspace"
+    names = [f"p{i}.jpg" for i in range(1, 11)]
+    for name in names:
+        Image.new("RGB", (860, 1214)).save(src / name, "JPEG")
+    run_import(str(src), str(ws), config)
+    manifest = json.loads((ws / "manifest.json").read_text())
+    orig = [p["original_filename"] for p in manifest["pages"]]
+    assert orig == [f"p{i}.jpg" for i in range(1, 11)]
+    assert manifest["pages"][9]["page_number"] == 10
+
+
+def test_import_chapter_id_from_folder(tmp_path):
+    """chapter_id should come from the chapter folder name, not its parent/grandparent."""
+    import json
+
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    src = tmp_path / "chapters" / "chapter_001"
+    src.mkdir(parents=True)
+    ws = tmp_path / "workspace"
+    Image.new("RGB", (860, 1214)).save(src / "00000000_00010000.jpg", "JPEG")
+    run_import(str(src), str(ws), config)
+    manifest = json.loads((ws / "manifest.json").read_text())
+    assert "chapter_001" in manifest["chapter_id"]
+    assert manifest["chapter_id"] != "chapters"
+
+
+def test_import_cbz_chapter_id(tmp_path):
+    """CBZ import must derive chapter_id from the archive name, never the temp dir."""
+    import json
+    import zipfile
+
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    cbz = tmp_path / "1_001_.cbz"
+    with zipfile.ZipFile(cbz, "w") as zf:
+        for name in ["00000000_00010000.jpg", "00000000_00010001.jpg"]:
+            img_path = tmp_path / name
+            Image.new("RGB", (860, 1214)).save(img_path, "JPEG")
+            zf.write(img_path, name)
+    ws = tmp_path / "workspace"
+    run_import(str(cbz), str(ws), config)
+    manifest = json.loads((ws / "manifest.json").read_text())
+    assert "1_001" in manifest["chapter_id"]
+    assert "tmp" not in manifest["chapter_id"].lower()
+
+
+def test_import_idempotent_clears_stale(tmp_path):
+    """Re-running import with fewer pages must remove stale NNN.png files."""
+    import json
+
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    src = tmp_path / "src"
+    src.mkdir()
+    ws = tmp_path / "workspace"
+    for i in range(1, 6):
+        Image.new("RGB", (860, 1214)).save(src / f"{i:08d}.jpg", "JPEG")
+    run_import(str(src), str(ws), config)
+    assert (ws / "pages" / "005.png").exists()
+
+    for f in src.iterdir():
+        f.unlink()
+    for i in range(1, 3):
+        Image.new("RGB", (860, 1214)).save(src / f"{i:08d}.jpg", "JPEG")
+    run_import(str(src), str(ws), config)
+    pages = sorted((ws / "pages").glob("*.png"))
+    assert [p.name for p in pages] == ["001.png", "002.png"]
+    manifest = json.loads((ws / "manifest.json").read_text())
+    assert manifest["total_pages"] == 2
