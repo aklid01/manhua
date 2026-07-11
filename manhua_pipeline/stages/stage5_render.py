@@ -175,7 +175,16 @@ def _keep_largest_component(
     return new_grid
 
 
-def _get_bubble_mask(bbox_img: Image.Image, config) -> Image.Image:
+def _get_bubble_mask(
+    bbox_img: Image.Image,
+    mx: int,
+    my: int,
+    mw: int,
+    mh: int,
+    page_w: int,
+    page_h: int,
+    config,
+) -> Image.Image:
     """Generate a binary mask identifying the white/near-white bubble area."""
     img = bbox_img.convert("RGB")
     width, height = img.size
@@ -198,11 +207,15 @@ def _get_bubble_mask(bbox_img: Image.Image, config) -> Image.Image:
     first_w_in_row, last_w_in_row = _find_row_boundaries(is_white, width, height)
     first_w_in_col, last_w_in_col = _find_col_boundaries(is_white, width, height)
 
-    # 3. Create mask image
-    touches_top = any(is_white[0][px] for px in range(width))
-    touches_bottom = any(is_white[height - 1][px] for px in range(width))
-    touches_left = any(is_white[py][0] for py in range(height))
-    touches_right = any(is_white[py][width - 1] for py in range(height))
+    # 4. Create mask image, checking if bubble touches actual physical page borders
+    touches_top = (my == 0) and any(is_white[0][px] for px in range(width))
+    touches_bottom = (my + mh == page_h) and any(
+        is_white[height - 1][px] for px in range(width)
+    )
+    touches_left = (mx == 0) and any(is_white[py][0] for py in range(height))
+    touches_right = (mx + mw == page_w) and any(
+        is_white[py][width - 1] for py in range(height)
+    )
 
     mask = Image.new("L", (width, height), 0)
     for y in range(height):
@@ -380,7 +393,9 @@ def _render_region(
         mh = min(page_img.height - my, mask_coords[3])
 
         bbox_img = page_img.crop((mx, my, mx + mw, my + mh))
-        mask = _get_bubble_mask(bbox_img, config)
+        mask = _get_bubble_mask(
+            bbox_img, mx, my, mw, mh, page_img.width, page_img.height, config
+        )
 
         mask_bbox = mask.getbbox()
         mask_pixels = 0
