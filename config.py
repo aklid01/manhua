@@ -96,6 +96,7 @@ TEXT_PADDING_PX = 4
 EMPHASIS_UPPERCASE = True
 BG_FILL_DEFAULT = (255, 255, 255)
 FONT_MISSING_HARD_ERROR = True
+BUBBLE_WHITE_THRESHOLD = 220
 
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]

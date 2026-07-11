@@ -103,6 +103,75 @@ def _estimate_bg(
     )
 
 
+def _find_row_boundaries(
+    is_white: list[list[bool]], width: int, height: int
+) -> tuple[list[int], list[int]]:
+    first_w = [-1] * height
+    last_w = [-1] * height
+    for y in range(height):
+        for x in range(width):
+            if is_white[y][x]:
+                if first_w[y] == -1:
+                    first_w[y] = x
+                last_w[y] = x
+    return first_w, last_w
+
+
+def _find_col_boundaries(
+    is_white: list[list[bool]], width: int, height: int
+) -> tuple[list[int], list[int]]:
+    first_w = [-1] * width
+    last_w = [-1] * width
+    for x in range(width):
+        for y in range(height):
+            if is_white[y][x]:
+                if first_w[x] == -1:
+                    first_w[x] = y
+                last_w[x] = y
+    return first_w, last_w
+
+
+def _get_bubble_mask(bbox_img: Image.Image, config) -> Image.Image:
+    """Generate a binary mask identifying the white/near-white bubble area."""
+    img = bbox_img.convert("RGB")
+    width, height = img.size
+
+    threshold = getattr(config, "BUBBLE_WHITE_THRESHOLD", 220)
+
+    # 1. Create a binary grid of white pixels
+    is_white = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            r, g, b = img.getpixel((x, y))
+            row.append(r > threshold and g > threshold and b > threshold)
+        is_white.append(row)
+
+    # 2. Find row/col boundaries for white pixels
+    first_w_in_row, last_w_in_row = _find_row_boundaries(is_white, width, height)
+    first_w_in_col, last_w_in_col = _find_col_boundaries(is_white, width, height)
+
+    # 3. Create mask image
+    mask = Image.new("L", (width, height), 0)
+    for y in range(height):
+        for x in range(width):
+            if is_white[y][x]:
+                mask.putpixel((x, y), 255)
+            else:
+                # Surrounded by white check
+                if (
+                    first_w_in_row[y] != -1
+                    and first_w_in_row[y] < x
+                    and last_w_in_row[y] > x
+                    and first_w_in_col[x] != -1
+                    and first_w_in_col[x] < y
+                    and last_w_in_col[x] > y
+                ):
+                    mask.putpixel((x, y), 255)
+
+    return mask
+
+
 def _wrap_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
     """Word wraps lines to stay within max_width."""
     paragraphs = text.split("\n")
@@ -241,8 +310,10 @@ def _render_region(
         mw = min(page_img.width - mx, mask_coords[2])
         mh = min(page_img.height - my, mask_coords[3])
 
-        bg_color = _estimate_bg(page_img, mx, my, mw, mh)
-        draw.rectangle([mx, my, mx + mw, my + mh], fill=bg_color)
+        bbox_img = page_img.crop((mx, my, mx + mw, my + mh))
+        mask = _get_bubble_mask(bbox_img, config)
+        white_img = Image.new("RGB", (mw, mh), (255, 255, 255))
+        page_img.paste(white_img, (mx, my), mask=mask)
 
         # 2. Draw English final text
         text_to_draw = final_text

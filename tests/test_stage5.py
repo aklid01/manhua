@@ -7,9 +7,17 @@ import config
 
 def _setup(ws, page_wh=(400, 600), det=None, ocr=None, para=None):
     (ws / "pages").mkdir(parents=True, exist_ok=True)
-    img = Image.new("RGB", page_wh, (255, 255, 255))
-    img.paste((0, 0, 0), (50, 50, 150, 100))  # black block to detect erasure
+    # Start with a green background to verify outside is untouched
+    img = Image.new("RGB", page_wh, (0, 255, 0))
+    # Draw bubble 1: white background
+    img.paste((255, 255, 255), (50, 50, 150, 100))
+    # Draw dark characters inside bubble 1
+    img.paste((0, 0, 0), (70, 60, 130, 90))
+    # Draw bubble 2: white background with dark characters
+    img.paste((255, 255, 255), (200, 300, 300, 350))
+    img.paste((0, 0, 0), (220, 310, 280, 340))
     img.save(ws / "pages" / "001.png")
+
     manifest = {
         "chapter_id": "t",
         "total_pages": 1,
@@ -107,8 +115,10 @@ def test_render_text_gated_erase(tmp_path, monkeypatch):
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
     out = Image.open(ws / "stage5_render" / "001_render.png").convert("RGB")
-    r1 = out.crop((50, 50, 150, 100))
-    assert r1.getpixel((5, 5)) != (0, 0, 0)  # erased
+    # Assert that the text inside the bubble was erased (became white)
+    assert out.getpixel((75, 75)) == (255, 255, 255)
+    # Assert that the green background outside the bubble was untouched
+    assert out.getpixel((45, 45)) == (0, 255, 0)
     rep = json.loads((ws / "stage5_render" / "render.json").read_text(encoding="utf-8"))
     by_id = {r["region_id"]: r for r in rep["results"]}
     assert by_id["P001_R001"]["rendered"] is True
@@ -172,7 +182,7 @@ def test_render_skips_non_render_type(tmp_path, monkeypatch):
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
     out = Image.open(ws / "stage5_render" / "001_render.png").convert("RGB")
-    assert out.getpixel((60, 60)) == (0, 0, 0)  # untouched
+    assert out.getpixel((75, 75)) == (0, 0, 0)  # untouched character block
     rep = json.loads((ws / "stage5_render" / "render.json").read_text(encoding="utf-8"))
     assert rep["results"][0]["action"] == "left_original_not_render_type"
 
