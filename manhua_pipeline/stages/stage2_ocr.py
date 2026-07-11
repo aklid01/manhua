@@ -38,39 +38,52 @@ def _get_ocr(config):
     )
 
 
-def _read_crop(ocr_engine, crop_image) -> tuple:
-    """Run PaddleOCR on a PIL image crop and return normalized text and confidence.
+def _read_crop(ocr_engine, crop_image, config) -> tuple:
+    """Run PaddleOCR on a PIL image crop and return normalized text, confidence, and watermark flag.
 
     Returns:
-        tuple: (original_text string, mean_confidence float, min_confidence float)
+        tuple: (original_text string, mean_confidence float, min_confidence float, watermark_filtered bool)
     """
     crop_bgr = np.array(crop_image.convert("RGB"))[:, :, ::-1]
     results = ocr_engine.predict(crop_bgr)
 
     if not results or not isinstance(results, list):
-        return "", 0.0, 0.0
+        return "", 0.0, 0.0, False
 
     res = results[0]
     texts = res.get("rec_texts", [])
     scores = res.get("rec_scores", [])
 
     if not texts:
-        return "", 0.0, 0.0
+        return "", 0.0, 0.0, False
 
     lines = []
     confidences = []
+    filtered_any = False
     for txt, conf in zip(texts, scores):
-        if txt:
-            lines.append(txt)
-            confidences.append(float(conf))
+        if not txt:
+            continue
+
+        # Check watermark
+        is_wm = False
+        for rx in getattr(config, "WATERMARK_REGEX", []):
+            if rx.search(txt):
+                is_wm = True
+                break
+        if is_wm:
+            filtered_any = True
+            continue
+
+        lines.append(txt)
+        confidences.append(float(conf))
 
     if not lines:
-        return "", 0.0, 0.0
+        return "", 0.0, 0.0, filtered_any
 
     text = "\n".join(lines)
     mean_conf = sum(confidences) / len(confidences)
     min_conf = min(confidences)
-    return text, mean_conf, min_conf
+    return text, mean_conf, min_conf, filtered_any
 
 
 def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
@@ -96,10 +109,17 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
         y1 = min(H, y + h)
 
         if x1 <= x0 or y1 <= y0:
-            original_text, mean_conf, min_conf = "", 0.0, 0.0
+            original_text, mean_conf, min_conf, watermark_filtered = (
+                "",
+                0.0,
+                0.0,
+                False,
+            )
         else:
             crop_im = page_im.crop((x0, y0, x1, y1))
-            original_text, mean_conf, min_conf = _read_crop(ocr_engine, crop_im)
+            original_text, mean_conf, min_conf, watermark_filtered = _read_crop(
+                ocr_engine, crop_im, config
+            )
 
     # Edge touching computation
     eps = config.EDGE_TOUCH_EPS
@@ -123,9 +143,13 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
         edge_touching and not has_usable_text
     )
 
-    note = None
+    notes = []
     if edge_touching and not has_usable_text:
-        note = "possible split bubble; low/no text — render should not erase"
+        notes.append("possible split bubble; low/no text — render should not erase")
+    if watermark_filtered and not has_usable_text:
+        notes.append("watermark-only region; not rendered")
+
+    note = "; ".join(notes) if notes else None
 
     return {
         "region_id": region["region_id"],
@@ -141,6 +165,7 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
         "edge_touching": edge_touching,
         "edge": edge,
         "note": note,
+        "watermark_filtered": watermark_filtered,
     }
 
 

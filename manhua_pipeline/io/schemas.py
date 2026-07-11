@@ -30,8 +30,14 @@ class OcrResult:
     original_text: str
     text_direction: str = "horizontal"
     ocr_confidence: float = 0.0
+    ocr_confidence_min: float = 0.0
+    has_usable_text: bool = False
     do_not_render: bool = False
     needs_correction: bool = False
+    edge_touching: bool = False
+    edge: str = "none"
+    note: Optional[str] = None
+    watermark_filtered: bool = False
 
 
 @dataclass

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from PIL import Image
 
 import config
+from manhua_pipeline.stages.stage2_ocr import _read_crop
 
 
 def _setup(ws, page_h=1214, regions=None):
@@ -65,7 +66,7 @@ def test_ocr_reads_text_and_flags(tmp_path):
         patch("manhua_pipeline.stages.stage2_ocr._get_ocr") as mock_get,
         patch(
             "manhua_pipeline.stages.stage2_ocr._read_crop",
-            return_value=("滚吧！", 0.94, 0.94),
+            return_value=("滚吧！", 0.94, 0.94, False),
         ),
     ):
         mock_get.return_value = MagicMock()
@@ -108,7 +109,7 @@ def test_ocr_low_confidence_flags_correction(tmp_path):
         ),
         patch(
             "manhua_pipeline.stages.stage2_ocr._read_crop",
-            return_value=("朝阳集团", 0.41, 0.41),
+            return_value=("朝阳集团", 0.41, 0.41, False),
         ),
     ):
         run_ocr(str(ws), config)
@@ -132,7 +133,7 @@ def test_ocr_edge_touching_split_bubble(tmp_path):
         ),
         patch(
             "manhua_pipeline.stages.stage2_ocr._read_crop",
-            return_value=("", 0.0, 0.0),
+            return_value=("", 0.0, 0.0, False),
         ),
     ):
         run_ocr(str(ws), config)
@@ -159,7 +160,7 @@ def test_ocr_clamps_out_of_bounds(tmp_path):
         ),
         patch(
             "manhua_pipeline.stages.stage2_ocr._read_crop",
-            return_value=("x", 0.8, 0.8),
+            return_value=("x", 0.8, 0.8, False),
         ),
     ):
         run_ocr(str(ws), config)  # must not raise
@@ -179,3 +180,104 @@ def test_ocr_zero_regions(tmp_path):
     m = json.loads((ws / "manifest.json").read_text(encoding="utf-8"))
     assert m["current_stage"] == "translate"
     assert "ocr" in m["completed_stages"]
+
+
+# ---- Stage 2 Review Tests (Tests A - D) ----
+
+
+class _FakeOCR:
+    def __init__(self, texts, scores):
+        self._texts = texts
+        self._scores = scores
+
+    def predict(self, img):
+        return [{"rec_texts": self._texts, "rec_scores": self._scores}]
+
+
+def test_read_crop_parses_and_filters_watermark():
+    crop = Image.new("RGB", (200, 80))
+    eng = _FakeOCR(["滚吧！", "www.baozimh.com"], [0.94, 0.99])
+    text, mean_c, min_c, filtered = _read_crop(eng, crop, config)
+    assert text == "滚吧！"  # watermark line removed
+    assert filtered is True
+    assert 0.9 <= mean_c <= 1.0  # only the dialogue line counted
+
+
+def test_read_crop_empty_when_only_watermark():
+    crop = Image.new("RGB", (200, 80))
+    eng = _FakeOCR(["包子漫畫", "www.baozimh.com"], [0.9, 0.9])
+    text, mean_c, min_c, filtered = _read_crop(eng, crop, config)
+    assert text == ""
+    assert filtered is True
+    assert mean_c == 0.0 and min_c == 0.0
+
+
+def test_ocr_watermark_only_region_not_usable(tmp_path):
+    from manhua_pipeline.stages.stage2_ocr import run_ocr
+
+    ws = tmp_path / "workspace"
+    _setup(ws, regions=[_region("P001_R001", 100, 300, 200, 120)])
+    with (
+        patch(
+            "manhua_pipeline.stages.stage2_ocr._get_ocr",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "manhua_pipeline.stages.stage2_ocr._read_crop",
+            return_value=("", 0.0, 0.0, True),
+        ),
+    ):
+        run_ocr(str(ws), config)
+    e = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))[
+        "results"
+    ][0]
+    assert e["has_usable_text"] is False
+    assert e["watermark_filtered"] is True
+    assert e["note"]  # descriptive note present
+
+
+def test_ocr_dialogue_with_watermark_keeps_dialogue(tmp_path):
+    from manhua_pipeline.stages.stage2_ocr import run_ocr
+
+    ws = tmp_path / "workspace"
+    _setup(ws, regions=[_region("P001_R001", 100, 300, 200, 120)])
+    with (
+        patch(
+            "manhua_pipeline.stages.stage2_ocr._get_ocr",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "manhua_pipeline.stages.stage2_ocr._read_crop",
+            return_value=("滚吧！", 0.94, 0.94, True),
+        ),
+    ):
+        run_ocr(str(ws), config)
+    e = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))[
+        "results"
+    ][0]
+    assert e["original_text"] == "滚吧！"
+    assert e["has_usable_text"] is True
+    assert e["watermark_filtered"] is True
+
+
+def test_ocr_normal_text_not_flagged(tmp_path):
+    from manhua_pipeline.stages.stage2_ocr import run_ocr
+
+    ws = tmp_path / "workspace"
+    _setup(ws, regions=[_region("P001_R001", 100, 300, 200, 120)])
+    with (
+        patch(
+            "manhua_pipeline.stages.stage2_ocr._get_ocr",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "manhua_pipeline.stages.stage2_ocr._read_crop",
+            return_value=("老子还不干了！", 0.89, 0.89, False),
+        ),
+    ):
+        run_ocr(str(ws), config)
+    e = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))[
+        "results"
+    ][0]
+    assert e["watermark_filtered"] is False
+    assert e["has_usable_text"] is True

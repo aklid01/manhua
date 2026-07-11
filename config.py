@@ -1,5 +1,6 @@
 """Central configuration and constants for the manhua translation pipeline."""
 
+import re
 from pathlib import Path
 
 # ---- Models ----
@@ -29,6 +30,15 @@ OCR_LANG = "ch"
 OCR_USE_GPU = False
 OCR_MIN_TEXT_CONF = 0.30
 EDGE_TOUCH_EPS = 3
+
+WATERMARK_PATTERNS = [
+    r"www\.",
+    r"baozimh",
+    r"\.com",
+    r"包子漫[画畫]",
+    r"最新免费漫画",
+]
+WATERMARK_REGEX = [re.compile(p, re.IGNORECASE) for p in WATERMARK_PATTERNS]
 
 # ---- Detection types (v0 handles the first two) ----
 TYPE_SPEECH = "speech_bubble"
