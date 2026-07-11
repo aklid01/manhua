@@ -206,6 +206,8 @@ def _import_folder(
                 }
             )
 
+    # input_format heuristic: majority-vote on strip ratio (height/width > _STRIP_RATIO=5.0).
+    # A smarter boundary (very tall pixel height OR ratio, gray zone) is deferred past v0.
     input_format = "strip" if strip_count > total / 2 else "paginated"
     logger.info(
         "[%d/%d %s] Detected format: %s",
@@ -232,6 +234,9 @@ def _import_folder(
         "source_language": "zh",
         "target_language": "en-US",
         "input_format": input_format,
+        # total_pages counts ALL enumerated pages, including failed/skipped ones
+        # (filename=None, skip=True). Downstream stages MUST check skip==False and
+        # filename is not None before opening any page file.
         "total_pages": len(pages),
         "current_stage": "detection",
         "completed_stages": ["import"],
@@ -248,4 +253,4 @@ def _chapter_id_from(name: str) -> str:
     slug = name.lower().replace(" ", "_")
     for ch in (".", "-", "(", ")"):
         slug = slug.replace(ch, "_")
-    return slug
+    return slug.strip("_")

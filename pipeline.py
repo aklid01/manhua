@@ -45,6 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     import_sp.add_argument(
         "--input", required=True, help="Path to a CBZ file or folder of images"
     )
+    import_sp.add_argument("--title-romanized", default=None, dest="title_romanized")
+    import_sp.add_argument("--title-en", default=None, dest="title_en")
+    import_sp.add_argument("--source", default=None)
 
     for name in [n for n in STAGES if n != "import"]:
         sp = sub.add_parser(name, help=f"Run the {name} stage")
@@ -60,6 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
     runall.add_argument(
         "--input", default=None, help="Source path (required when starting from import)"
     )
+    runall.add_argument("--title-romanized", default=None, dest="title_romanized")
+    runall.add_argument("--title-en", default=None, dest="title_en")
+    runall.add_argument("--source", default=None)
     return parser
 
 
@@ -68,11 +74,25 @@ def main(argv=None) -> int:
     setup_logging(stream="stdout")  # CLI logs to stdout; MCP adapter will use stderr
 
     if args.command == "run-all":
-        return _run_all(args.workspace, args.from_stage, getattr(args, "input", None))
+        meta = {
+            "title_romanized": getattr(args, "title_romanized", None),
+            "title_en": getattr(args, "title_en", None),
+            "source": getattr(args, "source", None),
+        }
+        return _run_all(
+            args.workspace, args.from_stage, getattr(args, "input", None), meta
+        )
 
     if args.command == "import":
         logger.info("Running stage: import")
-        stage0_import.run_import(args.input, args.workspace, config)
+        stage0_import.run_import(
+            args.input,
+            args.workspace,
+            config,
+            title_romanized=getattr(args, "title_romanized", None),
+            title_english=getattr(args, "title_en", None),
+            source=getattr(args, "source", None),
+        )
         return 0
 
     run_fn = STAGES[args.command]
@@ -81,7 +101,12 @@ def main(argv=None) -> int:
     return 0
 
 
-def _run_all(workspace: str, from_stage: str, input_path: str | None = None) -> int:
+def _run_all(
+    workspace: str,
+    from_stage: str,
+    input_path: str | None = None,
+    meta: dict | None = None,
+) -> int:
     order = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
     if from_stage not in order:
         logger.error("Unknown --from-stage %r (expected one of %s)", from_stage, order)
@@ -91,10 +116,18 @@ def _run_all(workspace: str, from_stage: str, input_path: str | None = None) -> 
         logger.error("--input is required when run-all starts from import")
         return 2
     logger.info("run-all: starting from %r", from_stage)
+    meta = meta or {}
     for name in order[start:]:
         logger.info("=" * 60)
         if name == "import":
-            stage0_import.run_import(input_path, workspace, config)
+            stage0_import.run_import(
+                input_path,
+                workspace,
+                config,
+                title_romanized=meta.get("title_romanized"),
+                title_english=meta.get("title_en"),
+                source=meta.get("source"),
+            )
         else:
             STAGES[name](workspace, config)
     logger.info("run-all: complete")

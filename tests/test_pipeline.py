@@ -55,7 +55,12 @@ def test_pipeline_main_import_calls_run_import(temp_workspace):
         )
         assert exit_code == 0
         mock_run.assert_called_once_with(
-            "raw_cbz/0_001_.cbz", str(temp_workspace), config
+            "raw_cbz/0_001_.cbz",
+            str(temp_workspace),
+            config,
+            title_romanized=None,
+            title_english=None,
+            source=None,
         )
 
 
@@ -301,3 +306,67 @@ def test_import_idempotent_clears_stale(tmp_path):
     assert [p.name for p in pages] == ["001.png", "002.png"]
     manifest = json.loads((ws / "manifest.json").read_text())
     assert manifest["total_pages"] == 2
+
+
+def test_import_metadata_fields(tmp_path):
+    """When metadata is provided, it appears in the manifest; otherwise null."""
+    import json
+
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    src = tmp_path / "chapter_007"
+    src.mkdir()
+    ws = tmp_path / "workspace"
+    Image.new("RGB", (860, 1214)).save(src / "00000000_00010000.jpg", "JPEG")
+    run_import(
+        str(src),
+        str(ws),
+        config,
+        title_romanized="Wo Meizhou",
+        title_english="Random Job",
+        source="baozimh",
+    )
+    m = json.loads((ws / "manifest.json").read_text())
+    assert m["title_english"] == "Random Job"
+    assert m["title_romanized"] == "Wo Meizhou"
+    assert m["source"] == "baozimh"
+
+
+def test_import_failed_page_recorded(tmp_path):
+    """A corrupt image is recorded with filename=None, skip=True, and counted in total_pages."""
+    import json
+
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    src = tmp_path / "src"
+    src.mkdir()
+    ws = tmp_path / "workspace"
+    Image.new("RGB", (860, 1214)).save(src / "00000000_00010000.jpg", "JPEG")
+    (src / "00000000_00010001.jpg").write_bytes(b"not a real image")
+    run_import(str(src), str(ws), config)
+    m = json.loads((ws / "manifest.json").read_text())
+    assert m["total_pages"] == 2
+    bad = [p for p in m["pages"] if p["skip"]]
+    assert len(bad) == 1
+    assert bad[0]["filename"] is None
+    assert bad[0]["skip_reason"] == "read_error"
+    assert m["warning_count"] >= 1
+
+
+def test_import_chapter_id_no_trailing_underscore(tmp_path):
+    """CBZ stem with trailing underscore should not leak into chapter_id."""
+    import json
+    import zipfile
+
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    cbz = tmp_path / "1_001_.cbz"
+    with zipfile.ZipFile(cbz, "w") as zf:
+        img_path = tmp_path / "00000000_00010000.jpg"
+        Image.new("RGB", (860, 1214)).save(img_path, "JPEG")
+        zf.write(img_path, "00000000_00010000.jpg")
+    ws = tmp_path / "workspace"
+    run_import(str(cbz), str(ws), config)
+    m = json.loads((ws / "manifest.json").read_text())
+    assert not m["chapter_id"].endswith("_")
+    assert "1_001" in m["chapter_id"]
