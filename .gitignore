@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+workspace/pages/
+workspace/stage*/
+workspace/logs/
+workspace/*.json
+*.pt
+assets/fonts/*.ttf
+.examples/
+raw_cbz/

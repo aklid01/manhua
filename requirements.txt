@@ -1,0 +1,9 @@
+ultralytics>=8.0
+paddleocr>=2.7
+paddlepaddle>=2.6
+pillow>=10.0
+numpy>=1.24
+
+# Planned adapters (uncomment when needed)
+# mcp>=1.0              # MCP server for coding-assistant handoff (pin to stable v1.x)
+# ollama>=0.1          # local LLM automation fallback
