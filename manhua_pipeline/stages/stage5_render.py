@@ -381,22 +381,39 @@ def _render_region(
 
         bbox_img = page_img.crop((mx, my, mx + mw, my + mh))
         mask = _get_bubble_mask(bbox_img, config)
-        white_img = Image.new("RGB", (mw, mh), (255, 255, 255))
-        page_img.paste(white_img, (mx, my), mask=mask)
 
-        # 2. Find the bounding box of the actual white bubble mask
         mask_bbox = mask.getbbox()
+        mask_pixels = 0
         if mask_bbox is not None:
+            hist = mask.histogram()
+            mask_pixels = hist[255] if len(hist) > 255 else 0
+
+        crop_area = mw * mh
+        # If mask is valid and covers at least 10% of the crop, use it. Otherwise fallback to full box.
+        if (
+            mask_bbox is not None
+            and crop_area > 0
+            and (mask_pixels / crop_area) >= 0.10
+        ):
+            use_mask = True
             c_left, c_top, c_right, c_bottom = mask_bbox
             bubble_x = mx + c_left
             bubble_y = my + c_top
             bubble_w = max(5, c_right - c_left)
             bubble_h = max(5, c_bottom - c_top)
         else:
+            use_mask = False
             bubble_x = bbox["x"]
             bubble_y = bbox["y"]
             bubble_w = bbox["w"]
             bubble_h = bbox["h"]
+
+        if use_mask:
+            white_img = Image.new("RGB", (mw, mh), (255, 255, 255))
+            page_img.paste(white_img, (mx, my), mask=mask)
+        else:
+            bg_color = _estimate_bg(page_img, mx, my, mw, mh)
+            draw.rectangle([mx, my, mx + mw, my + mh], fill=bg_color)
 
         # 3. Draw English final text
         # Apply spiky/rude style emphasis
