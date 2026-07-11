@@ -6,7 +6,6 @@ from PIL import Image
 
 import config
 from manhua_pipeline.stages import (
-    stage1_detection,
     stage2_ocr,
     stage3_translation,
     stage4_paraphrase,
@@ -220,7 +219,6 @@ def test_import_missing_input(tmp_path):
 
 def test_stage_stubs_run(temp_workspace):
     """Remaining stage stubs run without raising exceptions."""
-    assert stage1_detection.run_detection(temp_workspace, config) is not None
     assert stage2_ocr.run_ocr(temp_workspace, config) is not None
     assert stage3_translation.run_translation(temp_workspace, config) is not None
     assert stage4_paraphrase.run_paraphrase(temp_workspace, config) is not None

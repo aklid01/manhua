@@ -6,6 +6,12 @@ from pathlib import Path
 MODEL_DETECTION = "ogkalu/comic-speech-bubble-detector-yolov8m"
 OCR_ENGINE = "PaddleOCR"
 
+# ---- Detection ----
+DETECTION_MODEL = MODEL_DETECTION
+DETECTION_CONF = 0.35
+OVERLAY_ENABLED = True
+READING_ORDER_BAND_FRACTION = 0.02
+
 # ---- Fonts ----
 FONT_PATH = Path("assets/fonts/ComicNeue-Regular.ttf")  # OFL, from comicneue.com
 
