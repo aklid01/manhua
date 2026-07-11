@@ -25,6 +25,10 @@ REVIEW_MAX = 10  # 3-10 warnings -> REVIEW ; >10 -> FAILED
 
 # ---- OCR ----
 OCR_CONFIDENCE_THRESHOLD = 0.7  # below this -> needs_correction
+OCR_LANG = "ch"
+OCR_USE_GPU = False
+OCR_MIN_TEXT_CONF = 0.30
+EDGE_TOUCH_EPS = 3
 
 # ---- Detection types (v0 handles the first two) ----
 TYPE_SPEECH = "speech_bubble"
