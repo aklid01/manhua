@@ -30,9 +30,11 @@ def _get_ocr(config):
 
     from paddleocr import PaddleOCR
 
+    device = "gpu" if getattr(config, "OCR_USE_GPU", False) else "cpu"
     return PaddleOCR(
         lang=getattr(config, "OCR_LANG", "ch"),
-        use_gpu=getattr(config, "OCR_USE_GPU", False),
+        device=device,
+        enable_mkldnn=False,
     )
 
 
@@ -43,19 +45,24 @@ def _read_crop(ocr_engine, crop_image) -> tuple:
         tuple: (original_text string, mean_confidence float, min_confidence float)
     """
     crop_bgr = np.array(crop_image.convert("RGB"))[:, :, ::-1]
-    results = ocr_engine.ocr(crop_bgr, cls=False)
+    results = ocr_engine.predict(crop_bgr)
 
-    if not results or not results[0]:
+    if not results or not isinstance(results, list):
+        return "", 0.0, 0.0
+
+    res = results[0]
+    texts = res.get("rec_texts", [])
+    scores = res.get("rec_scores", [])
+
+    if not texts:
         return "", 0.0, 0.0
 
     lines = []
     confidences = []
-    for line in results[0]:
-        if len(line) > 1 and isinstance(line[1], tuple):
-            txt, conf = line[1]
-            if txt:
-                lines.append(txt)
-                confidences.append(float(conf))
+    for txt, conf in zip(texts, scores):
+        if txt:
+            lines.append(txt)
+            confidences.append(float(conf))
 
     if not lines:
         return "", 0.0, 0.0
