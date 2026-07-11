@@ -86,5 +86,16 @@ PARAPHRASE_RUDE_MARKERS = [
     "hell",
 ]
 
+# ---- Rendering ----
+FONT_PATH = "assets/fonts/ComicNeue-Regular.ttf"
+FONT_MAX_PT = 18
+FONT_MIN_PT = 9
+FONT_STEP_PT = 1
+LINE_SPACING = 1.15
+TEXT_PADDING_PX = 4
+EMPHASIS_UPPERCASE = True
+BG_FILL_DEFAULT = (255, 255, 255)
+FONT_MISSING_HARD_ERROR = True
+
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
