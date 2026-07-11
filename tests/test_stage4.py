@@ -172,3 +172,78 @@ def test_paraphrase_passes_glossary_conflict(tmp_path):
         (ws / "stage4_paraphrase" / "paraphrase.json").read_text(encoding="utf-8")
     )
     assert pp["results"][0]["glossary_conflict"] is True
+
+
+def test_paraphrase_bundle_includes_glossary(tmp_path):
+    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_tr_entry("P001_R001", "The manager is here.")])
+    glossary = {
+        "version": "v1",
+        "updated_at": "now",
+        "terms": [
+            {
+                "term_id": "jingli",
+                "source_term": "经理",
+                "target_term": "Manager",
+                "category": "title",
+                "locked": True,
+                "auto_seeded": False,
+                "source_region": None,
+                "notes": "",
+            }
+        ],
+    }
+    (ws / "glossary.json").write_text(
+        json.dumps(glossary, ensure_ascii=False), encoding="utf-8"
+    )
+    run_paraphrase(str(ws), config)
+    bundle = json.loads(
+        (ws / "stage4_paraphrase" / "paraphrase_prompt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "glossary" in bundle
+    assert any(t["target_term"] == "Manager" for t in bundle["glossary"])
+
+
+def test_paraphrase_prompt_has_aggressive_clause(tmp_path):
+    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_tr_entry("P001_R001", "Get out!")])
+    run_paraphrase(str(ws), config)
+    bundle = json.loads(
+        (ws / "stage4_paraphrase" / "paraphrase_prompt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    instr = bundle["instructions"].lower()
+    assert "aggressively" in instr
+    assert "verbatim" in instr
+
+
+def test_paraphrase_missing_falls_back_to_literal(tmp_path):
+    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
+
+    ws = tmp_path / "workspace"
+    _setup(
+        ws,
+        [
+            _tr_entry("P001_R001", "Get out!", translated=True),
+            _tr_entry("P001_R002", "I quit!", translated=True),
+        ],
+    )
+    run_paraphrase(str(ws), config)
+    (ws / "stage4_paraphrase" / "paraphrase_response.json").write_text(
+        json.dumps({"P001_R001": "Get lost!"}), encoding="utf-8"
+    )
+    run_paraphrase(str(ws), config)
+    pp = json.loads(
+        (ws / "stage4_paraphrase" / "paraphrase.json").read_text(encoding="utf-8")
+    )
+    by_id = {r["region_id"]: r for r in pp["results"]}
+    assert by_id["P001_R002"]["paraphrased"] is False
+    assert by_id["P001_R002"]["final_text"] == "I quit!"  # fell back to literal
+    assert by_id["P001_R002"]["char_count"] == len("I quit!")

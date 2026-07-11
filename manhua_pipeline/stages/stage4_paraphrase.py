@@ -21,10 +21,12 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Paraphrase"
 
 _PROMPT_INSTRUCTIONS = (
-    "Rewrite each literal English line into natural, casual US English suitable for a "
-    "comic speech bubble. Preserve the original meaning and emotional register "
-    "(including crude/rude tone — do NOT sanitize). Prefer SHORT, punchy phrasing. "
-    "Keep any provided glossary/proper nouns exactly.\n"
+    "Rewrite each literal English line as natural, casual, SPOKEN US English for a "
+    "comic speech bubble. Preserve meaning and emotional register (including crude/rude "
+    "tone — do NOT sanitize). Rewrite AGGRESSIVELY: prefer idiomatic phrasing, "
+    "contractions, and varied sentence structure over line-by-line literal wording. "
+    "Do NOT copy the source line verbatim UNLESS it is a proper noun, brand/watermark, "
+    "or fixed label. Keep names and glossary terms exactly. Prefer SHORT, punchy lines.\n"
     'Return a JSON object mapping region_id -> final english string, e.g. {"P001_R001": "..."}'
 )
 
@@ -106,6 +108,23 @@ def _get_backend(config) -> ParaphraseBackend:
 
 
 # ---------------------------------------------------------------------------
+# Glossary helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_glossary(ws: Path, config) -> dict:
+    path = ws / config.GLOSSARY_NAME
+    if path.exists():
+        with path.open("r", encoding="utf-8") as fh:
+            return json.load(fh)
+    return {"version": "v1", "terms": []}
+
+
+def _locked_terms(glossary: dict) -> list[dict]:
+    return [t for t in glossary.get("terms", []) if t.get("locked")]
+
+
+# ---------------------------------------------------------------------------
 # Heuristic Register Classifier
 # ---------------------------------------------------------------------------
 
@@ -145,7 +164,11 @@ def _detect_register(text: str, rude_markers: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_bundle(usable: list[dict], config) -> dict:
+def _build_bundle(usable: list[dict], locked: list[dict], config) -> dict:
+    compact_glossary = [
+        {"source_term": t["source_term"], "target_term": t["target_term"]}
+        for t in locked
+    ]
     regions = [
         {"region_id": r["region_id"], "literal_translation": r["literal_translation"]}
         for r in usable
@@ -158,6 +181,7 @@ def _build_bundle(usable: list[dict], config) -> dict:
             "preserve crude/rude register; casual US English",
         ),
         "shorten_hint": f"Target length: under {getattr(config, 'PARAPHRASE_MAX_CHARS', 90)} characters",
+        "glossary": compact_glossary,
         "regions": regions,
     }
 
@@ -235,6 +259,9 @@ def run_paraphrase(workspace: str, config) -> Path | None:
         len(skipped),
     )
 
+    glossary = _load_glossary(ws, config)
+    locked = _locked_terms(glossary)
+
     # Short-circuit: nothing to paraphrase
     if not usable:
         logger.info(
@@ -245,7 +272,7 @@ def run_paraphrase(workspace: str, config) -> Path | None:
         )
         return _write_output(ws, config, manifest, trans_data, {}, usable, skipped, t0)
 
-    bundle = _build_bundle(usable, config)
+    bundle = _build_bundle(usable, locked, config)
     backend = _get_backend(config)
     raw_response = backend.request(bundle, ws, config)
 
