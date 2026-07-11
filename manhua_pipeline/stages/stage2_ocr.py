@@ -24,12 +24,15 @@ _STAGE_NAME = "OCR"
 
 def _get_ocr(config):
     """Lazy-load and initialize PaddleOCR engine once."""
+    import logging
+
+    logging.getLogger("ppocr").setLevel(logging.WARNING)
+
     from paddleocr import PaddleOCR
 
     return PaddleOCR(
         lang=getattr(config, "OCR_LANG", "ch"),
         use_gpu=getattr(config, "OCR_USE_GPU", False),
-        show_log=False,
     )
 
 
