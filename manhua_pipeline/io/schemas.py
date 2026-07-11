@@ -46,7 +46,10 @@ class TranslationResult:
     page_number: int
     original_text: str
     literal_translation: str
+    translated: bool = False
+    skip_reason: Optional[str] = None
     glossary_terms_applied: list = field(default_factory=list)
+    glossary_conflict: bool = False
 
 
 @dataclass

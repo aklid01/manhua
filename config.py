@@ -61,5 +61,11 @@ STAGE_FOLDERS = {
 MANIFEST_NAME = "manifest.json"
 GLOSSARY_NAME = "glossary.json"
 
+# ---- Translation ----
+TRANSLATOR_BACKEND = "manual"  # "manual" | "mcp" | "ollama"
+TRANSLATION_PROMPT_NAME = "translation_prompt.json"
+TRANSLATION_RESPONSE_NAME = "translation_response.json"
+OLLAMA_MODEL = "qwen2.5"  # future
+
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
