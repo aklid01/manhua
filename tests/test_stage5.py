@@ -234,3 +234,73 @@ def test_render_missing_paraphrase_left(tmp_path, monkeypatch):
     r = rep["results"][0]
     assert r["rendered"] is False
     assert r["action"] in ("missing_text", "left_original_no_text")
+
+
+def test_render_edge_touching_erase(tmp_path, monkeypatch):
+    from PIL import ImageFont
+
+    from manhua_pipeline.stages import stage5_render
+
+    monkeypatch.setattr(
+        stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
+    )
+    ws = tmp_path / "workspace"
+    # Bubble touching the top edge of page
+    det = _det([_region("P001_R001", 50, 0, 100, 50)])
+    ocr = {"results": [{"region_id": "P001_R001", "has_usable_text": True}]}
+    para = {
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "final_text": "HI",
+                "register": "neutral",
+                "paraphrased": True,
+            }
+        ]
+    }
+    # Setup page
+    (ws / "pages").mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", (400, 600), (0, 255, 0))
+    # Draw bubble 1: white background at top
+    img.paste((255, 255, 255), (50, 0, 150, 50))
+    # Draw character touching top edge y=0
+    img.paste((0, 0, 0), (70, 0, 130, 20))
+    img.save(ws / "pages" / "001.png")
+
+    manifest = {
+        "chapter_id": "t",
+        "total_pages": 1,
+        "pages": [
+            {
+                "page_number": 1,
+                "filename": "001.png",
+                "skip": False,
+                "width": 400,
+                "height": 600,
+            }
+        ],
+        "current_stage": "render",
+        "completed_stages": ["import", "detect", "ocr", "translate", "paraphrase"],
+        "warning_count": 0,
+        "status": "in_progress",
+    }
+    (ws / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (ws / "stage1_detection").mkdir(parents=True, exist_ok=True)
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(det), encoding="utf-8"
+    )
+    (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
+    (ws / "stage2_ocr" / "ocr.json").write_text(
+        json.dumps(ocr, ensure_ascii=False), encoding="utf-8"
+    )
+    (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(
+        json.dumps(para, ensure_ascii=False), encoding="utf-8"
+    )
+
+    stage5_render.run_render(str(ws), config)
+    out = Image.open(ws / "stage5_render" / "001_render.png").convert("RGB")
+    # Assert character touching top y=0 was erased (became white)
+    assert out.getpixel((75, 10)) == (255, 255, 255)
+    # Assert green outside is untouched
+    assert out.getpixel((45, 10)) == (0, 255, 0)

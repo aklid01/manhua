@@ -199,21 +199,28 @@ def _get_bubble_mask(bbox_img: Image.Image, config) -> Image.Image:
     first_w_in_col, last_w_in_col = _find_col_boundaries(is_white, width, height)
 
     # 3. Create mask image
+    touches_top = any(is_white[0][px] for px in range(width))
+    touches_bottom = any(is_white[height - 1][px] for px in range(width))
+    touches_left = any(is_white[py][0] for py in range(height))
+    touches_right = any(is_white[py][width - 1] for py in range(height))
+
     mask = Image.new("L", (width, height), 0)
     for y in range(height):
         for x in range(width):
             if is_white[y][x]:
                 mask.putpixel((x, y), 255)
             else:
-                # Surrounded by white check
-                if (
-                    first_w_in_row[y] != -1
-                    and first_w_in_row[y] < x
-                    and last_w_in_row[y] > x
-                    and first_w_in_col[x] != -1
-                    and first_w_in_col[x] < y
-                    and last_w_in_col[x] > y
-                ):
+                # Surrounded by white check (treating page borders as virtual white bounds)
+                has_left = touches_left or (
+                    first_w_in_row[y] != -1 and first_w_in_row[y] < x
+                )
+                has_right = touches_right or (last_w_in_row[y] > x)
+                has_top = touches_top or (
+                    first_w_in_col[x] != -1 and first_w_in_col[x] < y
+                )
+                has_bottom = touches_bottom or (last_w_in_col[x] > y)
+
+                if has_left and has_right and has_top and has_bottom:
                     mask.putpixel((x, y), 255)
 
     return mask
@@ -279,7 +286,9 @@ def _fit_text(
     target_w = max(5, bbox_w - 2 * padding)
     target_h = max(5, bbox_h - 2 * padding)
 
-    for pt in range(max_pt, min_pt - 1, -step_pt):
+    # Try fitting text from max_pt down to absolute minimum floor (5pt) to completely avoid clipping
+    abs_min = 5
+    for pt in range(max_pt, abs_min - 1, -step_pt):
         font = _load_font(font_path, pt, config)
 
         # Try multiple layout widths to encourage more lines and better aspect ratio
@@ -295,7 +304,9 @@ def _fit_text(
                         word_overflow = True
                         break
                 if not word_overflow:
-                    return font, lines, pt, False
+                    # Mark as overflow only if we had to scale below config's FONT_MIN_PT
+                    overflow_flag = pt < min_pt
+                    return font, lines, pt, overflow_flag
 
     # Fallback to min_pt and full target_w, and flag overflow
     font = _load_font(font_path, min_pt, config)
