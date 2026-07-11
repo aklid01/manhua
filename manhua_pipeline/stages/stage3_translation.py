@@ -130,12 +130,14 @@ def _locked_terms(glossary: dict) -> list[dict]:
     return [t for t in glossary.get("terms", []) if t.get("locked")]
 
 
-def _apply_glossary(text: str, locked: list[dict]) -> tuple[str, list[str], bool]:
-    """Enforce locked terms in translated text.
+def _enforce_glossary(
+    original_zh: str, translation: str, locked: list[dict]
+) -> tuple[str, list[str], bool]:
+    """Post-process: flag glossary conflicts without mutating translation text.
 
-    Returns (final_text, applied_term_ids, glossary_conflict).
-    A conflict is flagged when a source term appears in the original Chinese
-    but the target term was missing and had to be substituted.
+    If a locked source term appears in original_zh but the target is absent
+    in translation, record the term_id and set conflict=True. The text is
+    left unchanged so rendering is never defaced; QA surfaces conflicts.
     """
     applied = []
     conflict = False
@@ -145,39 +147,20 @@ def _apply_glossary(text: str, locked: list[dict]) -> tuple[str, list[str], bool
         term_id = term.get("term_id", "")
         if not source or not target:
             continue
-        if target in text:
-            applied.append(term_id)
-        # We can't detect source in translated English, so rely on glossary
-        # being included in the prompt. If the target is absent we flag conflict.
-    return text, applied, conflict
-
-
-def _enforce_glossary(
-    original_zh: str, translation: str, locked: list[dict]
-) -> tuple[str, list[str], bool]:
-    """Post-process: if a locked source term appears in original_zh but the
-    target is absent in translation, substitute and flag conflict."""
-    applied = []
-    conflict = False
-    result = translation
-    for term in locked:
-        source = term.get("source_term", "")
-        target = term.get("target_term", "")
-        term_id = term.get("term_id", "")
-        if not source or not target:
-            continue
         if source in original_zh:
-            if target in result:
+            if target in translation:
                 applied.append(term_id)
             else:
-                result = result + f" [{target}]" if result else target
                 applied.append(term_id)
                 conflict = True
-    return result, applied, conflict
+    return translation, applied, conflict
 
 
 def _maybe_seed_glossary(results: list[dict], glossary: dict) -> None:
     """Deferred stub: auto-seed glossary from name_label/scene_text regions.
+
+    TODO: also consider skipping credits/title pages (P001) and author-note
+    pages (P042) at Detection or Import level (page-level skip_reason).
 
     TODO: implement when detection emits name_label and scene_text types.
     """
@@ -290,7 +273,7 @@ def run_translation(workspace: str, config) -> Path | None:
             _STAGE_NAME,
         )
         return _write_output(
-            ws, config, manifest, ocr_data, {}, usable, skipped, locked, t0
+            ws, config, manifest, ocr_data, glossary, {}, usable, skipped, locked, t0
         )
 
     bundle = _build_bundle(usable, locked)
@@ -314,7 +297,16 @@ def run_translation(workspace: str, config) -> Path | None:
         logger.warning("[%s] %s", _STAGE_NAME, w)
 
     return _write_output(
-        ws, config, manifest, ocr_data, translation_map, usable, skipped, locked, t0
+        ws,
+        config,
+        manifest,
+        ocr_data,
+        glossary,
+        translation_map,
+        usable,
+        skipped,
+        locked,
+        t0,
     )
 
 
@@ -323,6 +315,7 @@ def _write_output(
     config,
     manifest: dict,
     ocr_data: dict,
+    glossary: dict,
     translation_map: dict,
     usable: list[dict],
     skipped: list[dict],
@@ -390,7 +383,7 @@ def _write_output(
 
     _maybe_seed_glossary(results, {})
 
-    glossary_version = manifest.get("glossary_version", "v1")
+    glossary_version = glossary.get("version", "v1")
     output = {
         "chapter_id": ocr_data.get("chapter_id", "unknown"),
         "stage": "translation",

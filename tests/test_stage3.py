@@ -146,8 +146,8 @@ def test_translation_glossary_locked_term(tmp_path):
         (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
     )
     r = tr["results"][0]
-    assert ("Manager" in r["literal_translation"]) or (r["glossary_conflict"] is True)
-    assert "jingli" in r["glossary_terms_applied"] or r["glossary_conflict"] is True
+    assert r["glossary_conflict"] is True
+    assert "jingli" in r["glossary_terms_applied"]
 
 
 def test_translation_all_unusable_completes(tmp_path):
@@ -163,3 +163,54 @@ def test_translation_all_unusable_completes(tmp_path):
     assert tr["results"][0]["translated"] is False
     m = json.loads((ws / "manifest.json").read_text())
     assert m["current_stage"] == "paraphrase"
+
+
+def test_translation_glossary_conflict_does_not_mutate(tmp_path):
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    glossary = {
+        "version": "v1",
+        "updated_at": "now",
+        "terms": [
+            {
+                "term_id": "jingli",
+                "source_term": "经理",
+                "target_term": "Manager",
+                "category": "title",
+                "locked": True,
+                "auto_seeded": False,
+                "source_region": None,
+                "notes": "",
+            }
+        ],
+    }
+    _setup(ws, [_ocr_entry("P001_R001", "经理")], glossary=glossary)
+    run_translation(str(ws), config)
+    (ws / "stage3_translation" / "translation_response.json").write_text(
+        json.dumps({"P001_R001": "Boss"}), encoding="utf-8"
+    )
+    run_translation(str(ws), config)
+    tr = json.loads(
+        (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
+    )
+    r = tr["results"][0]
+    assert r["glossary_conflict"] is True
+    assert r["literal_translation"] == "Boss"  # text NOT defaced
+
+
+def test_translation_glossary_version_from_glossary(tmp_path):
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    glossary = {"version": "v3", "updated_at": "now", "terms": []}
+    _setup(ws, [_ocr_entry("P001_R001", "滚吧！")], glossary=glossary)
+    run_translation(str(ws), config)
+    (ws / "stage3_translation" / "translation_response.json").write_text(
+        json.dumps({"P001_R001": "Get lost!"}), encoding="utf-8"
+    )
+    run_translation(str(ws), config)
+    tr = json.loads(
+        (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
+    )
+    assert tr["glossary_version"] == "v3"

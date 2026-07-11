@@ -36,7 +36,8 @@ WATERMARK_PATTERNS = [
     r"baozimh",
     r"\.com",
     r"包子漫[画畫]",
-    r"最新免费漫画",
+    r"最新免[费費]漫[画畫]",
+    r"免[费費]漫[画畫]",
 ]
 WATERMARK_REGEX = [re.compile(p, re.IGNORECASE) for p in WATERMARK_PATTERNS]
 

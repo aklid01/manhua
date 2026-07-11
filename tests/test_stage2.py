@@ -281,3 +281,11 @@ def test_ocr_normal_text_not_flagged(tmp_path):
     ][0]
     assert e["watermark_filtered"] is False
     assert e["has_usable_text"] is True
+
+
+def test_read_crop_filters_traditional_watermark():
+    crop = Image.new("RGB", (200, 80))
+    eng = _FakeOCR(["快逃啊！", "最新免費漫畫"], [0.92, 0.95])
+    text, mean_c, min_c, filtered = _read_crop(eng, crop, config)
+    assert text == "快逃啊！"
+    assert filtered is True
