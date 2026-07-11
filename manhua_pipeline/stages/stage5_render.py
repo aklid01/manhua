@@ -315,7 +315,22 @@ def _render_region(
         white_img = Image.new("RGB", (mw, mh), (255, 255, 255))
         page_img.paste(white_img, (mx, my), mask=mask)
 
-        # 2. Draw English final text
+        # 2. Find the bounding box of the actual white bubble mask
+        mask_bbox = mask.getbbox()
+        if mask_bbox is not None:
+            c_left, c_top, c_right, c_bottom = mask_bbox
+            bubble_x = mx + c_left
+            bubble_y = my + c_top
+            bubble_w = max(5, c_right - c_left)
+            bubble_h = max(5, c_bottom - c_top)
+        else:
+            bubble_x = bbox["x"]
+            bubble_y = bbox["y"]
+            bubble_w = bbox["w"]
+            bubble_h = bbox["h"]
+
+        # 3. Draw English final text
+        # Apply spiky/rude style emphasis
         text_to_draw = final_text
         if (register == "rude" or style_hint == "spiky") and getattr(
             config, "EMPHASIS_UPPERCASE", True
@@ -330,8 +345,8 @@ def _render_region(
 
         font, lines, font_size, overflow = _fit_text(
             text_to_draw,
-            bbox["w"],
-            bbox["h"],
+            bubble_w,
+            bubble_h,
             font_path,
             max_pt,
             min_pt,
@@ -364,14 +379,14 @@ def _render_region(
             )
 
         block_h = _block_height(lines, font, line_spacing)
-        start_y = bbox["y"] + (bbox["h"] - block_h) // 2
+        start_y = bubble_y + (bubble_h - block_h) // 2
 
         metrics_bbox = font.getbbox("Hg")
         line_h = metrics_bbox[3] - metrics_bbox[1] if metrics_bbox else 10
 
         for line in lines:
             line_w = font.getlength(line)
-            start_x = bbox["x"] + (bbox["w"] - line_w) // 2
+            start_x = bubble_x + (bubble_w - line_w) // 2
             draw.text((start_x, start_y), line, font=font, fill=(0, 0, 0))
             start_y += int(line_h * line_spacing)
 
