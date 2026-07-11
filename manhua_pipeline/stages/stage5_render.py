@@ -131,6 +131,50 @@ def _find_col_boundaries(
     return first_w, last_w
 
 
+def _bfs(
+    sx: int,
+    sy: int,
+    is_white: list[list[bool]],
+    visited: list[list[bool]],
+    width: int,
+    height: int,
+) -> list[tuple[int, int]]:
+    comp = []
+    queue = [(sx, sy)]
+    visited[sy][sx] = True
+    q_idx = 0
+    while q_idx < len(queue):
+        cx, cy = queue[q_idx]
+        q_idx += 1
+        comp.append((cx, cy))
+        for nx, ny in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)]:
+            if 0 <= nx < width and 0 <= ny < height:
+                if is_white[ny][nx] and not visited[ny][nx]:
+                    visited[ny][nx] = True
+                    queue.append((nx, ny))
+    return comp
+
+
+def _keep_largest_component(
+    is_white: list[list[bool]], width: int, height: int
+) -> list[list[bool]]:
+    """Keep only the largest connected component of True values (the main bubble)."""
+    visited = [[False] * width for _ in range(height)]
+    largest_comp = []
+
+    for y in range(height):
+        for x in range(width):
+            if is_white[y][x] and not visited[y][x]:
+                comp = _bfs(x, y, is_white, visited, width, height)
+                if len(comp) > len(largest_comp):
+                    largest_comp = comp
+
+    new_grid = [[False] * width for _ in range(height)]
+    for cx, cy in largest_comp:
+        new_grid[cy][cx] = True
+    return new_grid
+
+
 def _get_bubble_mask(bbox_img: Image.Image, config) -> Image.Image:
     """Generate a binary mask identifying the white/near-white bubble area."""
     img = bbox_img.convert("RGB")
@@ -147,7 +191,10 @@ def _get_bubble_mask(bbox_img: Image.Image, config) -> Image.Image:
             row.append(r > threshold and g > threshold and b > threshold)
         is_white.append(row)
 
-    # 2. Find row/col boundaries for white pixels
+    # 2. Keep only the largest connected component of white pixels (noise filter)
+    is_white = _keep_largest_component(is_white, width, height)
+
+    # 3. Find row/col boundaries for white pixels
     first_w_in_row, last_w_in_row = _find_row_boundaries(is_white, width, height)
     first_w_in_col, last_w_in_col = _find_col_boundaries(is_white, width, height)
 
@@ -227,19 +274,30 @@ def _fit_text(
     line_spacing: float,
     config,
 ) -> tuple[ImageFont.ImageFont, list[str], int, bool]:
-    """Fits text using the overflow ladder sizing step-down technique."""
-    padding = getattr(config, "TEXT_PADDING_PX", 4)
+    """Fits text using the overflow ladder sizing step-down technique with ratio wrapping search."""
+    padding = getattr(config, "TEXT_PADDING_PX", 8)
     target_w = max(5, bbox_w - 2 * padding)
     target_h = max(5, bbox_h - 2 * padding)
 
     for pt in range(max_pt, min_pt - 1, -step_pt):
         font = _load_font(font_path, pt, config)
-        lines = _wrap_text(text, font, target_w)
-        h = _block_height(lines, font, line_spacing)
-        if h <= target_h:
-            return font, lines, pt, False
 
-    # Fallback to min_pt and flag overflow
+        # Try multiple layout widths to encourage more lines and better aspect ratio
+        for ratio in [0.65, 0.8, 0.95]:
+            w_limit = max(5, int(target_w * ratio))
+            lines = _wrap_text(text, font, w_limit)
+            h = _block_height(lines, font, line_spacing)
+            if h <= target_h:
+                # Ensure no single line overflows the absolute target width
+                word_overflow = False
+                for line in lines:
+                    if font.getlength(line) > target_w:
+                        word_overflow = True
+                        break
+                if not word_overflow:
+                    return font, lines, pt, False
+
+    # Fallback to min_pt and full target_w, and flag overflow
     font = _load_font(font_path, min_pt, config)
     lines = _wrap_text(text, font, target_w)
     return font, lines, min_pt, True
