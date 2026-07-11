@@ -49,7 +49,7 @@ def _fake_predict_two_boxes(*args, **kwargs):
 
 @patch(
     "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x: x,
+    side_effect=lambda x, *args: x,
 )
 def test_detection_builds_regions_in_reading_order(mock_resolve, tmp_path):
     from manhua_pipeline.stages.stage1_detection import run_detection
@@ -98,7 +98,7 @@ def test_detection_builds_regions_in_reading_order(mock_resolve, tmp_path):
 
 @patch(
     "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x: x,
+    side_effect=lambda x, *args: x,
 )
 def test_detection_skips_unusable_pages(mock_resolve, tmp_path):
     from manhua_pipeline.stages.stage1_detection import run_detection
@@ -138,7 +138,7 @@ def test_detection_skips_unusable_pages(mock_resolve, tmp_path):
 
 @patch(
     "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x: x,
+    side_effect=lambda x, *args: x,
 )
 def test_detection_zero_boxes(mock_resolve, tmp_path):
     from manhua_pipeline.stages.stage1_detection import run_detection
@@ -173,7 +173,7 @@ def test_detection_zero_boxes(mock_resolve, tmp_path):
 
 @patch(
     "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x: x,
+    side_effect=lambda x, *args: x,
 )
 def test_detection_model_loaded_once(mock_resolve, tmp_path):
     from manhua_pipeline.stages.stage1_detection import run_detection
@@ -198,3 +198,42 @@ def test_detection_model_loaded_once(mock_resolve, tmp_path):
         run_detection(str(ws), config)
         MockYOLO.assert_called_once()  # model constructed exactly once
         assert MockYOLO.return_value.predict.call_count == 3
+
+
+@patch(
+    "manhua_pipeline.stages.stage1_detection._resolve_model",
+    side_effect=lambda x, *args: x,
+)
+def test_detection_overlay_saved_when_zero_regions(mock_resolve, tmp_path):
+    """A processed page with zero detections must still produce an overlay PNG."""
+    from manhua_pipeline.stages.stage1_detection import run_detection
+
+    ws = tmp_path / "workspace"
+    pages = [
+        {
+            "page_number": 1,
+            "filename": "001.png",
+            "original_filename": "a.jpg",
+            "width": 860,
+            "height": 1214,
+            "skip": False,
+            "skip_reason": None,
+            "global_y_offset": None,
+        }
+    ]
+    _make_manifest(ws, pages)
+
+    def _empty_predict(*a, **k):
+        r = MagicMock()
+        r.boxes = []
+        r.names = {}
+        return [r]
+
+    with patch("manhua_pipeline.stages.stage1_detection.YOLO") as MockYOLO:
+        MockYOLO.return_value.predict.side_effect = _empty_predict
+        run_detection(str(ws), config)
+
+    det = json.loads((ws / "stage1_detection" / "detection.json").read_text())
+    assert det["regions"] == []  # no regions detected
+    overlay = ws / "stage1_detection" / "overlays" / "001_overlay.png"
+    assert overlay.exists()  # but the clean overlay is still saved (Fix 1)

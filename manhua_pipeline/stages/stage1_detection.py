@@ -53,7 +53,7 @@ def _reading_order_sort(boxes, band_height):
     return sorted(boxes, key=lambda b: (round(b["y"] / bh), b["x"]))
 
 
-def _resolve_model(model_name_or_path: str) -> str:
+def _resolve_model(model_name_or_path: str, config) -> str:
     """Resolve a model name/path. If it is a Hugging Face repo ID, download the .pt file."""
     path = Path(model_name_or_path)
     if path.exists():
@@ -69,7 +69,11 @@ def _resolve_model(model_name_or_path: str) -> str:
         try:
             from huggingface_hub import hf_hub_download
 
-            filename = "comic-speech-bubble-detector.pt"
+            filename = getattr(
+                config,
+                "DETECTION_WEIGHTS_FILENAME",
+                "comic-speech-bubble-detector.pt",
+            )
             downloaded_path = hf_hub_download(
                 repo_id=model_name_or_path, filename=filename
             )
@@ -144,12 +148,15 @@ def _draw_debug_overlay(
     with Image.open(img_path) as im:
         overlay = im.copy()
         draw = ImageDraw.Draw(overlay)
-        for box in sorted_boxes:
-            color = (255, 0, 0) if box["type"] == "speech_bubble" else (0, 0, 255)
-            bx, by, bw, bh = box["x"], box["y"], box["w"], box["h"]
-            draw.rectangle([bx, by, bx + bw, by + bh], outline=color, width=3)
-            label = f"{box['region_id']} ({box['confidence']:.2f})"
-            draw.text((bx + 5, by + 5), label, fill=color)
+        if not sorted_boxes:
+            draw.text((10, 10), "0 regions", fill=(255, 0, 0))
+        else:
+            for box in sorted_boxes:
+                color = (255, 0, 0) if box["type"] == "speech_bubble" else (0, 0, 255)
+                bx, by, bw, bh = box["x"], box["y"], box["w"], box["h"]
+                draw.rectangle([bx, by, bx + bw, by + bh], outline=color, width=3)
+                label = f"{box['region_id']} ({box['confidence']:.2f})"
+                draw.text((bx + 5, by + 5), label, fill=color)
 
         dest_overlay = overlays_dir / f"{page_num:03d}_overlay.png"
         overlay.save(dest_overlay)
@@ -198,7 +205,7 @@ def _detect_page_regions(
         }
         page_regions.append(clean_region)
 
-    if getattr(config, "OVERLAY_ENABLED", True) and sorted_boxes:
+    if getattr(config, "OVERLAY_ENABLED", True):
         _draw_debug_overlay(img_path, sorted_boxes, overlays_dir, page_num)
 
     return page_regions
@@ -222,7 +229,7 @@ def run_detection(workspace: str, config) -> Path:
         overlays_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. Load model once (lazy-load via ultralytics YOLO)
-    resolved_model_path = _resolve_model(config.DETECTION_MODEL)
+    resolved_model_path = _resolve_model(config.DETECTION_MODEL, config)
     logger.info(
         "[%d/%d %s] Loading model %s",
         _STAGE_INDEX,
@@ -233,6 +240,8 @@ def run_detection(workspace: str, config) -> Path:
     model = YOLO(resolved_model_path)
 
     total_pages = manifest.get("total_pages", 0)
+    pages_processed = 0
+    overlays_written = 0
     warnings = 0
     regions = []
 
@@ -254,6 +263,9 @@ def run_detection(workspace: str, config) -> Path:
         try:
             page_regions = _detect_page_regions(page, model, config, ws, overlays_dir)
             regions.extend(page_regions)
+            pages_processed += 1
+            if getattr(config, "OVERLAY_ENABLED", True):
+                overlays_written += 1
             log_page(
                 logger,
                 _STAGE_INDEX,
@@ -302,13 +314,14 @@ def run_detection(workspace: str, config) -> Path:
         _STAGE_INDEX,
         _TOTAL_STAGES,
         _STAGE_NAME,
-        len(regions),
+        overlays_written,
     )
     log_stage(
         logger,
         _STAGE_INDEX,
         _TOTAL_STAGES,
         _STAGE_NAME,
-        f"done: {total_pages} pages, {len(regions)} regions, {warnings} warnings -> {detection_json_path} (elapsed {elapsed:.1f}s)",
+        f"done: {total_pages} pages ({pages_processed} processed), {len(regions)} regions, "
+        f"{overlays_written} overlays, {warnings} warnings -> {detection_json_path} (elapsed {elapsed:.1f}s)",
     )
     return detection_json_path
