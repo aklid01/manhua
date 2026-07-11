@@ -68,5 +68,23 @@ TRANSLATION_PROMPT_NAME = "translation_prompt.json"
 TRANSLATION_RESPONSE_NAME = "translation_response.json"
 OLLAMA_MODEL = "qwen2.5"  # future
 
+# ---- Paraphrase ----
+PARAPHRASE_BACKEND = "manual"  # "manual" | "mcp" | "ollama"
+PARAPHRASE_PROMPT_NAME = "paraphrase_prompt.json"
+PARAPHRASE_RESPONSE_NAME = "paraphrase_response.json"
+PARAPHRASE_TONE_DIRECTIVE = "preserve crude/rude register; casual US English"
+PARAPHRASE_MAX_CHARS = 90  # Soft limit hint
+PARAPHRASE_RUDE_MARKERS = [
+    "fuck",
+    "shit",
+    "ass",
+    "crap",
+    "bitch",
+    "damn",
+    "screw",
+    "bastard",
+    "hell",
+]
+
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]

@@ -60,6 +60,9 @@ class ParaphraseResult:
     final_text: str
     register: str = "neutral"
     char_count: int = 0
+    paraphrased: bool = False
+    skip_reason: Optional[str] = None
+    glossary_conflict: bool = False
 
 
 @dataclass
