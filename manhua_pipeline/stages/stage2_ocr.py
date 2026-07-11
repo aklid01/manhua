@@ -117,8 +117,12 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
             )
         else:
             crop_im = page_im.crop((x0, y0, x1, y1))
+            # Upscale crop by 2x to significantly improve PaddleOCR detection of small/tight text
+            crop_resized = crop_im.resize(
+                (crop_im.width * 2, crop_im.height * 2), Image.Resampling.LANCZOS
+            )
             original_text, mean_conf, min_conf, watermark_filtered = _read_crop(
-                ocr_engine, crop_im, config
+                ocr_engine, crop_resized, config
             )
 
     # Edge touching computation
