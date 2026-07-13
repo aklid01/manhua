@@ -14,7 +14,7 @@ OVERLAY_ENABLED = True
 READING_ORDER_BAND_FRACTION = 0.02
 
 # ---- Fonts ----
-FONT_PATH = Path("assets/fonts/ComicNeue-Regular.ttf")  # OFL, from comicneue.com
+FONT_PATH = Path("assets/fonts/ComicNeue-Bold.ttf")  # OFL, from comicneue.com
 
 # ---- Region IDs ----
 # Format: P{page:03d}_R{idx:03d}  e.g. P002_R001
@@ -90,8 +90,8 @@ PARAPHRASE_RUDE_MARKERS = [
 ]
 
 # ---- Rendering ----
-FONT_PATH = "assets/fonts/ComicNeue-Regular.ttf"
-FONT_MAX_PT = 22
+FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
+FONT_MAX_PT = 21
 FONT_MIN_PT = 9
 FONT_STEP_PT = 1
 LINE_SPACING = 1.15

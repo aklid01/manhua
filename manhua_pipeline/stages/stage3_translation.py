@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from manhua_pipeline.io.glossary_series import load_series_glossary
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_stage
 
@@ -109,21 +110,6 @@ def _get_backend(config) -> TranslatorBackend:
 # Glossary helpers
 # ---------------------------------------------------------------------------
 
-
-def _load_glossary(ws: Path, config) -> dict:
-    path = ws / config.GLOSSARY_NAME
-    if path.exists():
-        with path.open("r", encoding="utf-8") as fh:
-            return json.load(fh)
-    logger.info("[%s] glossary.json not found — creating empty glossary.", _STAGE_NAME)
-    empty = {
-        "version": "v1",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "terms": [],
-    }
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(empty, fh, ensure_ascii=False, indent=2)
-    return empty
 
 
 def _locked_terms(glossary: dict) -> list[dict]:
@@ -280,6 +266,14 @@ def run_translation(workspace: str, config) -> Path | None:
     """
     t0 = time.monotonic()
     ws = Path(workspace)
+    logger.info(
+        "[%d/%d %s] Series: %s | Chapter: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        ws.parent.as_posix(),
+        ws.name,
+    )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
 
     manifest = load_manifest(workspace, config)
@@ -293,7 +287,7 @@ def run_translation(workspace: str, config) -> Path | None:
     with ocr_path.open("r", encoding="utf-8") as fh:
         ocr_data = json.load(fh)
 
-    glossary = _load_glossary(ws, config)
+    glossary = load_series_glossary(ws.parent, config)
     locked = _locked_terms(glossary)
 
     # Load overrides

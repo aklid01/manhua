@@ -195,7 +195,7 @@ def test_paraphrase_bundle_includes_glossary(tmp_path):
             }
         ],
     }
-    (ws / "glossary.json").write_text(
+    (ws.parent / "glossary.json").write_text(
         json.dumps(glossary, ensure_ascii=False), encoding="utf-8"
     )
     run_paraphrase(str(ws), config)

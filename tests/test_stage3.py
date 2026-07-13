@@ -27,7 +27,7 @@ def _setup(ws, ocr_results, glossary=None):
         json.dumps(ocr, ensure_ascii=False), encoding="utf-8"
     )
     if glossary is not None:
-        (ws / "glossary.json").write_text(
+        (ws.parent / "glossary.json").write_text(
             json.dumps(glossary, ensure_ascii=False), encoding="utf-8"
         )
 

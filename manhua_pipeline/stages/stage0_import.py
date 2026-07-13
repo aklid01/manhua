@@ -37,11 +37,37 @@ def run_import(
     title_romanized: str | None = None,
     title_english: str | None = None,
     source: str | None = None,
+    fresh: bool = False,
 ) -> Path:
     """Normalize input into ordered pages and write manifest.json."""
     t0 = time.monotonic()
     src = Path(input_path)
+    ws = Path(workspace)
+
+    if fresh:
+        import shutil
+
+        logger.info(
+            "[%s] Running --fresh: cleaning prior chapter artifacts in %s",
+            _STAGE_NAME,
+            ws,
+        )
+        for folder_name in config.STAGE_FOLDERS.values():
+            folder_path = ws / folder_name
+            if folder_path.exists():
+                shutil.rmtree(folder_path, ignore_errors=True)
+        ov_path = ws / getattr(config, "OVERRIDES_NAME", "overrides.json")
+        ov_path.unlink(missing_ok=True)
+
     ws = ensure_workspace(workspace, config)
+    logger.info(
+        "[%d/%d %s] Series: %s | Chapter: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        ws.parent.as_posix(),
+        ws.name,
+    )
     pages_dir = ws / config.STAGE_FOLDERS["pages"]
 
     log_stage(

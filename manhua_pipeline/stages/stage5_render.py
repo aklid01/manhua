@@ -558,7 +558,8 @@ def _render_single_page(
     """Render regions on a single page, save output image, and return report components."""
     page_num = page["page_number"]
     filename = page["filename"]
-    if page.get("skip") or not filename:
+    orig_filename = page.get("original_filename")
+    if page.get("skip") or not filename or not orig_filename:
         logger.info(
             "[%d/%d %s] Skipping skipped/failed Page %d",
             _STAGE_INDEX,
@@ -611,8 +612,9 @@ def _render_single_page(
         page_overflow += ovf
 
     # Save output image
-    out_filename = f"{page_num:03d}_render.png"
-    out_path = render_dir / out_filename
+    rendered_dir = render_dir / "rendered"
+    rendered_dir.mkdir(parents=True, exist_ok=True)
+    out_path = rendered_dir / orig_filename
     page_img.save(out_path)
     logger.info(
         "[%d/%d %s] Page %d -> saved %s (%d drawn, %d left)",
@@ -638,6 +640,14 @@ def run_render(workspace: str, config) -> Path:
     """Run the Rendering stage."""
     t0 = time.monotonic()
     ws = Path(workspace)
+    logger.info(
+        "[%d/%d %s] Series: %s | Chapter: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        ws.parent.as_posix(),
+        ws.name,
+    )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
 
     manifest = load_manifest(workspace, config)

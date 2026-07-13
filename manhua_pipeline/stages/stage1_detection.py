@@ -215,6 +215,14 @@ def run_detection(workspace: str, config) -> Path:
     """Run bubble and narration detection over all usable pages."""
     t0 = time.monotonic()
     ws = Path(workspace)
+    logger.info(
+        "[%d/%d %s] Series: %s | Chapter: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        ws.parent.as_posix(),
+        ws.name,
+    )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
 
     manifest = load_manifest(workspace, config)

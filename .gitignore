@@ -10,3 +10,4 @@ workspace/*.json
 assets/fonts/*.ttf
 .examples/
 raw_cbz/
+manhua/

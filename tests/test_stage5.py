@@ -25,6 +25,7 @@ def _setup(ws, page_wh=(400, 600), det=None, ocr=None, para=None):
             {
                 "page_number": 1,
                 "filename": "001.png",
+                "original_filename": "001.png",
                 "skip": False,
                 "width": page_wh[0],
                 "height": page_wh[1],
@@ -114,7 +115,7 @@ def test_render_text_gated_erase(tmp_path, monkeypatch):
     }
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
-    out = Image.open(ws / "stage5_render" / "001_render.png").convert("RGB")
+    out = Image.open(ws / "stage5_render" / "rendered" / "001.png").convert("RGB")
     # Assert that the text inside the bubble was erased (became white)
     assert out.getpixel((75, 75)) == (255, 255, 255)
     # Assert that the green background outside the bubble was untouched
@@ -181,7 +182,7 @@ def test_render_skips_non_render_type(tmp_path, monkeypatch):
     }
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
-    out = Image.open(ws / "stage5_render" / "001_render.png").convert("RGB")
+    out = Image.open(ws / "stage5_render" / "rendered" / "001.png").convert("RGB")
     assert out.getpixel((75, 75)) == (0, 0, 0)  # untouched character block
     rep = json.loads((ws / "stage5_render" / "render.json").read_text(encoding="utf-8"))
     assert rep["results"][0]["action"] == "left_original_not_render_type"
@@ -210,7 +211,7 @@ def test_render_advances_manifest_and_outputs(tmp_path, monkeypatch):
     }
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
-    assert (ws / "stage5_render" / "001_render.png").exists()
+    assert (ws / "stage5_render" / "rendered" / "001.png").exists()
     m = json.loads((ws / "manifest.json").read_text())
     assert m["current_stage"] == "qa"
     assert "render" in m["completed_stages"]
@@ -274,6 +275,7 @@ def test_render_edge_touching_erase(tmp_path, monkeypatch):
             {
                 "page_number": 1,
                 "filename": "001.png",
+                "original_filename": "001.png",
                 "skip": False,
                 "width": 400,
                 "height": 600,
@@ -299,7 +301,7 @@ def test_render_edge_touching_erase(tmp_path, monkeypatch):
     )
 
     stage5_render.run_render(str(ws), config)
-    out = Image.open(ws / "stage5_render" / "001_render.png").convert("RGB")
+    out = Image.open(ws / "stage5_render" / "rendered" / "001.png").convert("RGB")
     # Assert character touching top y=0 was erased (became white)
     assert out.getpixel((75, 10)) == (255, 255, 255)
     # Assert green outside is untouched

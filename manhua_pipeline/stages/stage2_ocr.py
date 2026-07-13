@@ -252,6 +252,14 @@ def run_ocr(workspace: str, config) -> Path:
     """Run OCR over all detected regions in the workspace."""
     t0 = time.monotonic()
     ws = Path(workspace)
+    logger.info(
+        "[%d/%d %s] Series: %s | Chapter: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        ws.parent.as_posix(),
+        ws.name,
+    )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
 
     manifest = load_manifest(workspace, config)

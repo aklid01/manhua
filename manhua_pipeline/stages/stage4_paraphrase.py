@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from manhua_pipeline.io.glossary_series import load_series_glossary
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_stage
 
@@ -111,13 +112,6 @@ def _get_backend(config) -> ParaphraseBackend:
 # Glossary helpers
 # ---------------------------------------------------------------------------
 
-
-def _load_glossary(ws: Path, config) -> dict:
-    path = ws / config.GLOSSARY_NAME
-    if path.exists():
-        with path.open("r", encoding="utf-8") as fh:
-            return json.load(fh)
-    return {"version": "v1", "terms": []}
 
 
 def _locked_terms(glossary: dict) -> list[dict]:
@@ -277,6 +271,14 @@ def run_paraphrase(workspace: str, config) -> Path | None:
     """
     t0 = time.monotonic()
     ws = Path(workspace)
+    logger.info(
+        "[%d/%d %s] Series: %s | Chapter: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        ws.parent.as_posix(),
+        ws.name,
+    )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
 
     manifest = load_manifest(workspace, config)
@@ -307,7 +309,7 @@ def run_paraphrase(workspace: str, config) -> Path | None:
         all_results, overrides, config
     )
 
-    glossary = _load_glossary(ws, config)
+    glossary = load_series_glossary(ws.parent, config)
     locked = _locked_terms(glossary)
 
     # Short-circuit: nothing to paraphrase
