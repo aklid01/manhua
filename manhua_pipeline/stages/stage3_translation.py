@@ -219,6 +219,59 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
 # ---------------------------------------------------------------------------
 
 
+def _partition_regions_translation(
+    all_results: list[dict], overrides: dict, config
+) -> tuple[list[dict], list[dict], list[dict]]:
+    region_ids_set = {r["region_id"] for r in all_results}
+    for k in overrides:
+        if k not in region_ids_set:
+            logger.warning(
+                "[%s] override for unknown region %s ignored", _STAGE_NAME, k
+            )
+
+    overridden_regions = []
+    usable = []
+    skipped = []
+
+    for r in all_results:
+        rid = r["region_id"]
+        if rid in overrides:
+            overridden_regions.append(r)
+        elif r.get("has_usable_text"):
+            usable.append(r)
+        else:
+            skipped.append(r)
+
+    for r in overridden_regions:
+        rid = r["region_id"]
+        logger.info(
+            "[%d/%d %s] %s -> using override (%r)",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            rid,
+            overrides[rid],
+        )
+
+    logger.info(
+        "[%d/%d %s] Backend: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        getattr(config, "TRANSLATOR_BACKEND", "manual"),
+    )
+    logger.info(
+        "[%d/%d %s] %d usable regions, %d overridden, %d skipped",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        len(usable),
+        len(overridden_regions),
+        len(skipped),
+    )
+    return overridden_regions, usable, skipped
+
+
 def run_translation(workspace: str, config) -> Path | None:
     """Run the Translation stage.
 
@@ -243,37 +296,44 @@ def run_translation(workspace: str, config) -> Path | None:
     glossary = _load_glossary(ws, config)
     locked = _locked_terms(glossary)
 
-    # Gate: split by has_usable_text
+    # Load overrides
+    from manhua_pipeline.io.overrides import load_overrides
+
+    overrides = load_overrides(ws, config)
+    logger.info(
+        "[%d/%d %s] Loaded %d overrides from overrides.json",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        len(overrides),
+    )
+
     all_results = ocr_data.get("results", [])
-    usable = [r for r in all_results if r.get("has_usable_text")]
-    skipped = [r for r in all_results if not r.get("has_usable_text")]
-
-    logger.info(
-        "[%d/%d %s] Backend: %s",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        getattr(config, "TRANSLATOR_BACKEND", "manual"),
-    )
-    logger.info(
-        "[%d/%d %s] %d usable regions, %d skipped (no_usable_text)",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        len(usable),
-        len(skipped),
+    overridden_regions, usable, skipped = _partition_regions_translation(
+        all_results, overrides, config
     )
 
-    # Short-circuit: nothing to translate
+    # Short-circuit: nothing to translate via LLM
     if not usable:
         logger.info(
-            "[%d/%d %s] No usable regions — completing without handoff.",
+            "[%d/%d %s] No usable regions needing LLM translation — completing without handoff.",
             _STAGE_INDEX,
             _TOTAL_STAGES,
             _STAGE_NAME,
         )
         return _write_output(
-            ws, config, manifest, ocr_data, glossary, {}, usable, skipped, locked, t0
+            ws,
+            config,
+            manifest,
+            ocr_data,
+            glossary,
+            {},
+            usable,
+            skipped,
+            overridden_regions,
+            overrides,
+            locked,
+            t0,
         )
 
     bundle = _build_bundle(usable, locked)
@@ -305,6 +365,8 @@ def run_translation(workspace: str, config) -> Path | None:
         translation_map,
         usable,
         skipped,
+        overridden_regions,
+        overrides,
         locked,
         t0,
     )
@@ -319,6 +381,8 @@ def _write_output(
     translation_map: dict,
     usable: list[dict],
     skipped: list[dict],
+    overridden_regions: list[dict],
+    overrides: dict,
     locked: list[dict],
     t0: float,
 ) -> Path:
@@ -328,6 +392,31 @@ def _write_output(
     missing_count = 0
     conflict_count = 0
     applied_total = set()
+
+    # Overridden regions
+    for region in overridden_regions:
+        rid = region["region_id"]
+        override_text = overrides[rid]
+        final_text, applied, conflict = _enforce_glossary(
+            region.get("original_text", ""), override_text, locked
+        )
+        results.append(
+            {
+                "region_id": rid,
+                "page_number": region["page_number"],
+                "original_text": region.get("original_text", ""),
+                "literal_translation": override_text,
+                "translated": True,
+                "skip_reason": None,
+                "glossary_terms_applied": applied,
+                "glossary_conflict": conflict,
+                "translation_source": "override",
+            }
+        )
+        translated_count += 1
+        if conflict:
+            conflict_count += 1
+        applied_total.update(applied)
 
     # Usable regions
     for region in usable:
@@ -339,10 +428,12 @@ def _write_output(
             )
             translated = True
             skip_reason = None
+            trans_source = "llm"
         else:
             final_text, applied, conflict = "", [], False
             translated = False
             skip_reason = None
+            trans_source = None
             missing_count += 1
 
         if translated:
@@ -361,6 +452,7 @@ def _write_output(
                 "skip_reason": skip_reason,
                 "glossary_terms_applied": applied,
                 "glossary_conflict": conflict,
+                "translation_source": trans_source,
             }
         )
 
@@ -378,6 +470,7 @@ def _write_output(
                 "skip_reason": skip_reason,
                 "glossary_terms_applied": [],
                 "glossary_conflict": False,
+                "translation_source": None,
             }
         )
 

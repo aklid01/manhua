@@ -218,6 +218,58 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
 # ---------------------------------------------------------------------------
 
 
+def _partition_regions_paraphrase(
+    all_results: list[dict], overrides: dict, config
+) -> tuple[list[dict], list[dict], list[dict]]:
+    region_ids_set = {r["region_id"] for r in all_results}
+    for k in overrides:
+        if k not in region_ids_set:
+            logger.warning(
+                "[%s] override for unknown region %s ignored", _STAGE_NAME, k
+            )
+
+    overridden_regions = []
+    usable = []
+    skipped = []
+
+    for r in all_results:
+        rid = r["region_id"]
+        if rid in overrides:
+            overridden_regions.append(r)
+        elif r.get("translated"):
+            usable.append(r)
+        else:
+            skipped.append(r)
+
+    for r in overridden_regions:
+        rid = r["region_id"]
+        logger.info(
+            "[%d/%d %s] %s -> using override (final, not re-paraphrased)",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            rid,
+        )
+
+    logger.info(
+        "[%d/%d %s] Backend: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        getattr(config, "PARAPHRASE_BACKEND", "manual"),
+    )
+    logger.info(
+        "[%d/%d %s] %d paraphrasable regions, %d overridden, %d skipped",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        len(usable),
+        len(overridden_regions),
+        len(skipped),
+    )
+    return overridden_regions, usable, skipped
+
+
 def run_paraphrase(workspace: str, config) -> Path | None:
     """Run the Paraphrase stage.
 
@@ -238,25 +290,21 @@ def run_paraphrase(workspace: str, config) -> Path | None:
     with trans_path.open("r", encoding="utf-8") as fh:
         trans_data = json.load(fh)
 
-    # Gate: only translated = True regions
-    all_results = trans_data.get("results", [])
-    usable = [r for r in all_results if r.get("translated")]
-    skipped = [r for r in all_results if not r.get("translated")]
+    # Load overrides
+    from manhua_pipeline.io.overrides import load_overrides
 
+    overrides = load_overrides(ws, config)
     logger.info(
-        "[%d/%d %s] Backend: %s",
+        "[%d/%d %s] Loaded %d overrides from overrides.json",
         _STAGE_INDEX,
         _TOTAL_STAGES,
         _STAGE_NAME,
-        getattr(config, "PARAPHRASE_BACKEND", "manual"),
+        len(overrides),
     )
-    logger.info(
-        "[%d/%d %s] %d paraphrasable regions, %d skipped (passthrough)",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        len(usable),
-        len(skipped),
+
+    all_results = trans_data.get("results", [])
+    overridden_regions, usable, skipped = _partition_regions_paraphrase(
+        all_results, overrides, config
     )
 
     glossary = _load_glossary(ws, config)
@@ -265,12 +313,23 @@ def run_paraphrase(workspace: str, config) -> Path | None:
     # Short-circuit: nothing to paraphrase
     if not usable:
         logger.info(
-            "[%d/%d %s] No paraphrasable regions — completing without handoff.",
+            "[%d/%d %s] No paraphrasable regions needing LLM paraphrase — completing without handoff.",
             _STAGE_INDEX,
             _TOTAL_STAGES,
             _STAGE_NAME,
         )
-        return _write_output(ws, config, manifest, trans_data, {}, usable, skipped, t0)
+        return _write_output(
+            ws,
+            config,
+            manifest,
+            trans_data,
+            {},
+            usable,
+            skipped,
+            overridden_regions,
+            overrides,
+            t0,
+        )
 
     bundle = _build_bundle(usable, locked, config)
     backend = _get_backend(config)
@@ -293,7 +352,16 @@ def run_paraphrase(workspace: str, config) -> Path | None:
         logger.warning("[%s] %s", _STAGE_NAME, w)
 
     return _write_output(
-        ws, config, manifest, trans_data, paraphrase_map, usable, skipped, t0
+        ws,
+        config,
+        manifest,
+        trans_data,
+        paraphrase_map,
+        usable,
+        skipped,
+        overridden_regions,
+        overrides,
+        t0,
     )
 
 
@@ -305,6 +373,8 @@ def _write_output(
     paraphrase_map: dict,
     usable: list[dict],
     skipped: list[dict],
+    overridden_regions: list[dict],
+    overrides: dict,
     t0: float,
 ) -> Path:
     now = datetime.now(timezone.utc).isoformat()
@@ -314,6 +384,29 @@ def _write_output(
     total_chars = 0
     rude_markers = getattr(config, "PARAPHRASE_RUDE_MARKERS", [])
 
+    # Overridden regions
+    for region in overridden_regions:
+        rid = region["region_id"]
+        override_text = overrides[rid]
+        reg = _detect_register(override_text, rude_markers)
+        results.append(
+            {
+                "region_id": rid,
+                "page_number": region["page_number"],
+                "literal_translation": region.get("literal_translation")
+                or override_text,
+                "final_text": override_text,
+                "paraphrased": True,
+                "register": reg,
+                "char_count": len(override_text),
+                "skip_reason": None,
+                "glossary_conflict": region.get("glossary_conflict") or False,
+                "paraphrase_source": "override",
+            }
+        )
+        paraphrased_count += 1
+        total_chars += len(override_text)
+
     # Usable regions
     for region in usable:
         rid = region["region_id"]
@@ -322,11 +415,13 @@ def _write_output(
             paraphrased = True
             skip_reason = None
             reg = _detect_register(final_text, rude_markers)
+            para_source = "llm"
         else:
             final_text = region.get("literal_translation") or ""
             paraphrased = False
             skip_reason = None
             reg = _detect_register(final_text, rude_markers)
+            para_source = "literal_fallback"
             missing_count += 1
 
         if paraphrased:
@@ -344,6 +439,7 @@ def _write_output(
                 "char_count": len(final_text),
                 "skip_reason": skip_reason,
                 "glossary_conflict": region.get("glossary_conflict") or False,
+                "paraphrase_source": para_source,
             }
         )
 
@@ -353,13 +449,14 @@ def _write_output(
             {
                 "region_id": region["region_id"],
                 "page_number": region["page_number"],
-                "literal_translation": "",
-                "final_text": "",
+                "literal_translation": region.get("literal_translation") or "",
+                "final_text": region.get("final_text") or "",
                 "paraphrased": False,
-                "register": "neutral",
-                "char_count": 0,
+                "register": region.get("register") or "neutral",
+                "char_count": region.get("char_count") or 0,
                 "skip_reason": region.get("skip_reason") or "no_usable_text",
                 "glossary_conflict": region.get("glossary_conflict") or False,
+                "paraphrase_source": None,
             }
         )
 

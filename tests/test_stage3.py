@@ -214,3 +214,69 @@ def test_translation_glossary_version_from_glossary(tmp_path):
         (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
     )
     assert tr["glossary_version"] == "v3"
+
+
+def test_translation_override_rescues_unusable(tmp_path):
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_ocr_entry("P001_R001", "", usable=False)])
+    (ws / "overrides.json").write_text(
+        json.dumps({"_comment": "x", "P001_R001": "Manager? My ass!"}), encoding="utf-8"
+    )
+    out = run_translation(str(ws), config)
+    assert out is not None
+    tr = json.loads(
+        (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
+    )
+    r = tr["results"][0]
+    assert r["literal_translation"] == "Manager? My ass!"
+    assert r["translated"] is True
+    assert r["translation_source"] == "override"
+    m = json.loads((ws / "manifest.json").read_text())
+    assert m["current_stage"] == "paraphrase"
+
+
+def test_translation_empty_override_ignored(tmp_path):
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_ocr_entry("P001_R001", "", usable=False)])
+    (ws / "overrides.json").write_text(
+        json.dumps({"P001_R001": "   "}), encoding="utf-8"
+    )
+    run_translation(str(ws), config)
+    tr = json.loads(
+        (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
+    )
+    r = tr["results"][0]
+    assert r["translated"] is False
+    assert r.get("translation_source") in (None, "")
+
+
+def test_translation_unknown_override_ignored(tmp_path):
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_ocr_entry("P001_R001", "滚吧！", usable=True)])
+    (ws / "overrides.json").write_text(
+        json.dumps({"P999_R999": "ghost"}), encoding="utf-8"
+    )
+    run_translation(str(ws), config)
+    tr_prompt = json.loads(
+        (ws / "stage3_translation" / "translation_prompt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ids = [i["region_id"] for i in tr_prompt["regions"]]
+    assert ids == ["P001_R001"]
+
+
+def test_translation_no_overrides_file_unchanged(tmp_path):
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_ocr_entry("P001_R001", "滚吧！", usable=True)])
+    result = run_translation(str(ws), config)
+    assert result is None
+    assert (ws / "stage3_translation" / "translation_prompt.json").exists()

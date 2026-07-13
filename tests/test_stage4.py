@@ -247,3 +247,48 @@ def test_paraphrase_missing_falls_back_to_literal(tmp_path):
     assert by_id["P001_R002"]["paraphrased"] is False
     assert by_id["P001_R002"]["final_text"] == "I quit!"  # fell back to literal
     assert by_id["P001_R002"]["char_count"] == len("I quit!")
+
+
+def test_paraphrase_override_used_verbatim(tmp_path):
+    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_tr_entry("P001_R001", "Manager? My ass!", translated=True)])
+    (ws / "overrides.json").write_text(
+        json.dumps({"P001_R001": "Manager? My ass!"}), encoding="utf-8"
+    )
+    out = run_paraphrase(str(ws), config)
+    assert out is not None
+    pp = json.loads(
+        (ws / "stage4_paraphrase" / "paraphrase.json").read_text(encoding="utf-8")
+    )
+    r = pp["results"][0]
+    assert r["final_text"] == "Manager? My ass!"
+    assert r["paraphrase_source"] == "override"
+    assert r["char_count"] == len("Manager? My ass!")
+    m = json.loads((ws / "manifest.json").read_text())
+    assert m["current_stage"] == "render"
+
+
+def test_paraphrase_override_not_bundled(tmp_path):
+    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
+
+    ws = tmp_path / "workspace"
+    _setup(
+        ws,
+        [
+            _tr_entry("P001_R001", "Get out!", translated=True),
+            _tr_entry("P001_R002", "Boss", translated=True),
+        ],
+    )
+    (ws / "overrides.json").write_text(
+        json.dumps({"P001_R002": "Manager!"}), encoding="utf-8"
+    )
+    run_paraphrase(str(ws), config)
+    bundle = json.loads(
+        (ws / "stage4_paraphrase" / "paraphrase_prompt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ids = [i["region_id"] for i in bundle["regions"]]
+    assert ids == ["P001_R001"]

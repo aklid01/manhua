@@ -50,6 +50,7 @@ class TranslationResult:
     skip_reason: Optional[str] = None
     glossary_terms_applied: list = field(default_factory=list)
     glossary_conflict: bool = False
+    translation_source: Optional[str] = None
 
 
 @dataclass
@@ -63,6 +64,7 @@ class ParaphraseResult:
     paraphrased: bool = False
     skip_reason: Optional[str] = None
     glossary_conflict: bool = False
+    paraphrase_source: Optional[str] = None
 
 
 @dataclass
