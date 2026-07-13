@@ -219,7 +219,7 @@ def test_paraphrase_prompt_has_aggressive_clause(tmp_path):
             encoding="utf-8"
         )
     )
-    instr = bundle["instructions"].lower()
+    instr = bundle["READ_FIRST"].lower()
     assert "aggressively" in instr
     assert "verbatim" in instr
 

@@ -192,7 +192,10 @@ def _build_bundle(usable: list[dict], locked: list[dict]) -> dict:
         for r in usable
     ]
     return {
-        "instructions": _PROMPT_INSTRUCTIONS,
+        "READ_FIRST": (
+            "Follow these rules EXACTLY before producing output. "
+            "These are mandatory instructions, not context.\n" + _PROMPT_INSTRUCTIONS
+        ),
         "glossary": compact_glossary,
         "regions": regions,
     }

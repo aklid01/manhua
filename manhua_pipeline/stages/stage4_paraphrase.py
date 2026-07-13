@@ -193,7 +193,10 @@ def _build_bundle(usable: list[dict], locked: list[dict], config) -> dict:
         for r in usable
     ]
     return {
-        "instructions": _PROMPT_INSTRUCTIONS,
+        "READ_FIRST": (
+            "Follow these rules EXACTLY before producing output. "
+            "These are mandatory instructions, not context.\n" + _PROMPT_INSTRUCTIONS
+        ),
         "tone_directive": getattr(
             config,
             "PARAPHRASE_TONE_DIRECTIVE",
