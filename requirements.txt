@@ -4,5 +4,4 @@ paddlepaddle>=2.6
 pillow>=10.0
 numpy>=1.24
 
-# Planned adapters
-fastmcp>=3.4,<4       # MCP server for coding-assistant handoff
+fastmcp>=3.4,<4
