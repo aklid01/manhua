@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-SETTINGS_PATH = Path("./settings.json")
+SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "settings.json"
 
 
 def load_settings() -> dict:
