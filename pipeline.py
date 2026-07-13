@@ -67,9 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
     for name in [n for n in STAGES if n != "import"]:
         sp = sub.add_parser(name, help=f"Run the {name} stage")
         sp.add_argument("--workspace", default="workspace")
+        sp.add_argument("--chapter", default=None)
 
     runall = sub.add_parser("run-all", help="Run every stage in order")
     runall.add_argument("--workspace", default="workspace")
+    runall.add_argument("--chapter", default=None)
     runall.add_argument(
         "--from-stage",
         default="import",
@@ -87,6 +89,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wipe prior stage outputs and prompts when starting from import",
     )
     return parser
+
+
+def _resolve_run_all_chapter_dir(args, base_dir) -> Path:
+    chapter = getattr(args, "chapter", None)
+    if chapter:
+        return base_dir / chapter
+    if args.input:
+        src = Path(args.input)
+        chapter_stem = (
+            src.stem if src.suffix.lower() in {".cbz", ".zip"} else src.name
+        )
+        return base_dir / chapter_stem
+    chapter_stem = args.workspace
+    if Path(chapter_stem).is_absolute():
+        return Path(chapter_stem)
+    return base_dir / chapter_stem
+
+
+def _resolve_import_chapter_dir(args, base_dir) -> Path:
+    src = Path(args.input)
+    chapter_stem = src.stem if src.suffix.lower() in {".cbz", ".zip"} else src.name
+    if Path(args.workspace).is_absolute():
+        return Path(args.workspace)
+    ws_arg = args.workspace
+    if ws_arg == "workspace":
+        return base_dir / chapter_stem
+    return base_dir / ws_arg
 
 
 def main(argv=None) -> int:
@@ -108,21 +137,10 @@ def main(argv=None) -> int:
 
     from manhua_pipeline.io.settings import resolve_base_dir
 
+    base_dir = resolve_base_dir(args, config)
+
     if args.command == "run-all":
-        if args.input:
-            src = Path(args.input)
-            chapter_stem = (
-                src.stem if src.suffix.lower() in {".cbz", ".zip"} else src.name
-            )
-        else:
-            chapter_stem = args.workspace
-
-        if Path(chapter_stem).is_absolute():
-            chapter_dir = Path(chapter_stem)
-        else:
-            base_dir = resolve_base_dir(args, config)
-            chapter_dir = base_dir / chapter_stem
-
+        chapter_dir = _resolve_run_all_chapter_dir(args, base_dir)
         meta = {
             "title_romanized": getattr(args, "title_romanized", None),
             "title_en": getattr(args, "title_en", None),
@@ -138,18 +156,7 @@ def main(argv=None) -> int:
         )
 
     if args.command == "import":
-        src = Path(args.input)
-        chapter_stem = src.stem if src.suffix.lower() in {".cbz", ".zip"} else src.name
-        if Path(args.workspace).is_absolute():
-            chapter_dir = Path(args.workspace)
-        else:
-            base_dir = resolve_base_dir(args, config)
-            ws_arg = args.workspace
-            if ws_arg == "workspace":
-                chapter_dir = base_dir / chapter_stem
-            else:
-                chapter_dir = base_dir / ws_arg
-
+        chapter_dir = _resolve_import_chapter_dir(args, base_dir)
         logger.info("Running stage: import")
         stage0_import.run_import(
             args.input,
@@ -163,12 +170,28 @@ def main(argv=None) -> int:
         return 0
 
     # For other commands
-    ws_arg = args.workspace
-    if Path(ws_arg).is_absolute():
-        chapter_dir = Path(ws_arg)
+    chapter = getattr(args, "chapter", None)
+    if chapter:
+        chapter_dir = base_dir / chapter
+    elif Path(args.workspace).is_absolute():
+        chapter_dir = Path(args.workspace)
     else:
-        base_dir = resolve_base_dir(args, config)
-        chapter_dir = base_dir / ws_arg
+        chapter_dir = base_dir / args.workspace
+
+    if not (chapter_dir / config.MANIFEST_NAME).exists():
+        available = []
+        if base_dir.exists():
+            available = [
+                p.name
+                for p in base_dir.iterdir()
+                if p.is_dir() and (p / config.MANIFEST_NAME).exists()
+            ]
+        logger.error(
+            "No manifest at %s. Available chapters: %s. Pass --chapter <name>.",
+            chapter_dir,
+            available,
+        )
+        return 2
 
     run_fn = STAGES[args.command]
     logger.info("Running stage: %s", args.command)
@@ -184,7 +207,7 @@ def _run_all_from(
     meta: dict | None = None,
     fresh: bool = False,
 ) -> int:
-    order = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
+    order = config.STAGE_ORDER
     if start not in order:
         logger.error("Unknown start stage %r (expected one of %s)", start, order)
         return 2

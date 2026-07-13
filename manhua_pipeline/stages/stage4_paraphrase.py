@@ -241,14 +241,15 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
 
 
 def _partition_regions_paraphrase(
-    all_results: list[dict], overrides: dict, config
+    all_results: list[dict], overrides: dict, config, log: bool = True
 ) -> tuple[list[dict], list[dict], list[dict]]:
     region_ids_set = {r["region_id"] for r in all_results}
     for k in overrides:
         if k not in region_ids_set:
-            logger.warning(
-                "[%s] override for unknown region %s ignored", _STAGE_NAME, k
-            )
+            if log:
+                logger.warning(
+                    "[%s] override for unknown region %s ignored", _STAGE_NAME, k
+                )
 
     overridden_regions = []
     usable = []
@@ -265,30 +266,32 @@ def _partition_regions_paraphrase(
 
     for r in overridden_regions:
         rid = r["region_id"]
+        if log:
+            logger.info(
+                "[%d/%d %s] %s -> using override (final, not re-paraphrased)",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                rid,
+            )
+
+    if log:
         logger.info(
-            "[%d/%d %s] %s -> using override (final, not re-paraphrased)",
+            "[%d/%d %s] Backend: %s",
             _STAGE_INDEX,
             _TOTAL_STAGES,
             _STAGE_NAME,
-            rid,
+            getattr(config, "PARAPHRASE_BACKEND", "manual"),
         )
-
-    logger.info(
-        "[%d/%d %s] Backend: %s",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        getattr(config, "PARAPHRASE_BACKEND", "manual"),
-    )
-    logger.info(
-        "[%d/%d %s] %d paraphrasable regions, %d overridden, %d skipped",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        len(usable),
-        len(overridden_regions),
-        len(skipped),
-    )
+        logger.info(
+            "[%d/%d %s] %d paraphrasable regions, %d overridden, %d skipped",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            len(usable),
+            len(overridden_regions),
+            len(skipped),
+        )
     return overridden_regions, usable, skipped
 
 
@@ -550,7 +553,7 @@ def build_paraphrase_bundle(chapter_dir: str | Path, config) -> dict:
     overrides = load_overrides(ws, config)
 
     all_results = trans_data.get("results", [])
-    _, usable, _ = _partition_regions_paraphrase(all_results, overrides, config)
+    _, usable, _ = _partition_regions_paraphrase(all_results, overrides, config, log=False)
 
     glossary = load_series_glossary(ws.parent, config)
     locked = _locked_terms(glossary)
@@ -581,7 +584,7 @@ def write_paraphrase_response(
     overrides = load_overrides(ws, config)
 
     all_results = trans_data.get("results", [])
-    _, usable, _ = _partition_regions_paraphrase(all_results, overrides, config)
+    _, usable, _ = _partition_regions_paraphrase(all_results, overrides, config, log=False)
 
     usable_ids = [r["region_id"] for r in usable]
     clean_map, warnings = _validate_response(mapping, usable_ids)

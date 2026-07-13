@@ -27,6 +27,7 @@ def test_build_parser():
 
 def test_pipeline_main_stage_execution(temp_workspace):
     """Test that non-import stages are called correctly from main."""
+    (temp_workspace / config.MANIFEST_NAME).write_text(json.dumps({"chapter_id": "test_ch"}))
     non_import = {k: v for k, v in STAGES.items() if k != "import"}
     for stage_name in non_import:
         mock_fn = MagicMock()
@@ -133,7 +134,7 @@ def test_import_folder(tmp_path):
     assert manifest["total_pages"] == 3
     assert manifest["input_format"] == "paginated"
     assert manifest["completed_stages"] == ["import"]
-    assert manifest["current_stage"] == "detection"
+    assert manifest["current_stage"] == "detect"
 
     orig_names = [p["original_filename"] for p in manifest["pages"]]
     assert orig_names == [

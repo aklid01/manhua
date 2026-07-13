@@ -175,6 +175,8 @@ def _maybe_seed_glossary(results: list[dict], glossary: dict) -> None:
 
     TODO: implement when detection emits name_label and scene_text types.
     """
+    # No-op in v0: auto-seeding awaits name_label/scene_text detection. Series glossary is currently hand-curated.
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -234,14 +236,15 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
 
 
 def _partition_regions_translation(
-    all_results: list[dict], overrides: dict, config
+    all_results: list[dict], overrides: dict, config, log: bool = True
 ) -> tuple[list[dict], list[dict], list[dict]]:
     region_ids_set = {r["region_id"] for r in all_results}
     for k in overrides:
         if k not in region_ids_set:
-            logger.warning(
-                "[%s] override for unknown region %s ignored", _STAGE_NAME, k
-            )
+            if log:
+                logger.warning(
+                    "[%s] override for unknown region %s ignored", _STAGE_NAME, k
+                )
 
     overridden_regions = []
     usable = []
@@ -258,31 +261,33 @@ def _partition_regions_translation(
 
     for r in overridden_regions:
         rid = r["region_id"]
+        if log:
+            logger.info(
+                "[%d/%d %s] %s -> using override (%r)",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                rid,
+                overrides[rid],
+            )
+
+    if log:
         logger.info(
-            "[%d/%d %s] %s -> using override (%r)",
+            "[%d/%d %s] Backend: %s",
             _STAGE_INDEX,
             _TOTAL_STAGES,
             _STAGE_NAME,
-            rid,
-            overrides[rid],
+            getattr(config, "TRANSLATOR_BACKEND", "manual"),
         )
-
-    logger.info(
-        "[%d/%d %s] Backend: %s",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        getattr(config, "TRANSLATOR_BACKEND", "manual"),
-    )
-    logger.info(
-        "[%d/%d %s] %d usable regions, %d overridden, %d skipped",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        len(usable),
-        len(overridden_regions),
-        len(skipped),
-    )
+        logger.info(
+            "[%d/%d %s] %d usable regions, %d overridden, %d skipped",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            len(usable),
+            len(overridden_regions),
+            len(skipped),
+        )
     return overridden_regions, usable, skipped
 
 
@@ -427,7 +432,7 @@ def _write_output(
                 "region_id": rid,
                 "page_number": region["page_number"],
                 "original_text": region.get("original_text", ""),
-                "literal_translation": override_text,
+                "literal_translation": final_text,
                 "translated": True,
                 "skip_reason": None,
                 "glossary_terms_applied": applied,
@@ -565,7 +570,7 @@ def build_translation_bundle(chapter_dir: str | Path, config) -> dict:
     overrides = load_overrides(ws, config)
 
     all_results = ocr_data.get("results", [])
-    _, usable, _ = _partition_regions_translation(all_results, overrides, config)
+    _, usable, _ = _partition_regions_translation(all_results, overrides, config, log=False)
 
     return _build_bundle(usable, locked)
 
@@ -593,7 +598,7 @@ def write_translation_response(
     overrides = load_overrides(ws, config)
 
     all_results = ocr_data.get("results", [])
-    _, usable, _ = _partition_regions_translation(all_results, overrides, config)
+    _, usable, _ = _partition_regions_translation(all_results, overrides, config, log=False)
 
     usable_ids = [r["region_id"] for r in usable]
     clean_map, warnings = _validate_response(mapping, usable_ids)

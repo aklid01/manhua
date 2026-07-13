@@ -264,7 +264,7 @@ def _import_folder(
         # (filename=None, skip=True). Downstream stages MUST check skip==False and
         # filename is not None before opening any page file.
         "total_pages": len(pages),
-        "current_stage": "detection",
+        "current_stage": "detect",
         "completed_stages": ["import"],
         "warning_count": warnings,
         "status": "in_progress",

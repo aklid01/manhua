@@ -244,6 +244,7 @@ def _process_single_region_ocr(
             "edge_touching": False,
             "edge": "none",
             "note": "ocr_error",
+            "watermark_filtered": False,
         }
         return fallback, True
 

@@ -107,6 +107,18 @@ def _analyze_single_region(
         or render_r.get("page_number")
     )
 
+    ocr_note = (ocr_r.get("note") or "").lower()
+    benign_no_text = (
+        not ocr_r.get("has_usable_text")
+        and (
+            ocr_r.get("watermark_filtered")
+            or "watermark" in ocr_note
+            or "split" in ocr_note
+            or ocr_r.get("edge_touching")
+        )
+    )
+    low_sev = "info" if benign_no_text else "warning"
+
     # low_ocr_confidence
     if rid in ocr_map and (
         ocr_r.get("needs_correction") or not ocr_r.get("has_usable_text")
@@ -116,7 +128,7 @@ def _analyze_single_region(
                 "region_id": rid,
                 "page_number": page_num,
                 "category": "low_ocr_confidence",
-                "severity": "warning",
+                "severity": low_sev,
                 "message": f"Low OCR confidence ({ocr_r.get('ocr_confidence', 0.0):.2f}) or no usable text.",
             }
         )
@@ -169,7 +181,7 @@ def _analyze_single_region(
                 "region_id": rid,
                 "page_number": page_num,
                 "category": "left_original_no_text",
-                "severity": "warning",
+                "severity": low_sev,
                 "message": "Kept original Chinese artwork because no usable text was found.",
             }
         )

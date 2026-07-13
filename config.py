@@ -1,7 +1,6 @@
 """Central configuration and constants for the manhua translation pipeline."""
 
 import re
-from pathlib import Path
 
 # ---- Models ----
 MODEL_DETECTION = "ogkalu/comic-speech-bubble-detector-yolov8m"
@@ -13,8 +12,6 @@ DETECTION_CONF = 0.35
 OVERLAY_ENABLED = True
 READING_ORDER_BAND_FRACTION = 0.02
 
-# ---- Fonts ----
-FONT_PATH = Path("assets/fonts/ComicNeue-Bold.ttf")  # OFL, from comicneue.com
 
 # ---- Region IDs ----
 # Format: P{page:03d}_R{idx:03d}  e.g. P002_R001

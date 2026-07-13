@@ -2,6 +2,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from manhua_pipeline.logging_setup import get_logger
+
+logger = get_logger(__name__)
+
 
 def glossary_path(base_dir: Path, config) -> Path:
     return base_dir / getattr(config, "GLOSSARY_NAME", "glossary.json")
@@ -14,8 +18,8 @@ def load_series_glossary(base_dir: Path, config) -> dict:
         try:
             with p.open("r", encoding="utf-8") as fh:
                 return json.load(fh)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to load series glossary from %s: %s", p, exc)
     return {
         "version": "v1",
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -55,5 +59,5 @@ def merge_glossary(base_dir: Path, new_terms: list[dict]) -> None:
             p.parent.mkdir(parents=True, exist_ok=True)
             with p.open("w", encoding="utf-8") as fh:
                 json.dump(g, fh, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to save series glossary to %s: %s", p, exc)

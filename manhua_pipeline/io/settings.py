@@ -1,6 +1,10 @@
 import json
 from pathlib import Path
 
+from manhua_pipeline.logging_setup import get_logger
+
+logger = get_logger(__name__)
+
 SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "settings.json"
 
 
@@ -11,7 +15,8 @@ def load_settings() -> dict:
     try:
         with SETTINGS_PATH.open("r", encoding="utf-8") as fh:
             return json.load(fh)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load settings from %s: %s", SETTINGS_PATH, exc)
         return {}
 
 
@@ -20,7 +25,8 @@ def save_settings(settings: dict) -> None:
     try:
         with SETTINGS_PATH.open("w", encoding="utf-8") as fh:
             json.dump(settings, fh, ensure_ascii=False, indent=2)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to save settings to %s: %s", SETTINGS_PATH, exc)
         pass
 
 
@@ -48,7 +54,13 @@ def resolve_base_dir(args, config) -> Path:
         return Path(output_dir).resolve()
 
     # 3. Prompt user (interactive input)
-    ans = input("Where should chapters be stored? This is your series folder: ").strip()
+    try:
+        ans = input("Where should chapters be stored? This is your series folder: ").strip()
+    except (EOFError, Exception) as exc:
+        raise ValueError(
+            "No output dir set and not interactive. Use --output-dir or --set-output-dir."
+        ) from exc
+
     if not ans:
         raise ValueError("Series folder path cannot be empty.")
 

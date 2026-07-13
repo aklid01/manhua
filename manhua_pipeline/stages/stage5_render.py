@@ -186,57 +186,63 @@ def _get_bubble_mask(
     config,
 ) -> Image.Image:
     """Generate a binary mask identifying the white/near-white bubble area."""
+    import numpy as np
     img = bbox_img.convert("RGB")
     width, height = img.size
-
     threshold = getattr(config, "BUBBLE_WHITE_THRESHOLD", 220)
 
     # 1. Create a binary grid of white pixels
-    is_white = []
-    for y in range(height):
-        row = []
-        for x in range(width):
-            r, g, b = img.getpixel((x, y))
-            row.append(r > threshold and g > threshold and b > threshold)
-        is_white.append(row)
+    arr = np.asarray(img)
+    is_white = (arr[:, :, 0] > threshold) & (arr[:, :, 1] > threshold) & (arr[:, :, 2] > threshold)
 
     # 2. Keep only the largest connected component of white pixels (noise filter)
-    is_white = _keep_largest_component(is_white, width, height)
+    try:
+        from scipy.ndimage import label
+        labeled, num_features = label(is_white)
+        if num_features > 0:
+            counts = np.bincount(labeled.ravel())
+            counts[0] = 0
+            largest_label = counts.argmax()
+            is_white = (labeled == largest_label)
+        else:
+            is_white = np.zeros_like(is_white)
+    except ImportError:
+        is_white_list = is_white.tolist()
+        is_white_list = _keep_largest_component(is_white_list, width, height)
+        is_white = np.array(is_white_list, dtype=bool)
 
-    # 3. Find row/col boundaries for white pixels
-    first_w_in_row, last_w_in_row = _find_row_boundaries(is_white, width, height)
-    first_w_in_col, last_w_in_col = _find_col_boundaries(is_white, width, height)
+    # 3. Find boundaries for enclosed-hole fill logic using numpy
+    first_w_in_row = np.full(height, -1, dtype=int)
+    last_w_in_row = np.full(height, -1, dtype=int)
+    first_w_in_col = np.full(width, -1, dtype=int)
+    last_w_in_col = np.full(width, -1, dtype=int)
 
-    # 4. Create mask image, checking if bubble touches actual physical page borders
-    touches_top = (my == 0) and any(is_white[0][px] for px in range(width))
-    touches_bottom = (my + mh == page_h) and any(
-        is_white[height - 1][px] for px in range(width)
-    )
-    touches_left = (mx == 0) and any(is_white[py][0] for py in range(height))
-    touches_right = (mx + mw == page_w) and any(
-        is_white[py][width - 1] for py in range(height)
-    )
-
-    mask = Image.new("L", (width, height), 0)
     for y in range(height):
-        for x in range(width):
-            if is_white[y][x]:
-                mask.putpixel((x, y), 255)
-            else:
-                # Surrounded by white check (treating page borders as virtual white bounds)
-                has_left = touches_left or (
-                    first_w_in_row[y] != -1 and first_w_in_row[y] < x
-                )
-                has_right = touches_right or (last_w_in_row[y] > x)
-                has_top = touches_top or (
-                    first_w_in_col[x] != -1 and first_w_in_col[x] < y
-                )
-                has_bottom = touches_bottom or (last_w_in_col[x] > y)
+        row_trues = np.where(is_white[y, :])[0]
+        if row_trues.size > 0:
+            first_w_in_row[y] = row_trues[0]
+            last_w_in_row[y] = row_trues[-1]
 
-                if has_left and has_right and has_top and has_bottom:
-                    mask.putpixel((x, y), 255)
+    for x in range(width):
+        col_trues = np.where(is_white[:, x])[0]
+        if col_trues.size > 0:
+            first_w_in_col[x] = col_trues[0]
+            last_w_in_col[x] = col_trues[-1]
 
-    return mask
+    touches_top = (my == 0) and np.any(is_white[0, :])
+    touches_bottom = (my + mh == page_h) and np.any(is_white[height - 1, :])
+    touches_left = (mx == 0) and np.any(is_white[:, 0])
+    touches_right = (mx + mw == page_w) and np.any(is_white[:, width - 1])
+
+    # 4. Fill enclosed holes
+    y_coords, x_coords = np.indices((height, width))
+    has_left = touches_left | ((first_w_in_row[y_coords] != -1) & (first_w_in_row[y_coords] < x_coords))
+    has_right = touches_right | (last_w_in_row[y_coords] > x_coords)
+    has_top = touches_top | ((first_w_in_col[x_coords] != -1) & (first_w_in_col[x_coords] < y_coords))
+    has_bottom = touches_bottom | (last_w_in_col[x_coords] > y_coords)
+
+    mask_arr = is_white | (has_left & has_right & has_top & has_bottom)
+    return Image.fromarray((mask_arr * 255).astype(np.uint8), mode="L")
 
 
 def _wrap_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
@@ -459,7 +465,7 @@ def _render_region(
         if overflow:
             total_overflow = 1
             logger.warning(
-                "[%d/%d %s] Page %d %s -> OVERFLOW at %dpt, rendered clipped WARN",
+                "[%d/%d %s] Page %d %s -> OVERFLOW at %dpt, rendered clipped (overflow)",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
