@@ -11,3 +11,5 @@ assets/fonts/*.ttf
 .examples/
 raw_cbz/
 manhua/
+settings.json
+.vscode/

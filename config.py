@@ -64,6 +64,7 @@ STAGE_FOLDERS = {
 
 MANIFEST_NAME = "manifest.json"
 GLOSSARY_NAME = "glossary.json"
+MCP_SERVER_NAME = "Manhua Pipeline"
 
 # ---- Translation ----
 TRANSLATOR_BACKEND = "manual"  # "manual" | "mcp" | "ollama"

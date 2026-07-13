@@ -4,6 +4,6 @@ paddlepaddle>=2.6
 pillow>=10.0
 numpy>=1.24
 
-# Planned adapters (uncomment when needed)
-# mcp>=1.0              # MCP server for coding-assistant handoff (pin to stable v1.x)
+# Planned adapters
+fastmcp>=3.4,<4       # MCP server for coding-assistant handoff
 # ollama>=0.1          # local LLM automation fallback

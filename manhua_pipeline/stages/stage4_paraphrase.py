@@ -83,9 +83,35 @@ class ManualBackend:
 
 class McpBackend:
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
-        raise NotImplementedError(
-            "MCP backend is not yet implemented. Set PARAPHRASE_BACKEND='manual' in config.py."
+        para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
+        para_dir.mkdir(parents=True, exist_ok=True)
+
+        prompt_path = para_dir / config.PARAPHRASE_PROMPT_NAME
+        response_path = para_dir / config.PARAPHRASE_RESPONSE_NAME
+
+        with prompt_path.open("w", encoding="utf-8") as fh:
+            json.dump(bundle, fh, ensure_ascii=False, indent=2)
+        logger.info(
+            "[%d/%d %s] Wrote request bundle for MCP -> %s",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            prompt_path,
         )
+
+        if not response_path.exists():
+            logger.info(
+                "[%d/%d %s] MCP handoff required.\n"
+                "  (Awaiting paraphrase_response.json via MCP tool — no changes written.)",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+            )
+            return None
+
+        with response_path.open("r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+        return raw
 
 
 class OllamaBackend:
@@ -111,7 +137,6 @@ def _get_backend(config) -> ParaphraseBackend:
 # ---------------------------------------------------------------------------
 # Glossary helpers
 # ---------------------------------------------------------------------------
-
 
 
 def _locked_terms(glossary: dict) -> list[dict]:
@@ -501,3 +526,67 @@ def _write_output(
         f"{missing_count} missing; avg {avg_chars} chars -> {out_path} (elapsed {elapsed:.1f}s)",
     )
     return out_path
+
+
+def build_paraphrase_bundle(chapter_dir: str | Path, config) -> dict:
+    """Build paraphrase prompt bundle for the chapter."""
+    ws = Path(chapter_dir)
+    manifest = load_manifest(ws, config)
+    if not manifest:
+        raise ValueError("Manifest not found.")
+
+    trans_path = ws / config.STAGE_FOLDERS["translation"] / "translation.json"
+    if not trans_path.exists():
+        raise FileNotFoundError("translation.json not found. Run translate first.")
+
+    with trans_path.open("r", encoding="utf-8") as fh:
+        trans_data = json.load(fh)
+
+    from manhua_pipeline.io.overrides import load_overrides
+
+    overrides = load_overrides(ws, config)
+
+    all_results = trans_data.get("results", [])
+    _, usable, _ = _partition_regions_paraphrase(all_results, overrides, config)
+
+    glossary = load_series_glossary(ws.parent, config)
+    locked = _locked_terms(glossary)
+
+    return _build_bundle(usable, locked, config)
+
+
+def write_paraphrase_response(
+    chapter_dir: str | Path, mapping: dict, config=None
+) -> dict:
+    """Validate and write the paraphrase mapping to paraphrase_response.json."""
+    if config is None:
+        import config
+    ws = Path(chapter_dir)
+    manifest = load_manifest(ws, config)
+    if not manifest:
+        raise ValueError("Manifest not found.")
+
+    trans_path = ws / config.STAGE_FOLDERS["translation"] / "translation.json"
+    if not trans_path.exists():
+        raise FileNotFoundError("translation.json not found. Run translate first.")
+
+    with trans_path.open("r", encoding="utf-8") as fh:
+        trans_data = json.load(fh)
+
+    from manhua_pipeline.io.overrides import load_overrides
+
+    overrides = load_overrides(ws, config)
+
+    all_results = trans_data.get("results", [])
+    _, usable, _ = _partition_regions_paraphrase(all_results, overrides, config)
+
+    usable_ids = [r["region_id"] for r in usable]
+    clean_map, warnings = _validate_response(mapping, usable_ids)
+
+    para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
+    para_dir.mkdir(parents=True, exist_ok=True)
+    resp_path = para_dir / config.PARAPHRASE_RESPONSE_NAME
+    with resp_path.open("w", encoding="utf-8") as fh:
+        json.dump(clean_map, fh, ensure_ascii=False, indent=2)
+
+    return {"written": len(clean_map), "warnings": warnings}
