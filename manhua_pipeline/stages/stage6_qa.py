@@ -18,9 +18,7 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "QA"
 
 
-def _load_artifact(
-    path: Path, name: str, warnings_list: list
-) -> tuple[list[dict], bool]:
+def _load_artifact(path: Path, name: str, warnings_list: list) -> tuple[dict, bool]:
     """Load JSON artifact defensively, records critical warning on error/missing."""
     if not path.exists():
         warnings_list.append(
@@ -32,11 +30,11 @@ def _load_artifact(
                 "message": f"Expected artifact {name} is missing.",
             }
         )
-        return [], True
+        return {}, True
     try:
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-            return data.get("results", []), False
+            return data, False
     except Exception as exc:
         warnings_list.append(
             {
@@ -47,26 +45,32 @@ def _load_artifact(
                 "message": f"Failed to load artifact {name}: {exc}",
             }
         )
-        return [], True
+        return {}, True
 
 
 def _check_rendering_failures(
-    manifest: dict, render_path: Path, warnings_list: list
+    manifest: dict, render_data: dict, warnings_list: list
 ) -> bool:
     """Check for page rendering failures and record critical warnings if pages are missing."""
-    render_pages = []
-    if render_path.exists():
-        try:
-            with render_path.open("r", encoding="utf-8") as fh:
-                data = json.load(fh)
-                render_pages = data.get("pages") or data.get("outputs") or []
-        except Exception:
-            pass
-
-    has_critical = False
+    render_pages = (
+        render_data.get("pages")
+        or render_data.get("outputs")
+        or render_data.get("rendered_pages")
+        or []
+    )
     rendered_page_numbers = {
         p["page_number"] for p in render_pages if "page_number" in p
     }
+
+    # Fallback: derive from region results if no page list present
+    if not rendered_page_numbers:
+        rendered_page_numbers = {
+            r["page_number"]
+            for r in render_data.get("results", [])
+            if r.get("page_number") is not None and r.get("rendered")
+        }
+
+    has_critical = False
     for page in manifest.get("pages", []):
         if not page.get("skip"):
             p_num = page["page_number"]
@@ -116,7 +120,6 @@ def _analyze_single_region(
                 "message": f"Low OCR confidence ({ocr_r.get('ocr_confidence', 0.0):.2f}) or no usable text.",
             }
         )
-        attention_reasons.append("low_ocr_confidence")
 
     # missing_translation
     if ocr_r.get("has_usable_text") and (
@@ -142,7 +145,7 @@ def _analyze_single_region(
                 "region_id": rid,
                 "page_number": page_num,
                 "category": "missing_paraphrase",
-                "severity": "warning",
+                "severity": "info",
                 "message": "Translated text region was not paraphrased (literal fallback used).",
             }
         )
@@ -309,18 +312,19 @@ def run_qa(workspace: str, config) -> Path:
 
     warnings_list = []
 
-    ocr_results, ocr_crit = _load_artifact(ocr_path, "ocr.json", warnings_list)
-    tr_results, tr_crit = _load_artifact(tr_path, "translation.json", warnings_list)
-    para_results, para_crit = _load_artifact(
-        para_path, "paraphrase.json", warnings_list
-    )
-    render_results, render_crit = _load_artifact(
-        render_path, "render.json", warnings_list
-    )
+    ocr_data, ocr_crit = _load_artifact(ocr_path, "ocr.json", warnings_list)
+    tr_data, tr_crit = _load_artifact(tr_path, "translation.json", warnings_list)
+    para_data, para_crit = _load_artifact(para_path, "paraphrase.json", warnings_list)
+    render_data, render_crit = _load_artifact(render_path, "render.json", warnings_list)
 
     has_critical = ocr_crit or tr_crit or para_crit or render_crit
 
     # Group by region_id
+    ocr_results = ocr_data.get("results", [])
+    tr_results = tr_data.get("results", [])
+    para_results = para_data.get("results", [])
+    render_results = render_data.get("results", [])
+
     ocr_map = {r["region_id"]: r for r in ocr_results if "region_id" in r}
     tr_map = {r["region_id"]: r for r in tr_results if "region_id" in r}
     para_map = {r["region_id"]: r for r in para_results if "region_id" in r}
@@ -333,9 +337,10 @@ def run_qa(workspace: str, config) -> Path:
         | set(render_map.keys())
     )
 
-    # Page rendering failure check
-    page_crit = _check_rendering_failures(manifest, render_path, warnings_list)
-    has_critical = has_critical or page_crit
+    # Page rendering failure check (skip if render.json missing to avoid double-counting)
+    if not render_crit:
+        page_crit = _check_rendering_failures(manifest, render_data, warnings_list)
+        has_critical = has_critical or page_crit
 
     # Analyze regions
     sorted_region_ids = sorted(list(all_region_ids))
@@ -425,7 +430,7 @@ def run_qa(workspace: str, config) -> Path:
     if "qa" not in completed:
         completed.append("qa")
     manifest["completed_stages"] = completed
-    manifest["current_stage"] = "qa"
+    manifest["current_stage"] = "complete"
     manifest["updated_at"] = now
     save_manifest(workspace, config, manifest)
 
