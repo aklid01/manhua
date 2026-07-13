@@ -64,13 +64,12 @@ GLOSSARY_NAME = "glossary.json"
 MCP_SERVER_NAME = "Manhua Pipeline"
 
 # ---- Translation ----
-TRANSLATOR_BACKEND = "mcp"  # "manual" | "mcp" | "ollama"
+TRANSLATOR_BACKEND = "mcp"  # "manual" | "mcp"
 TRANSLATION_PROMPT_NAME = "translation_prompt.json"
 TRANSLATION_RESPONSE_NAME = "translation_response.json"
-OLLAMA_MODEL = "qwen2.5"  # future
 
 # ---- Paraphrase ----
-PARAPHRASE_BACKEND = "mcp"  # "manual" | "mcp" | "ollama"
+PARAPHRASE_BACKEND = "mcp"  # "manual" | "mcp"
 PARAPHRASE_PROMPT_NAME = "paraphrase_prompt.json"
 PARAPHRASE_RESPONSE_NAME = "paraphrase_response.json"
 PARAPHRASE_TONE_DIRECTIVE = "preserve crude/rude register; casual US English"

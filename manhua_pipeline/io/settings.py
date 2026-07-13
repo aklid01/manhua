@@ -56,7 +56,7 @@ def resolve_base_dir(args, config) -> Path:
     # 3. Prompt user (interactive input)
     try:
         ans = input("Where should chapters be stored? This is your series folder: ").strip()
-    except (EOFError, Exception) as exc:
+    except (EOFError, OSError) as exc:
         raise ValueError(
             "No output dir set and not interactive. Use --output-dir or --set-output-dir."
         ) from exc

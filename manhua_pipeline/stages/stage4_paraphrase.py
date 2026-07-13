@@ -1,7 +1,7 @@
 """Stage 4: Paraphrase.
 
 Rewrites literal translations into natural, casual US English optimized for comic speech bubbles.
-Uses pluggable backends (manual, mcp, ollama) and supports manual JSON handoff.
+Uses pluggable backends (manual, mcp) and supports manual JSON handoff.
 Classifies register (rude, label, neutral) using a local heuristic.
 """
 
@@ -114,23 +114,14 @@ class McpBackend:
         return raw
 
 
-class OllamaBackend:
-    def request(self, bundle: dict, ws: Path, config) -> dict | None:
-        raise NotImplementedError(
-            "Ollama backend is not yet implemented. Set PARAPHRASE_BACKEND='manual' in config.py."
-        )
-
-
 def _get_backend(config) -> ParaphraseBackend:
     name = getattr(config, "PARAPHRASE_BACKEND", "manual")
     if name == "manual":
         return ManualBackend()
     if name == "mcp":
         return McpBackend()
-    if name == "ollama":
-        return OllamaBackend()
     raise ValueError(
-        f"Unknown PARAPHRASE_BACKEND: {name!r}. Use 'manual', 'mcp', or 'ollama'."
+        f"Unknown PARAPHRASE_BACKEND: {name!r}. Use 'manual' or 'mcp'."
     )
 
 
@@ -141,6 +132,20 @@ def _get_backend(config) -> ParaphraseBackend:
 
 def _locked_terms(glossary: dict) -> list[dict]:
     return [t for t in glossary.get("terms", []) if t.get("locked")]
+
+
+def _enforce_glossary(
+    literal_en: str, paraphrased_en: str, locked: list[dict]
+) -> tuple[str, bool]:
+    conflict = False
+    for term in locked:
+        target = term.get("target_term", "")
+        if not target:
+            continue
+        if target in literal_en:
+            if target not in paraphrased_en:
+                conflict = True
+    return paraphrased_en, conflict
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +366,7 @@ def run_paraphrase(workspace: str, config) -> Path | None:
             skipped,
             overridden_regions,
             overrides,
+            locked,
             t0,
         )
 
@@ -394,6 +400,7 @@ def run_paraphrase(workspace: str, config) -> Path | None:
         skipped,
         overridden_regions,
         overrides,
+        locked,
         t0,
     )
 
@@ -408,6 +415,7 @@ def _write_output(
     skipped: list[dict],
     overridden_regions: list[dict],
     overrides: dict,
+    locked: list[dict],
     t0: float,
 ) -> Path:
     now = datetime.now(timezone.utc).isoformat()
@@ -421,6 +429,9 @@ def _write_output(
     for region in overridden_regions:
         rid = region["region_id"]
         override_text = overrides[rid]
+        final_text, conflict = _enforce_glossary(
+            region.get("literal_translation", ""), override_text, locked
+        )
         reg = _detect_register(override_text, rude_markers)
         results.append(
             {
@@ -428,12 +439,12 @@ def _write_output(
                 "page_number": region["page_number"],
                 "literal_translation": region.get("literal_translation")
                 or override_text,
-                "final_text": override_text,
+                "final_text": final_text,
                 "paraphrased": True,
                 "register": reg,
                 "char_count": len(override_text),
                 "skip_reason": None,
-                "glossary_conflict": region.get("glossary_conflict") or False,
+                "glossary_conflict": conflict or region.get("glossary_conflict") or False,
                 "paraphrase_source": "override",
             }
         )
@@ -461,6 +472,11 @@ def _write_output(
             paraphrased_count += 1
         total_chars += len(final_text)
 
+        # Re-enforce glossary on output text to catch compliance status
+        final_text, conflict = _enforce_glossary(
+            region.get("literal_translation") or "", final_text, locked
+        )
+
         results.append(
             {
                 "region_id": rid,
@@ -471,7 +487,7 @@ def _write_output(
                 "register": reg,
                 "char_count": len(final_text),
                 "skip_reason": skip_reason,
-                "glossary_conflict": region.get("glossary_conflict") or False,
+                "glossary_conflict": conflict or region.get("glossary_conflict") or False,
                 "paraphrase_source": para_source,
             }
         )

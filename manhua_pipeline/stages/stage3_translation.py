@@ -2,7 +2,7 @@
 
 Literal translation via a pluggable backend. v0 = manual JSON handoff.
 Emits translation_prompt.json; ingests translation_response.json on re-run.
-Enforces locked glossary terms; stubs mcp/ollama for later.
+Enforces locked glossary terms; utilizes mcp by default.
 """
 
 import json
@@ -112,23 +112,14 @@ class McpBackend:
         return raw
 
 
-class OllamaBackend:
-    def request(self, bundle: dict, ws: Path, config) -> dict | None:
-        raise NotImplementedError(
-            "Ollama backend is not yet implemented. Set TRANSLATOR_BACKEND='manual' in config.py."
-        )
-
-
 def _get_backend(config) -> TranslatorBackend:
     name = getattr(config, "TRANSLATOR_BACKEND", "manual")
     if name == "manual":
         return ManualBackend()
     if name == "mcp":
         return McpBackend()
-    if name == "ollama":
-        return OllamaBackend()
     raise ValueError(
-        f"Unknown TRANSLATOR_BACKEND: {name!r}. Use 'manual', 'mcp', or 'ollama'."
+        f"Unknown TRANSLATOR_BACKEND: {name!r}. Use 'manual' or 'mcp'."
     )
 
 

@@ -185,7 +185,8 @@ def _analyze_single_region(
                 "message": "Kept original Chinese artwork because no usable text was found.",
             }
         )
-        attention_reasons.append("left_original_no_text")
+        if not benign_no_text:
+            attention_reasons.append("left_original_no_text")
 
     # edge_touching_split
     if ocr_r.get("edge_touching") and not ocr_r.get("has_usable_text"):
