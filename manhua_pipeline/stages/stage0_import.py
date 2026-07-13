@@ -10,7 +10,9 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from manhua_pipeline.io.workspace import ensure_workspace, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_page, log_stage
