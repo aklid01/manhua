@@ -23,6 +23,9 @@ REGION_ID_FORMAT = "P{page:03d}_R{idx:03d}"
 # ---- QA thresholds ----
 SUCCESS_MAX = 2  # 0-2 warnings  -> SUCCESS
 REVIEW_MAX = 10  # 3-10 warnings -> REVIEW ; >10 -> FAILED
+QA_SUCCESS_MAX = SUCCESS_MAX
+QA_REVIEW_MAX = REVIEW_MAX
+OVERRIDES_NAME = "overrides.json"
 
 # ---- OCR ----
 OCR_CONFIDENCE_THRESHOLD = 0.7  # below this -> needs_correction

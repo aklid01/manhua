@@ -215,6 +215,25 @@ def test_import_missing_input(tmp_path):
 
 def test_stage_stubs_run(temp_workspace):
     """Remaining stage stubs run without raising exceptions."""
+    import json
+
+    manifest = {
+        "chapter_id": "test",
+        "total_pages": 0,
+        "pages": [],
+        "completed_stages": [
+            "import",
+            "detect",
+            "ocr",
+            "translate",
+            "paraphrase",
+            "render",
+        ],
+        "current_stage": "render",
+    }
+    (temp_workspace / "manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
     assert stage6_qa.run_qa(temp_workspace, config) is not None
 
 
