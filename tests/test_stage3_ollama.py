@@ -463,3 +463,33 @@ def test_provenance_metadata_recorded(tmp_path, ollama_config, monkeypatch):
     assert tr["prompt_version"] == "translation-v2"
     by_id = {r["region_id"]: r for r in tr["results"]}
     assert by_id["P001_R001"]["translation_source"] == "ollama:qwen2.5:3b"
+
+
+# ---------------------------------------------------------------------------
+# CJK guard
+# ---------------------------------------------------------------------------
+
+
+def test_residual_cjk_rejected_as_missing():
+    from manhua_pipeline.stages.stage3_translation import OllamaBackend
+
+    parsed = {
+        "P001_R001": "滚吧！",
+        "P001_R002": "Get out!",
+        "P001_R003": "Get out 滚吧",
+    }
+    accepted, missing, _ = OllamaBackend._validate_batch(
+        parsed, {"P001_R001", "P001_R002", "P001_R003"}
+    )
+    assert accepted == {"P001_R002": "Get out!"}
+    assert set(missing) == {"P001_R001", "P001_R003"}
+
+
+def test_contains_cjk_helper():
+    from manhua_pipeline.stages.stage3_translation import _contains_cjk
+
+    assert _contains_cjk("滚吧")
+    assert _contains_cjk("hello 你好")
+    assert not _contains_cjk("hello!")
+    assert not _contains_cjk("")
+    assert not _contains_cjk(None)

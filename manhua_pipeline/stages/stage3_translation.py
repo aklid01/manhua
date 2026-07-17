@@ -36,6 +36,25 @@ _PROMPT_INSTRUCTIONS = (
     'Return a JSON object mapping region_id -> english string, e.g. {"P001_R001": "..."}'
 )
 
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+_FULLWIDTH_MAP = {
+    "\uff01": "!", "\uff1f": "?", "\uff0c": ",", "\u3002": ".",
+    "\uff1a": ":", "\uff1b": ";", "\uff08": "(", "\uff09": ")",
+    "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
+    "\u3001": ",",
+}
+
+
+def _contains_cjk(text: str) -> bool:
+    """True if the string still contains Han ideographs (i.e. not fully translated)."""
+    return bool(_CJK_RE.search(text or ""))
+
+
+def _normalize_punct(text: str) -> str:
+    """Replace full-width CJK punctuation with ASCII equivalents."""
+    return "".join(_FULLWIDTH_MAP.get(c, c) for c in text)
+
 
 # ---------------------------------------------------------------------------
 # Backend protocol
@@ -290,8 +309,10 @@ class OllamaBackend:
                 continue
             if not isinstance(v, str) or not v.strip():
                 continue
+            if _contains_cjk(v):
+                continue
             if k not in accepted:
-                accepted[k] = v.strip()
+                accepted[k] = _normalize_punct(v.strip())
         missing = [i for i in expected_ids if i not in accepted]
         return accepted, missing, unexpected
 
@@ -413,7 +434,13 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
         if not isinstance(val, str) or not val.strip():
             warnings.append(f"Empty/non-string value for {rid!r} — treated as missing.")
             continue
-        clean[rid] = val.strip()
+        if _contains_cjk(val):
+            warnings.append(
+                f"Residual CJK in translation for {rid!r} — treated as "
+                f"needs_translation (not sent downstream)."
+            )
+            continue
+        clean[rid] = _normalize_punct(val.strip())
 
     for rid in usable_ids:
         if rid not in clean:
