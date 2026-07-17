@@ -6,10 +6,7 @@ Classifies register (rude, label, neutral) using a local heuristic.
 """
 
 import json
-import re
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
