@@ -6,7 +6,10 @@ Enforces locked glossary terms; utilizes mcp by default.
 """
 
 import json
+import re
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -25,6 +28,10 @@ _PROMPT_INSTRUCTIONS = (
     "Translate each Chinese entry into faithful, literal US English. "
     "Preserve meaning, names, and terminology exactly. "
     "DO NOT paraphrase or localize slang. "
+    "Preserve crude/rude tone exactly; DO NOT sanitize profanity or soften insults. "
+    "Do not omit repetitions, honorifics, hesitations, or sentence fragments. "
+    "When a line is ambiguous, translate conservatively rather than inventing context. "
+    "Translate every supplied region exactly once; do NOT merge adjacent regions. "
     "Apply the provided glossary terms exactly as given. "
     'Return a JSON object mapping region_id -> english string, e.g. {"P001_R001": "..."}'
 )
@@ -112,14 +119,210 @@ class McpBackend:
         return raw
 
 
+def _validate_ollama_config(config) -> None:
+    bs = getattr(config, "OLLAMA_BATCH_SIZE", 15)
+    if not isinstance(bs, int) or bs <= 0:
+        raise ValueError("OLLAMA_BATCH_SIZE must be a positive integer.")
+    to = getattr(config, "OLLAMA_TIMEOUT", 120)
+    if not isinstance(to, (int, float)) or to <= 0:
+        raise ValueError("OLLAMA_TIMEOUT must be a positive number.")
+    temp = getattr(config, "OLLAMA_TEMPERATURE", 0.2)
+    if not isinstance(temp, (int, float)) or temp < 0:
+        raise ValueError("OLLAMA_TEMPERATURE must be numeric and non-negative.")
+    host = getattr(config, "OLLAMA_HOST", "")
+    if not host or not str(host).startswith(("http://", "https://")):
+        raise ValueError("OLLAMA_HOST must be a non-empty http(s) URL.")
+    if not getattr(config, "OLLAMA_TRANSLATE_MODEL", ""):
+        raise ValueError("OLLAMA_TRANSLATE_MODEL must be non-empty.")
+    mr = getattr(config, "OLLAMA_MAX_RETRIES", 3)
+    if not isinstance(mr, int) or mr < 1:
+        raise ValueError("OLLAMA_MAX_RETRIES must be an integer >= 1.")
+
+
+class OllamaBackend:
+    """Inline local translation via Ollama, with retries, batch validation,
+    and malformed-output recovery. Returns {region_id: english}."""
+
+    def request(self, bundle: dict, ws: Path, config) -> dict | None:
+        _validate_ollama_config(config)
+
+        trans_dir = ws / config.STAGE_FOLDERS["translation"]
+        trans_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path = trans_dir / config.TRANSLATION_PROMPT_NAME
+        with prompt_path.open("w", encoding="utf-8") as fh:
+            json.dump(bundle, fh, ensure_ascii=False, indent=2)
+
+        regions = bundle.get("regions", [])
+        if not regions:
+            return {}
+
+        self.host = getattr(config, "OLLAMA_HOST")
+        self.model = getattr(config, "OLLAMA_TRANSLATE_MODEL")
+        self.timeout = getattr(config, "OLLAMA_TIMEOUT", 120)
+        self.temperature = getattr(config, "OLLAMA_TEMPERATURE", 0.2)
+        self.max_retries = getattr(config, "OLLAMA_MAX_RETRIES", 3)
+        self.backoff = getattr(config, "OLLAMA_RETRY_BACKOFF", 1.0)
+        self.system_prompt = bundle.get("READ_FIRST", "")
+        glossary = bundle.get("glossary", [])
+        self.gloss_txt = "\n".join(
+            f"{t['source_term']} = {t['target_term']}" for t in glossary
+        )
+
+        batch_size = getattr(config, "OLLAMA_BATCH_SIZE", 15)
+        total = len(regions)
+        n_batches = (total + batch_size - 1) // batch_size
+        logger.info(
+            "[%d/%d %s] Ollama: %d regions, %d batch(es), model=%s",
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, total, n_batches, self.model,
+        )
+
+        merged: dict = {}
+        for bi in range(n_batches):
+            chunk = regions[bi * batch_size:(bi + 1) * batch_size]
+            t_batch = time.monotonic()
+            accepted = self._translate_batch(chunk, depth=0)
+            merged.update(accepted)
+            expected = len(chunk)
+            missing = expected - len(accepted)
+            logger.info(
+                "[%d/%d %s] Batch %d/%d: expected %d, accepted %d, missing %d (%.1fs)",
+                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
+                bi + 1, n_batches, expected, len(accepted), missing,
+                time.monotonic() - t_batch,
+            )
+
+        response_path = trans_dir / config.TRANSLATION_RESPONSE_NAME
+        with response_path.open("w", encoding="utf-8") as fh:
+            json.dump(merged, fh, ensure_ascii=False, indent=2)
+        return merged
+
+    def _translate_batch(self, chunk, depth: int) -> dict:
+        expected_ids = {r["region_id"] for r in chunk}
+
+        raw = self._call_ollama(self._build_user_prompt(chunk, strict=False))
+        accepted, missing, unexpected = self._validate_batch(
+            self._parse_json(raw), expected_ids
+        )
+        if unexpected:
+            logger.warning("[%s] Rejected %d unexpected IDs", _STAGE_NAME, len(unexpected))
+        if not missing:
+            return accepted
+
+        retry_chunk = [r for r in chunk if r["region_id"] in missing]
+        raw = self._call_ollama(self._build_user_prompt(retry_chunk, strict=True))
+        acc2, missing, _ = self._validate_batch(self._parse_json(raw), set(missing))
+        accepted.update(acc2)
+        if not missing:
+            return accepted
+
+        if len(retry_chunk) > 1 and depth < 4:
+            still = [r for r in retry_chunk if r["region_id"] in missing]
+            mid = len(still) // 2
+            accepted.update(self._translate_batch(still[:mid], depth + 1))
+            accepted.update(self._translate_batch(still[mid:], depth + 1))
+        else:
+            logger.warning(
+                "[%s] Giving up on %d region(s) after recovery: %s",
+                _STAGE_NAME, len(missing), sorted(missing),
+            )
+        return accepted
+
+    def _build_user_prompt(self, chunk, strict: bool) -> str:
+        payload = json.dumps(
+            [{"region_id": r["region_id"], "original_text": r["original_text"]} for r in chunk],
+            ensure_ascii=False,
+        )
+        strict_note = (
+            "\nSTRICT: Return ONLY a valid JSON object. No prose, no code fences. "
+            "One key per region_id. Do not merge or omit any region."
+            if strict else ""
+        )
+        gloss = ("GLOSSARY (keep exactly):\n" + self.gloss_txt + "\n\n") if self.gloss_txt else ""
+        return (
+            gloss
+            + "Translate each object's original_text. Return a JSON object mapping "
+              "region_id -> english. REGIONS:\n" + payload + strict_note
+        )
+
+    def _call_ollama(self, user_prompt: str) -> str:
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": self.temperature},
+        }
+        data = json.dumps(payload).encode("utf-8")
+        last_exc = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                req = urllib.request.Request(
+                    f"{self.host.rstrip('/')}/api/chat",
+                    data=data, headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                return body.get("message", {}).get("content", "")
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                last_exc = exc
+                if attempt < self.max_retries:
+                    wait = self.backoff * (2 ** (attempt - 1))
+                    logger.warning(
+                        "[%s] Ollama call failed (attempt %d/%d): %s; retrying in %.1fs",
+                        _STAGE_NAME, attempt, self.max_retries, exc, wait,
+                    )
+                    time.sleep(wait)
+        raise RuntimeError(
+            f"Ollama request failed after {self.max_retries} attempts "
+            f"(host={self.host}, model={self.model}): {last_exc}. "
+            "Is `ollama serve` running and the model pulled (`ollama pull ...`)?"
+        )
+
+    @staticmethod
+    def _validate_batch(parsed: dict, expected_ids: set) -> tuple[dict, list, list]:
+        accepted, unexpected = {}, []
+        for k, v in parsed.items():
+            if k not in expected_ids:
+                unexpected.append(k)
+                continue
+            if not isinstance(v, str) or not v.strip():
+                continue
+            if k not in accepted:
+                accepted[k] = v.strip()
+        missing = [i for i in expected_ids if i not in accepted]
+        return accepted, missing, unexpected
+
+    @staticmethod
+    def _parse_json(text: str) -> dict:
+        if not text or not text.strip():
+            return {}
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+            cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start:end + 1]
+        try:
+            obj = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return {}
+        return obj if isinstance(obj, dict) else {}
+
+
 def _get_backend(config) -> TranslatorBackend:
     name = getattr(config, "TRANSLATOR_BACKEND", "manual")
     if name == "manual":
         return ManualBackend()
     if name == "mcp":
         return McpBackend()
+    if name == "ollama":
+        return OllamaBackend()
     raise ValueError(
-        f"Unknown TRANSLATOR_BACKEND: {name!r}. Use 'manual' or 'mcp'."
+        f"Unknown TRANSLATOR_BACKEND: {name!r}. Use 'manual', 'mcp', or 'ollama'."
     )
 
 
@@ -374,6 +577,33 @@ def run_translation(workspace: str, config) -> Path | None:
     for w in val_warnings:
         logger.warning("[%s] %s", _STAGE_NAME, w)
 
+    backend_name = getattr(config, "TRANSLATOR_BACKEND", "manual")
+    if backend_name == "ollama" and usable_ids:
+        ratio = len(translation_map) / len(usable_ids)
+        min_ratio = getattr(config, "OLLAMA_MIN_COMPLETION_RATIO", 0.95)
+        if len(translation_map) == 0:
+            raise ValueError(
+                "Ollama returned zero usable translations. Not advancing. "
+                "Check model output and `ollama serve`."
+            )
+        if ratio < min_ratio:
+            logger.error(
+                "[%d/%d %s] Completion %.0f%% < %.0f%% threshold - writing artifacts "
+                "but NOT advancing manifest. Re-run after investigating.",
+                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100, min_ratio * 100,
+            )
+            _write_output(
+                ws, config, manifest, ocr_data, glossary, translation_map,
+                usable, skipped, overridden_regions, overrides, locked, t0,
+                advance=False,
+            )
+            return None
+        if ratio < 1.0:
+            logger.warning(
+                "[%d/%d %s] Completion %.0f%% (advancing with warning).",
+                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100,
+            )
+
     return _write_output(
         ws,
         config,
@@ -403,6 +633,7 @@ def _write_output(
     overrides: dict,
     locked: list[dict],
     t0: float,
+    advance: bool = True,
 ) -> Path:
     now = datetime.now(timezone.utc).isoformat()
     results = []
@@ -446,7 +677,10 @@ def _write_output(
             )
             translated = True
             skip_reason = None
-            trans_source = "llm"
+            trans_source = (
+                f"ollama:{getattr(config, 'OLLAMA_TRANSLATE_MODEL', '')}"
+                if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama" else "llm"
+            )
         else:
             final_text, applied, conflict = "", [], False
             translated = False
@@ -500,6 +734,11 @@ def _write_output(
         "stage": "translation",
         "generated_at": now,
         "translator_backend": getattr(config, "TRANSLATOR_BACKEND", "manual"),
+        "translator_model": getattr(config, "OLLAMA_TRANSLATE_MODEL", None)
+            if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama" else None,
+        "translator_temperature": getattr(config, "OLLAMA_TEMPERATURE", None)
+            if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama" else None,
+        "prompt_version": getattr(config, "OLLAMA_PROMPT_VERSION", "translation-v1"),
         "glossary_version": glossary_version,
         "results": results,
     }
@@ -510,14 +749,14 @@ def _write_output(
     with out_path.open("w", encoding="utf-8") as fh:
         json.dump(output, fh, ensure_ascii=False, indent=2)
 
-    # Advance manifest
-    completed = manifest.get("completed_stages", [])
-    if "translate" not in completed:
-        completed.append("translate")
-    manifest["completed_stages"] = completed
-    manifest["current_stage"] = "paraphrase"
-    manifest["updated_at"] = now
-    save_manifest(ws, config, manifest)
+    if advance:
+        completed = manifest.get("completed_stages", [])
+        if "translate" not in completed:
+            completed.append("translate")
+        manifest["completed_stages"] = completed
+        manifest["current_stage"] = "paraphrase"
+        manifest["updated_at"] = now
+        save_manifest(ws, config, manifest)
 
     elapsed = time.monotonic() - t0
     logger.info(

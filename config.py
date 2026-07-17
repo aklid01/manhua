@@ -64,9 +64,20 @@ GLOSSARY_NAME = "glossary.json"
 MCP_SERVER_NAME = "Manhua Pipeline"
 
 # ---- Translation ----
-TRANSLATOR_BACKEND = "mcp"  # "manual" | "mcp"
+TRANSLATOR_BACKEND = "mcp"  # "manual" | "mcp" | "ollama"  (keep mcp default until benchmark passes)
 TRANSLATION_PROMPT_NAME = "translation_prompt.json"
 TRANSLATION_RESPONSE_NAME = "translation_response.json"
+
+# ---- Ollama (local translation backend) ----
+OLLAMA_HOST = "http://localhost:11434"
+OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b"
+OLLAMA_BATCH_SIZE = 15
+OLLAMA_TIMEOUT = 120
+OLLAMA_TEMPERATURE = 0.2
+OLLAMA_MAX_RETRIES = 3
+OLLAMA_RETRY_BACKOFF = 1.0
+OLLAMA_MIN_COMPLETION_RATIO = 0.95
+OLLAMA_PROMPT_VERSION = "translation-v2"
 
 # ---- Paraphrase ----
 PARAPHRASE_BACKEND = "mcp"  # "manual" | "mcp"
