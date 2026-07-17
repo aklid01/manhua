@@ -10,6 +10,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -17,6 +18,7 @@ from typing import Protocol
 from manhua_pipeline.io.glossary_series import load_series_glossary
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_stage
+from manhua_pipeline.stages import _backends as be
 
 logger = get_logger(__name__)
 
@@ -48,94 +50,33 @@ class ParaphraseBackend(Protocol):
 
 class ManualBackend:
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
-        para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
-        para_dir.mkdir(parents=True, exist_ok=True)
-
-        prompt_path = para_dir / config.PARAPHRASE_PROMPT_NAME
-        response_path = para_dir / config.PARAPHRASE_RESPONSE_NAME
-
-        with prompt_path.open("w", encoding="utf-8") as fh:
-            json.dump(bundle, fh, ensure_ascii=False, indent=2)
-        logger.info(
-            "[%d/%d %s] Wrote request bundle -> %s",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            prompt_path,
+        paths = be.BackendPaths(
+            "paraphrase",
+            config.PARAPHRASE_PROMPT_NAME,
+            config.PARAPHRASE_RESPONSE_NAME,
         )
-
-        if not response_path.exists():
-            logger.info(
-                "[%d/%d %s] Manual handoff required.\n"
-                "  1. Open: %s\n"
-                "  2. Paste its contents to your coding assistant.\n"
-                "  3. Save the assistant's JSON reply as: %s\n"
-                "  4. Re-run: python pipeline.py paraphrase\n"
-                "  (Awaiting paraphrase_response.json — no changes written.)",
-                _STAGE_INDEX,
-                _TOTAL_STAGES,
-                _STAGE_NAME,
-                prompt_path,
-                response_path,
-            )
-            return None
-
-        with response_path.open("r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-        return raw
+        return be.manual_request(
+            bundle, ws, config, paths, logger,
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
+        )
 
 
 class McpBackend:
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
-        para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
-        para_dir.mkdir(parents=True, exist_ok=True)
-
-        prompt_path = para_dir / config.PARAPHRASE_PROMPT_NAME
-        response_path = para_dir / config.PARAPHRASE_RESPONSE_NAME
-
-        with prompt_path.open("w", encoding="utf-8") as fh:
-            json.dump(bundle, fh, ensure_ascii=False, indent=2)
-        logger.info(
-            "[%d/%d %s] Wrote request bundle for MCP -> %s",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            prompt_path,
+        paths = be.BackendPaths(
+            "paraphrase",
+            config.PARAPHRASE_PROMPT_NAME,
+            config.PARAPHRASE_RESPONSE_NAME,
         )
-
-        if not response_path.exists():
-            logger.info(
-                "[%d/%d %s] MCP handoff required.\n"
-                "  (Awaiting paraphrase_response.json via MCP tool — no changes written.)",
-                _STAGE_INDEX,
-                _TOTAL_STAGES,
-                _STAGE_NAME,
-            )
-            return None
-
-        with response_path.open("r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-        return raw
+        return be.mcp_request(
+            bundle, ws, config, paths, logger,
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
+        )
 
 
 def _validate_ollama_para_config(config) -> None:
-    bs = getattr(config, "OLLAMA_PARA_BATCH_SIZE", 15)
-    if not isinstance(bs, int) or bs <= 0:
-        raise ValueError("OLLAMA_PARA_BATCH_SIZE must be a positive integer.")
-    to = getattr(config, "OLLAMA_PARA_TIMEOUT", 120)
-    if not isinstance(to, (int, float)) or to <= 0:
-        raise ValueError("OLLAMA_PARA_TIMEOUT must be a positive number.")
-    temp = getattr(config, "OLLAMA_PARA_TEMPERATURE", 0.7)
-    if not isinstance(temp, (int, float)) or temp < 0:
-        raise ValueError("OLLAMA_PARA_TEMPERATURE must be numeric and non-negative.")
-    host = getattr(config, "OLLAMA_PARA_HOST", "")
-    if not host or not str(host).startswith(("http://", "https://")):
-        raise ValueError("OLLAMA_PARA_HOST must be a non-empty http(s) URL.")
-    if not getattr(config, "OLLAMA_PARA_MODEL", ""):
-        raise ValueError("OLLAMA_PARA_MODEL must be non-empty.")
-    mr = getattr(config, "OLLAMA_PARA_MAX_RETRIES", 3)
-    if not isinstance(mr, int) or mr < 1:
-        raise ValueError("OLLAMA_PARA_MAX_RETRIES must be an integer >= 1.")
+    s = be.OllamaSettings.from_config(config, prefix="OLLAMA_PARA")
+    be.validate_ollama_settings(s, "OLLAMA_PARA")
 
 
 class OllamaBackend:
@@ -147,24 +88,26 @@ class OllamaBackend:
     """
 
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
-        _validate_ollama_para_config(config)
+        s = be.OllamaSettings.from_config(config, prefix="OLLAMA_PARA")
+        be.validate_ollama_settings(s, "OLLAMA_PARA")
 
-        para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
-        para_dir.mkdir(parents=True, exist_ok=True)
-        prompt_path = para_dir / config.PARAPHRASE_PROMPT_NAME
-        with prompt_path.open("w", encoding="utf-8") as fh:
-            json.dump(bundle, fh, ensure_ascii=False, indent=2)
+        paths = be.BackendPaths(
+            "paraphrase",
+            config.PARAPHRASE_PROMPT_NAME,
+            config.PARAPHRASE_RESPONSE_NAME,
+        )
+        be.write_bundle(bundle, ws, config, paths)
 
         regions = bundle.get("regions", [])
         if not regions:
             return {}
 
-        self.host = getattr(config, "OLLAMA_PARA_HOST")
-        self.model = getattr(config, "OLLAMA_PARA_MODEL")
-        self.timeout = getattr(config, "OLLAMA_PARA_TIMEOUT", 120)
-        self.temperature = getattr(config, "OLLAMA_PARA_TEMPERATURE", 0.7)
-        self.max_retries = getattr(config, "OLLAMA_PARA_MAX_RETRIES", 3)
-        self.backoff = getattr(config, "OLLAMA_PARA_RETRY_BACKOFF", 1.0)
+        self.host = s.host
+        self.model = s.model
+        self.timeout = s.timeout
+        self.temperature = s.temperature
+        self.max_retries = s.max_retries
+        self.backoff = s.backoff
         self.system_prompt = bundle.get("READ_FIRST", "")
         self.tone = bundle.get("tone_directive", "")
         self.shorten = bundle.get("shorten_hint", "")
@@ -194,6 +137,7 @@ class OllamaBackend:
                 len(chunk) - len(accepted), time.monotonic() - t_batch,
             )
 
+        para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
         response_path = para_dir / config.PARAPHRASE_RESPONSE_NAME
         with response_path.open("w", encoding="utf-8") as fh:
             json.dump(merged, fh, ensure_ascii=False, indent=2)
@@ -258,41 +202,15 @@ class OllamaBackend:
         )
 
     def _call_ollama(self, user_prompt: str) -> str:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "stream": False,
-            "format": "json",
-            "options": {"temperature": self.temperature},
-        }
-        data = json.dumps(payload).encode("utf-8")
-        last_exc = None
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                req = urllib.request.Request(
-                    f"{self.host.rstrip('/')}/api/chat",
-                    data=data, headers={"Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    body = json.loads(resp.read().decode("utf-8"))
-                return body.get("message", {}).get("content", "")
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                last_exc = exc
-                if attempt < self.max_retries:
-                    wait = self.backoff * (2 ** (attempt - 1))
-                    logger.warning(
-                        "[%s] Ollama call failed (attempt %d/%d): %s; retrying in %.1fs",
-                        _STAGE_NAME, attempt, self.max_retries, exc, wait,
-                    )
-                    time.sleep(wait)
-        raise RuntimeError(
-            f"Ollama paraphrase request failed after {self.max_retries} attempts "
-            f"(host={self.host}, model={self.model}): {last_exc}. "
-            "Is `ollama serve` running and the model pulled (`ollama pull ...`)?"
+        s = be.OllamaSettings(
+            host=self.host,
+            model=self.model,
+            timeout=self.timeout,
+            temperature=self.temperature,
+            max_retries=self.max_retries,
+            backoff=self.backoff,
         )
+        return be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
 
     @staticmethod
     def _validate_batch(parsed: dict, expected_ids: set, literals: dict) -> tuple[dict, list, list]:
@@ -314,20 +232,7 @@ class OllamaBackend:
 
     @staticmethod
     def _parse_json(text: str) -> dict:
-        if not text or not text.strip():
-            return {}
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
-            cleaned = re.sub(r"\n?```$", "", cleaned).strip()
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            cleaned = cleaned[start:end + 1]
-        try:
-            obj = json.loads(cleaned)
-        except json.JSONDecodeError:
-            return {}
-        return obj if isinstance(obj, dict) else {}
+        return be.parse_json(text)
 
 
 def _get_backend(config) -> ParaphraseBackend:
@@ -574,19 +479,12 @@ def run_paraphrase(workspace: str, config) -> Path | None:
             _TOTAL_STAGES,
             _STAGE_NAME,
         )
-        return _write_output(
-            ws,
-            config,
-            manifest,
-            trans_data,
-            {},
-            usable,
-            skipped,
-            overridden_regions,
-            overrides,
-            locked,
-            t0,
-        )
+        return _write_output(ParaphraseWriteContext(
+            ws=ws, config=config, manifest=manifest, trans_data=trans_data,
+            paraphrase_map={}, usable=usable, skipped=skipped,
+            overridden_regions=overridden_regions, overrides=overrides,
+            locked=locked, t0=t0,
+        ))
 
     bundle = _build_bundle(usable, locked, config)
     backend = _get_backend(config)
@@ -618,11 +516,12 @@ def run_paraphrase(workspace: str, config) -> Path | None:
                 "(literal fallback applied) but NOT advancing manifest.",
                 _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100, min_ratio * 100,
             )
-            _write_output(
-                ws, config, manifest, trans_data, paraphrase_map,
-                usable, skipped, overridden_regions, overrides, locked, t0,
-                advance=False,
-            )
+            _write_output(ParaphraseWriteContext(
+                ws=ws, config=config, manifest=manifest, trans_data=trans_data,
+                paraphrase_map=paraphrase_map, usable=usable, skipped=skipped,
+                overridden_regions=overridden_regions, overrides=overrides,
+                locked=locked, t0=t0, advance=False,
+            ))
             return None
         if ratio < 1.0:
             logger.warning(
@@ -631,35 +530,36 @@ def run_paraphrase(workspace: str, config) -> Path | None:
                 _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100,
             )
 
-    return _write_output(
-        ws,
-        config,
-        manifest,
-        trans_data,
-        paraphrase_map,
-        usable,
-        skipped,
-        overridden_regions,
-        overrides,
-        locked,
-        t0,
-    )
+    return _write_output(ParaphraseWriteContext(
+        ws=ws, config=config, manifest=manifest, trans_data=trans_data,
+        paraphrase_map=paraphrase_map, usable=usable, skipped=skipped,
+        overridden_regions=overridden_regions, overrides=overrides,
+        locked=locked, t0=t0,
+    ))
 
 
-def _write_output(
-    ws: Path,
-    config,
-    manifest: dict,
-    trans_data: dict,
-    paraphrase_map: dict,
-    usable: list[dict],
-    skipped: list[dict],
-    overridden_regions: list[dict],
-    overrides: dict,
-    locked: list[dict],
-    t0: float,
-    advance: bool = True,
-) -> Path:
+@dataclass
+class ParaphraseWriteContext:
+    ws: Path
+    config: object
+    manifest: dict
+    trans_data: dict
+    paraphrase_map: dict
+    usable: list[dict]
+    skipped: list[dict]
+    overridden_regions: list[dict]
+    overrides: dict
+    locked: list[dict]
+    t0: float
+    advance: bool = True
+
+
+def _write_output(ctx: ParaphraseWriteContext) -> Path:
+    ws, config, manifest = ctx.ws, ctx.config, ctx.manifest
+    trans_data, paraphrase_map = ctx.trans_data, ctx.paraphrase_map
+    usable, skipped, overridden_regions = ctx.usable, ctx.skipped, ctx.overridden_regions
+    overrides, locked, t0, advance = ctx.overrides, ctx.locked, ctx.t0, ctx.advance
+
     now = datetime.now(timezone.utc).isoformat()
     results = []
     paraphrased_count = 0

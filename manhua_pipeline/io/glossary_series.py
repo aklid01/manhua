@@ -7,13 +7,13 @@ from manhua_pipeline.logging_setup import get_logger
 logger = get_logger(__name__)
 
 
-def glossary_path(base_dir: Path, config) -> Path:
+def series_glossary_path(base_dir: Path, config) -> Path:
     return base_dir / getattr(config, "GLOSSARY_NAME", "glossary.json")
 
 
 def load_series_glossary(base_dir: Path, config) -> dict:
     """Load the series-level glossary.json."""
-    p = glossary_path(base_dir, config)
+    p = series_glossary_path(base_dir, config)
     if p.exists():
         try:
             with p.open("r", encoding="utf-8") as fh:
@@ -31,7 +31,7 @@ def merge_glossary(base_dir: Path, new_terms: list[dict]) -> None:
     """Merge new terms into the series-level glossary without clobbering locked terms."""
     import config
 
-    p = glossary_path(base_dir, config)
+    p = series_glossary_path(base_dir, config)
     g = load_series_glossary(base_dir, config)
 
     existing_terms = g.get("terms", [])
