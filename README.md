@@ -14,32 +14,45 @@ The project is structured as a step-by-step document-processing system. Each sta
 - [Requirements](#requirements)
 - [Installation (Windows)](#installation-windows)
 - [Quick Start](#quick-start)
+- [Batch Processing CLI](#batch-processing-cli)
 - [CLI Reference](#cli-reference)
 - [Workspace Layout](#workspace-layout)
 - [Glossary (Series-Level)](#glossary-series-level)
 - [Overrides (Human-in-the-Loop)](#overrides-human-in-the-loop)
 - [Translation & Paraphrase Backends](#translation--paraphrase-backends)
+  - [Ollama Backend (Local Offline)](#ollama-backend-local-offline)
+  - [MCP Backend (Default)](#mcp-backend-default)
+  - [Manual Handoff Backend](#manual-handoff-backend)
 - [MCP Setup (VS Code, Cursor, Claude Desktop)](#mcp-setup-vs-code-cursor-claude-desktop)
 - [Using the MCP Workflow](#using-the-mcp-workflow)
 - [QA & Status](#qa--status)
 - [Troubleshooting](#troubleshooting)
+- [License & Attributions](#license--attributions)
+
+---
 
 ## Overview
 
-The pipeline ingests a chapter (CBZ or a folder of images), detects speech bubbles, OCRs the Chinese text, translates it faithfully, paraphrases it into natural spoken US English, renders the English back onto the pages, and reports a quality verdict. Chapters are isolated per series, and a shared series glossary keeps names and terms consistent across chapters.
+The pipeline ingests a chapter (CBZ, ZIP, or a folder of images), detects speech bubbles, OCRs the Chinese text, translates it faithfully, paraphrases it into natural spoken US English, renders the English back onto the pages, and reports a quality verdict. Chapters are isolated per series, and a shared series glossary keeps names and terms consistent across chapters.
 
-Translation and Paraphrasing run through pluggable backends. By default, they utilize the **MCP** (Model Context Protocol) workflow, letting a coding assistant (such as VS Code, Cursor, or Claude Desktop) read the pending text blocks and submit translations directly.
+AI Translation and Paraphrasing run through pluggable backends. You can run completely offline using **Ollama** (e.g. with `qwen2.5:3b-instruct`) or use the **MCP** (Model Context Protocol) workflow to process pending files interactively using a coding assistant.
+
+---
 
 ## Features
 
-- Seven modular stages: **Import -> Detection -> OCR -> Translation -> Paraphrase -> Rendering -> QA**.
+- **Seven modular stages:** Import -> Detection -> OCR -> Translation -> Paraphrase -> Rendering -> QA.
+- **Offline Local AI Backends:** Out-of-the-box support for Ollama local inference with robust retry-split recovery, markdown JSON parsing, and completion ratio guards.
+- **Residual CJK Guard:** Automatically detects and filters Chinese characters in translations, triggering LLM re-chunks or falling back defensively to prevent rendering corrupted text.
+- **Batch Processing CLI:** Unattended processing of entire directories of chapters (sorted lexically, skips complete chapters, resumes pending ones, captures logs, and clears consoles automatically).
 - **Per-series / per-chapter isolation** with a shared, consistency-preserving glossary.
-- **Text-gated rendering**: original artwork is never erased unless there is trustworthy translated text (protects watermarks and split bubbles).
+- **Text-gated rendering:** original artwork is never erased unless there is trustworthy translated text (protects watermarks and split bubbles).
 - **Bubble-aware text removal** + an **overflow ladder** (rewrap -> resize -> warn) using the bundled Comic Neue Bold font.
 - **Human-friendly console progress logging** at every stage.
-- **Pluggable AI backends** (`manual` | `mcp`); **MCP is the default**.
 - **Human-in-the-loop overrides** via a per-chapter `overrides.json` file.
 - **Defensive QA** with categorized warnings and a **SUCCESS / REVIEW / FAILED** verdict.
+
+---
 
 ## How It Works (Pipeline)
 
@@ -55,15 +68,20 @@ Translation and Paraphrasing run through pluggable backends. By default, they ut
 
 **Core rules:** original files are never modified; region IDs (`P{page:03d}_R{idx:03d}`) are stable across all stages; each stage is idempotent and rerunnable.
 
+---
+
 ## Requirements
 
 - **Windows**
 - **Python 3.11+**
 - A GPU is optional; OCR runs on CPU by default.
 - Python packages (see `requirements.txt`): `ultralytics`, `paddleocr`, `paddlepaddle`, `pillow`, `numpy`, `huggingface_hub`, `fastmcp` (`>=3.4,<4`). `scipy` is optional (speeds up bubble masking; a pure-Python fallback is used if absent).
-- An **MCP-capable coding assistant**: VS Code (GitHub Copilot agent mode), Cursor, or Claude Desktop.
+- **Ollama** installed locally (if using the local translation/paraphrase backend).
+- An **MCP-capable coding assistant** (if using the default MCP backend): VS Code (GitHub Copilot agent mode), Cursor, or Claude Desktop.
 - The detection model weights download automatically from Hugging Face on first run (`ogkalu/comic-speech-bubble-detector-yolov8m`).
 - **Font:** `assets/fonts/ComicNeue-Bold.ttf` (OFL) must be present.
+
+---
 
 ## Installation (Windows)
 
@@ -76,6 +94,8 @@ pip install -r requirements.txt
 ```
 
 Place `ComicNeue-Bold.ttf` in `assets/fonts/` (download from Google Fonts).
+
+---
 
 ## Quick Start
 
@@ -92,7 +112,7 @@ python pipeline.py import --input "<path_to_chapter_input>"
 python pipeline.py detect --chapter "<chapter_name>"
 python pipeline.py ocr --chapter "<chapter_name>"
 
-# 4. Translate + Paraphrase via MCP (see MCP Setup below) — then:
+# 4. Translate + Paraphrase (AI Backend defaults to MCP, change to "ollama" in config.py for offline)
 python pipeline.py translate --chapter "<chapter_name>"
 python pipeline.py paraphrase --chapter "<chapter_name>"
 
@@ -101,13 +121,33 @@ python pipeline.py render --chapter "<chapter_name>"
 python pipeline.py qa --chapter "<chapter_name>"
 ```
 
-You can also run everything with resume support:
+### run-all command
+
+You can also run everything for a single chapter automatically:
 
 ```bash
 python pipeline.py run-all --input "<path_to_chapter_input>"
 ```
 
-`run-all` stops cleanly at the Translation / Paraphrase **MCP handoff**. After the assistant submits the response via MCP, **re-run `run-all`** to resume — it is manifest-driven and continues from where it stopped.
+If using the default `mcp` backend, `run-all` stops cleanly at the Translation / Paraphrase **MCP handoff**. After the assistant submits the response via MCP, **re-run `run-all`** to resume — it continues from where it stopped.
+
+---
+
+## Batch Processing CLI
+
+To process a whole folder of chapters unattended (e.g., a folder containing multiple CBZ/ZIP files), use the `batch` command. It runs sequentially, skipping completed chapters and resuming partially translated ones.
+
+```bash
+python pipeline.py batch --input "<path_to_folder_of_chapters>"
+```
+
+- **Lexical Sorting:** Chapters are processed in alphabetical order.
+- **Robustness:** If a chapter crashes, the traceback is written to `logs/error_<timestamp>.log` and the batch runner automatically proceeds to the next chapter.
+- **Resume/Skip:** Chapters with manifest status marked `"complete"` are skipped entirely. Chapters interrupted at translation or rendering resume from their latest incomplete stage.
+- **Detailed Logs:** The run generates a summary and outputs timestamps to `logs/batch_<timestamp>.log`.
+- **Console Cleanliness:** Shows an interactive countdown before clearing the screen between chapter steps.
+
+---
 
 ## CLI Reference
 
@@ -121,19 +161,24 @@ python pipeline.py run-all --input "<path_to_chapter_input>"
 | `render`     | Erase original + draw English                 | `--chapter`                                                                                 |
 | `qa`         | Quality checks + verdict                      | `--chapter`                                                                                 |
 | `run-all`    | Run every stage in order (resumable)          | `--input`, `--from-stage`, `--chapter`, `--fresh`                                           |
+| `batch`      | Process a folder of chapters sequentially     | `--input` (required), `--fresh`                                                             |
 
 **Global options:** `--output-dir <path>` (override the series base for this run), `--set-output-dir <path>` (persist the base and exit).
 
 **Notes:**
-
 - `--chapter <name>` selects the chapter folder under the series base dir. If omitted and no valid manifest is found, the CLI **lists available chapters** and exits.
-- `--fresh` (on `import`/`run-all`) wipes prior stage outputs + prompts/overrides for that chapter before re-import.
+- `--fresh` wipes prior stage outputs + prompts/overrides for that chapter before starting.
+
+---
 
 ## Workspace Layout
 
 ```
 <series_directory>/               # ONE series base folder
   glossary.json                   # series-level, shared across chapters
+  logs/                           # batch runner run logs and tracebacks
+    batch_20260717_120000.log
+    error_20260717_120000.log
   <chapter_name>/                 # one folder per chapter
     manifest.json                 # chapter state + page map
     pages/                        # normalized 001.png, 002.png ...
@@ -156,6 +201,8 @@ python pipeline.py run-all --input "<path_to_chapter_input>"
     overrides.json                # per-chapter overrides stub
 ```
 
+---
+
 ## Glossary (Series-Level)
 
 `glossary.json` lives at the **series base dir** and is shared across all chapters so names and terms stay consistent. Locked terms (`locked: true`) must be honored by Translation and Paraphrase; glossary conflicts are flagged but never block execution. Edit `glossary.json` directly to seed term rules.
@@ -175,6 +222,8 @@ python pipeline.py run-all --input "<path_to_chapter_input>"
 }
 ```
 
+---
+
 ## Overrides (Human-in-the-Loop)
 
 After QA, an `overrides.json` stub is written **per chapter** listing regions that could use attention. Fill any `region_id` with the correct English; non-empty values become **authoritative** for that region and are used **verbatim** by Translation and Paraphrase. Then re-run `translate -> paraphrase -> render -> qa`.
@@ -182,14 +231,31 @@ After QA, an `overrides.json` stub is written **per chapter** listing regions th
 - Empty values are ignored; the `_comment` key is ignored.
 - An existing `overrides.json` is **never overwritten**.
 
+---
+
 ## Translation & Paraphrase Backends
 
-The AI backend is selected in `config.py`:
+The AI backend is configured in `config.py` using `TRANSLATOR_BACKEND` and `PARAPHRASE_BACKEND`.
 
-- **`mcp` (DEFAULT):** a coding assistant reads the pending bundle and writes the response via MCP tools.
-- **`manual`:** the pipeline writes a prompt bundle; you paste it into any assistant and save the JSON reply as the response file, then re-run.
+### Ollama Backend (Local Offline)
+To run completely offline locally, install [Ollama](https://ollama.com/) and pull the model (e.g. `ollama pull qwen2.5:3b-instruct`). Then configure the settings in `config.py`:
+- `TRANSLATOR_BACKEND = "ollama"`
+- `PARAPHRASE_BACKEND = "ollama"`
 
-All backends read and write the **same JSON structures**, so switching backends never breaks downstream stages. The translation/paraphrase prompt directives are defined in a single place in the code for consistency.
+Additional configuration settings are available in `config.py`:
+* `OLLAMA_HOST` (default: `"http://localhost:11434"`)
+* `OLLAMA_TRANSLATE_MODEL` / `OLLAMA_PARA_MODEL` (default: `"qwen2.5:3b-instruct"`)
+* `OLLAMA_TIMEOUT` / `OLLAMA_PARA_TIMEOUT` (default: `120`)
+* `OLLAMA_MIN_COMPLETION_RATIO` (minimum ratio of successful translations before advancing stage, default: `0.95`)
+* `OLLAMA_PARA_MIN_COMPLETION_RATIO` (minimum paraphrase ratio, default: `0.80`)
+
+### MCP Backend (Default)
+Select `"mcp"` in `config.py`. The pipeline writes prompt bundles and sits idle until an MCP-compatible assistant reads the bundle and submits responses via the server tools.
+
+### Manual Handoff Backend
+Select `"manual"` in `config.py`. The pipeline writes prompt JSONs, and prints formatting prompts to stdout. You paste them manually to any external chat model, save the output JSON to `translation_response.json` or `paraphrase_response.json`, and re-run.
+
+---
 
 ## MCP Setup (VS Code, Cursor, Claude Desktop)
 
@@ -268,6 +334,8 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json` (Windows). Claude Desktop use
 > .venv\Scripts\python.exe manhua_pipeline\adapters\mcp_server.py
 > ```
 
+---
+
 ## Using the MCP Workflow
 
 1. Import + detect + ocr a chapter (these are automatic).
@@ -278,6 +346,8 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json` (Windows). Claude Desktop use
 6. Run `render` + `qa`.
 
 > **Tip:** model quality matters — select a strong model in your assistant's model picker.
+
+---
 
 ## QA & Status
 
@@ -291,6 +361,8 @@ QA checks for pipeline warnings and reports a status verdict:
 
 Benign no-text regions (watermarks, split halves) are recorded as **info** and do not count toward the status verdict. `qa.json` lists categorized `checks`, `warnings`, and a `needs_attention` list that feeds `overrides.json`.
 
+---
+
 ## Troubleshooting
 
 - **"Manifest not found" / wrong folder:** pass `--chapter <name>`; the CLI lists available chapters under the series base dir.
@@ -300,7 +372,9 @@ Benign no-text regions (watermarks, split halves) are recorded as **info** and d
 - **Clear Chinese bubbles not translating:** OCR upscales crops 2x; extremely stylized / vertical text may still be missed — fill them via `overrides.json`.
 - **Re-run a chapter from scratch:** use `--fresh` on `import`.
 
-## License
+---
+
+## License & Attributions
 
 This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See the LICENSE file for the full text.
 
