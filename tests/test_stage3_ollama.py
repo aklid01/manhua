@@ -323,7 +323,7 @@ def test_connectivity_failure_raises_clear(tmp_path, ollama_config, monkeypatch)
     def boom(req, timeout=None):
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr(s3.urllib.request, "urlopen", boom)
+    monkeypatch.setattr("urllib.request.urlopen", boom)
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"

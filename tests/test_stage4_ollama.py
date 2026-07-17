@@ -301,7 +301,7 @@ def test_connectivity_failure_raises(tmp_path, ollama_config, monkeypatch):
     def boom(req, timeout=None):
         raise urllib.error.URLError("refused")
 
-    monkeypatch.setattr(s4.urllib.request, "urlopen", boom)
+    monkeypatch.setattr("urllib.request.urlopen", boom)
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
