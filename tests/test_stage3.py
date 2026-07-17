@@ -1,6 +1,13 @@
 import json
 
+import pytest
+
 import config
+
+
+@pytest.fixture(autouse=True)
+def _force_manual_backend(monkeypatch):
+    monkeypatch.setattr(config, "TRANSLATOR_BACKEND", "manual", raising=False)
 
 
 def _setup(ws, ocr_results, glossary=None):

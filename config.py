@@ -64,13 +64,13 @@ GLOSSARY_NAME = "glossary.json"
 MCP_SERVER_NAME = "Manhua Pipeline"
 
 # ---- Translation ----
-TRANSLATOR_BACKEND = "mcp"  # "manual" | "mcp" | "ollama"  (keep mcp default until benchmark passes)
+TRANSLATOR_BACKEND = "ollama"  # "manual" | "mcp" | "ollama"  (keep mcp default until benchmark passes)
 TRANSLATION_PROMPT_NAME = "translation_prompt.json"
 TRANSLATION_RESPONSE_NAME = "translation_response.json"
 
 # ---- Ollama (local translation backend) ----
 OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b"
+OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b-instruct"
 OLLAMA_BATCH_SIZE = 15
 OLLAMA_TIMEOUT = 120
 OLLAMA_TEMPERATURE = 0.2
@@ -80,11 +80,11 @@ OLLAMA_MIN_COMPLETION_RATIO = 0.95
 OLLAMA_PROMPT_VERSION = "translation-v2"
 
 # ---- Paraphrase ----
-PARAPHRASE_BACKEND = "mcp"  # "manual" | "mcp"
+PARAPHRASE_BACKEND = "mcp"  # "manual" | "mcp" | "ollama"  (keep mcp default until you trust local output)
 PARAPHRASE_PROMPT_NAME = "paraphrase_prompt.json"
 PARAPHRASE_RESPONSE_NAME = "paraphrase_response.json"
 PARAPHRASE_TONE_DIRECTIVE = "preserve crude/rude register; casual US English"
-PARAPHRASE_MAX_CHARS = 90  # Soft limit hint
+PARAPHRASE_MAX_CHARS = 90
 PARAPHRASE_RUDE_MARKERS = [
     "fuck",
     "shit",
@@ -96,6 +96,17 @@ PARAPHRASE_RUDE_MARKERS = [
     "bastard",
     "hell",
 ]
+
+# ---- Ollama (local paraphrase backend) ----
+OLLAMA_PARA_HOST = "http://localhost:11434"
+OLLAMA_PARA_MODEL = "qwen2.5:3b-instruct"
+OLLAMA_PARA_BATCH_SIZE = 15
+OLLAMA_PARA_TIMEOUT = 120
+OLLAMA_PARA_TEMPERATURE = 0.7
+OLLAMA_PARA_MAX_RETRIES = 3
+OLLAMA_PARA_RETRY_BACKOFF = 1.0
+OLLAMA_PARA_MIN_COMPLETION_RATIO = 0.80
+OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
 
 # ---- Rendering ----
 FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"

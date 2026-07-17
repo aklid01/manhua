@@ -6,7 +6,10 @@ Classifies register (rude, label, neutral) using a local heuristic.
 """
 
 import json
+import re
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -26,6 +29,7 @@ _PROMPT_INSTRUCTIONS = (
     "comic speech bubble. Preserve meaning and emotional register (including crude/rude "
     "tone — do NOT sanitize). Rewrite AGGRESSIVELY: prefer idiomatic phrasing, "
     "contractions, and varied sentence structure over line-by-line literal wording. "
+    "NEVER soften, censor, or euphemize profanity or insults; keep the same intensity. "
     "Do NOT copy the source line verbatim UNLESS it is a proper noun, brand/watermark, "
     "or fixed label. Keep names and glossary terms exactly. Prefer SHORT, punchy lines.\n"
     'Return a JSON object mapping region_id -> final english string, e.g. {"P001_R001": "..."}'
@@ -114,14 +118,228 @@ class McpBackend:
         return raw
 
 
+def _validate_ollama_para_config(config) -> None:
+    bs = getattr(config, "OLLAMA_PARA_BATCH_SIZE", 15)
+    if not isinstance(bs, int) or bs <= 0:
+        raise ValueError("OLLAMA_PARA_BATCH_SIZE must be a positive integer.")
+    to = getattr(config, "OLLAMA_PARA_TIMEOUT", 120)
+    if not isinstance(to, (int, float)) or to <= 0:
+        raise ValueError("OLLAMA_PARA_TIMEOUT must be a positive number.")
+    temp = getattr(config, "OLLAMA_PARA_TEMPERATURE", 0.7)
+    if not isinstance(temp, (int, float)) or temp < 0:
+        raise ValueError("OLLAMA_PARA_TEMPERATURE must be numeric and non-negative.")
+    host = getattr(config, "OLLAMA_PARA_HOST", "")
+    if not host or not str(host).startswith(("http://", "https://")):
+        raise ValueError("OLLAMA_PARA_HOST must be a non-empty http(s) URL.")
+    if not getattr(config, "OLLAMA_PARA_MODEL", ""):
+        raise ValueError("OLLAMA_PARA_MODEL must be non-empty.")
+    mr = getattr(config, "OLLAMA_PARA_MAX_RETRIES", 3)
+    if not isinstance(mr, int) or mr < 1:
+        raise ValueError("OLLAMA_PARA_MAX_RETRIES must be an integer >= 1.")
+
+
+class OllamaBackend:
+    """Inline local paraphrase via Ollama, with retries, batch validation, and
+    malformed-output recovery. Returns {region_id: final_english}.
+
+    No CJK guard (English->English). Echoes of the literal line are allowed
+    (proper nouns / labels) but logged.
+    """
+
+    def request(self, bundle: dict, ws: Path, config) -> dict | None:
+        _validate_ollama_para_config(config)
+
+        para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
+        para_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path = para_dir / config.PARAPHRASE_PROMPT_NAME
+        with prompt_path.open("w", encoding="utf-8") as fh:
+            json.dump(bundle, fh, ensure_ascii=False, indent=2)
+
+        regions = bundle.get("regions", [])
+        if not regions:
+            return {}
+
+        self.host = getattr(config, "OLLAMA_PARA_HOST")
+        self.model = getattr(config, "OLLAMA_PARA_MODEL")
+        self.timeout = getattr(config, "OLLAMA_PARA_TIMEOUT", 120)
+        self.temperature = getattr(config, "OLLAMA_PARA_TEMPERATURE", 0.7)
+        self.max_retries = getattr(config, "OLLAMA_PARA_MAX_RETRIES", 3)
+        self.backoff = getattr(config, "OLLAMA_PARA_RETRY_BACKOFF", 1.0)
+        self.system_prompt = bundle.get("READ_FIRST", "")
+        self.tone = bundle.get("tone_directive", "")
+        self.shorten = bundle.get("shorten_hint", "")
+        glossary = bundle.get("glossary", [])
+        self.gloss_txt = "\n".join(
+            f"{t['source_term']} = {t['target_term']}" for t in glossary
+        )
+
+        batch_size = getattr(config, "OLLAMA_PARA_BATCH_SIZE", 15)
+        total = len(regions)
+        n_batches = (total + batch_size - 1) // batch_size
+        logger.info(
+            "[%d/%d %s] Ollama: %d regions, %d batch(es), model=%s",
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, total, n_batches, self.model,
+        )
+
+        merged: dict = {}
+        for bi in range(n_batches):
+            chunk = regions[bi * batch_size:(bi + 1) * batch_size]
+            t_batch = time.monotonic()
+            accepted = self._paraphrase_batch(chunk, depth=0)
+            merged.update(accepted)
+            logger.info(
+                "[%d/%d %s] Batch %d/%d: expected %d, accepted %d, missing %d (%.1fs)",
+                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
+                bi + 1, n_batches, len(chunk), len(accepted),
+                len(chunk) - len(accepted), time.monotonic() - t_batch,
+            )
+
+        response_path = para_dir / config.PARAPHRASE_RESPONSE_NAME
+        with response_path.open("w", encoding="utf-8") as fh:
+            json.dump(merged, fh, ensure_ascii=False, indent=2)
+        return merged
+
+    def _paraphrase_batch(self, chunk, depth: int) -> dict:
+        expected_ids = {r["region_id"] for r in chunk}
+        literals = {r["region_id"]: r.get("literal_translation", "") for r in chunk}
+
+        raw = self._call_ollama(self._build_user_prompt(chunk, strict=False))
+        accepted, missing, unexpected = self._validate_batch(
+            self._parse_json(raw), expected_ids, literals
+        )
+        if unexpected:
+            logger.warning("[%s] Rejected %d unexpected IDs", _STAGE_NAME, len(unexpected))
+        if not missing:
+            return accepted
+
+        retry_chunk = [r for r in chunk if r["region_id"] in missing]
+        raw = self._call_ollama(self._build_user_prompt(retry_chunk, strict=True))
+        acc2, missing, _ = self._validate_batch(
+            self._parse_json(raw), set(missing), literals
+        )
+        accepted.update(acc2)
+        if not missing:
+            return accepted
+
+        if len(retry_chunk) > 1 and depth < 4:
+            still = [r for r in retry_chunk if r["region_id"] in missing]
+            mid = len(still) // 2
+            accepted.update(self._paraphrase_batch(still[:mid], depth + 1))
+            accepted.update(self._paraphrase_batch(still[mid:], depth + 1))
+        else:
+            logger.warning(
+                "[%s] Giving up on %d region(s); literal fallback will apply: %s",
+                _STAGE_NAME, len(missing), sorted(missing),
+            )
+        return accepted
+
+    def _build_user_prompt(self, chunk, strict: bool) -> str:
+        payload = json.dumps(
+            [{"region_id": r["region_id"],
+              "literal_translation": r.get("literal_translation", "")} for r in chunk],
+            ensure_ascii=False,
+        )
+        strict_note = (
+            "\nSTRICT: Return ONLY a valid JSON object. No prose, no code fences. "
+            "One key per region_id. Do not merge or omit any region."
+            if strict else ""
+        )
+        gloss = ("GLOSSARY (keep exactly):\n" + self.gloss_txt + "\n\n") if self.gloss_txt else ""
+        directives = ""
+        if self.tone:
+            directives += f"TONE: {self.tone}\n"
+        if self.shorten:
+            directives += f"{self.shorten}\n"
+        return (
+            directives + gloss
+            + "Rewrite each object's literal_translation into punchy, natural spoken "
+              "US English. Return a JSON object mapping region_id -> final_english. "
+              "REGIONS:\n" + payload + strict_note
+        )
+
+    def _call_ollama(self, user_prompt: str) -> str:
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": self.temperature},
+        }
+        data = json.dumps(payload).encode("utf-8")
+        last_exc = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                req = urllib.request.Request(
+                    f"{self.host.rstrip('/')}/api/chat",
+                    data=data, headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                return body.get("message", {}).get("content", "")
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                last_exc = exc
+                if attempt < self.max_retries:
+                    wait = self.backoff * (2 ** (attempt - 1))
+                    logger.warning(
+                        "[%s] Ollama call failed (attempt %d/%d): %s; retrying in %.1fs",
+                        _STAGE_NAME, attempt, self.max_retries, exc, wait,
+                    )
+                    time.sleep(wait)
+        raise RuntimeError(
+            f"Ollama paraphrase request failed after {self.max_retries} attempts "
+            f"(host={self.host}, model={self.model}): {last_exc}. "
+            "Is `ollama serve` running and the model pulled (`ollama pull ...`)?"
+        )
+
+    @staticmethod
+    def _validate_batch(parsed: dict, expected_ids: set, literals: dict) -> tuple[dict, list, list]:
+        """Accept any non-empty string. No CJK guard (English->English). Echoes allowed."""
+        accepted, unexpected = {}, []
+        for k, v in parsed.items():
+            if k not in expected_ids:
+                unexpected.append(k)
+                continue
+            if not isinstance(v, str) or not v.strip():
+                continue
+            val = v.strip()
+            if literals.get(k, "").strip() and val == literals[k].strip():
+                logger.info("[%s] %s: paraphrase echoes literal (allowed).", _STAGE_NAME, k)
+            if k not in accepted:
+                accepted[k] = val
+        missing = [i for i in expected_ids if i not in accepted]
+        return accepted, missing, unexpected
+
+    @staticmethod
+    def _parse_json(text: str) -> dict:
+        if not text or not text.strip():
+            return {}
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+            cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start:end + 1]
+        try:
+            obj = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return {}
+        return obj if isinstance(obj, dict) else {}
+
+
 def _get_backend(config) -> ParaphraseBackend:
     name = getattr(config, "PARAPHRASE_BACKEND", "manual")
     if name == "manual":
         return ManualBackend()
     if name == "mcp":
         return McpBackend()
+    if name == "ollama":
+        return OllamaBackend()
     raise ValueError(
-        f"Unknown PARAPHRASE_BACKEND: {name!r}. Use 'manual' or 'mcp'."
+        f"Unknown PARAPHRASE_BACKEND: {name!r}. Use 'manual', 'mcp', or 'ollama'."
     )
 
 
@@ -390,6 +608,29 @@ def run_paraphrase(workspace: str, config) -> Path | None:
     for w in val_warnings:
         logger.warning("[%s] %s", _STAGE_NAME, w)
 
+    backend_name = getattr(config, "PARAPHRASE_BACKEND", "manual")
+    if backend_name == "ollama" and usable_ids:
+        ratio = len(paraphrase_map) / len(usable_ids)
+        min_ratio = getattr(config, "OLLAMA_PARA_MIN_COMPLETION_RATIO", 0.80)
+        if ratio < min_ratio:
+            logger.error(
+                "[%d/%d %s] Paraphrase completion %.0f%% < %.0f%% - writing artifacts "
+                "(literal fallback applied) but NOT advancing manifest.",
+                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100, min_ratio * 100,
+            )
+            _write_output(
+                ws, config, manifest, trans_data, paraphrase_map,
+                usable, skipped, overridden_regions, overrides, locked, t0,
+                advance=False,
+            )
+            return None
+        if ratio < 1.0:
+            logger.warning(
+                "[%d/%d %s] Paraphrase completion %.0f%% (advancing; literal fallback "
+                "for the remainder).",
+                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100,
+            )
+
     return _write_output(
         ws,
         config,
@@ -417,6 +658,7 @@ def _write_output(
     overrides: dict,
     locked: list[dict],
     t0: float,
+    advance: bool = True,
 ) -> Path:
     now = datetime.now(timezone.utc).isoformat()
     results = []
@@ -459,7 +701,10 @@ def _write_output(
             paraphrased = True
             skip_reason = None
             reg = _detect_register(final_text, rude_markers)
-            para_source = "llm"
+            para_source = (
+                f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
+                if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama" else "llm"
+            )
         else:
             final_text = region.get("literal_translation") or ""
             paraphrased = False
@@ -514,6 +759,11 @@ def _write_output(
         "stage": "paraphrase",
         "generated_at": now,
         "paraphraser_backend": getattr(config, "PARAPHRASE_BACKEND", "manual"),
+        "paraphraser_model": getattr(config, "OLLAMA_PARA_MODEL", None)
+            if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama" else None,
+        "paraphraser_temperature": getattr(config, "OLLAMA_PARA_TEMPERATURE", None)
+            if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama" else None,
+        "prompt_version": getattr(config, "OLLAMA_PARA_PROMPT_VERSION", "paraphrase-v1"),
         "tone_directive": getattr(
             config,
             "PARAPHRASE_TONE_DIRECTIVE",
@@ -528,14 +778,14 @@ def _write_output(
     with out_path.open("w", encoding="utf-8") as fh:
         json.dump(output, fh, ensure_ascii=False, indent=2)
 
-    # Advance manifest
-    completed = manifest.get("completed_stages", [])
-    if "paraphrase" not in completed:
-        completed.append("paraphrase")
-    manifest["completed_stages"] = completed
-    manifest["current_stage"] = "render"
-    manifest["updated_at"] = now
-    save_manifest(ws, config, manifest)
+    if advance:
+        completed = manifest.get("completed_stages", [])
+        if "paraphrase" not in completed:
+            completed.append("paraphrase")
+        manifest["completed_stages"] = completed
+        manifest["current_stage"] = "render"
+        manifest["updated_at"] = now
+        save_manifest(ws, config, manifest)
 
     elapsed = time.monotonic() - t0
     avg_chars = int(total_chars / paraphrased_count) if paraphrased_count > 0 else 0
