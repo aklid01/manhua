@@ -1,3 +1,23 @@
+import sys
+from unittest.mock import MagicMock
+
+# Mock modules for offline testing
+sys.modules['ultralytics'] = MagicMock()
+
+class MockFastMCP:
+    def __init__(self, *args, **kwargs):
+        pass
+    def tool(self, *args, **kwargs):
+        return lambda func: func
+    def resource(self, *args, **kwargs):
+        return lambda func: func
+    def prompt(self, *args, **kwargs):
+        return lambda func: func
+
+mock_fastmcp = MagicMock()
+mock_fastmcp.FastMCP = MockFastMCP
+sys.modules['fastmcp'] = mock_fastmcp
+
 from pathlib import Path
 
 import pytest

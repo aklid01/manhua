@@ -20,7 +20,10 @@ with this program. If not, see <https://www.gnu.org/licenses/>.
 """
 
 import argparse
+import os
 import sys
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 import config
@@ -51,6 +54,170 @@ STAGES = {
     "render": lambda *args, **kwargs: stage5_render.run_render(*args, **kwargs),
     "qa": lambda *args, **kwargs: stage6_qa.run_qa(*args, **kwargs),
 }
+
+
+def _iter_batch_inputs(folder: Path) -> list[Path]:
+    """CBZ/ZIP files in a folder, lexically sorted (assumes user pre-sorted names)."""
+    return sorted(
+        (p for p in folder.iterdir()
+         if p.is_file() and p.suffix.lower() in {".cbz", ".zip"}),
+        key=lambda p: p.name,
+    )
+
+
+def _clear_console_after(delay: int) -> None:
+    """Show a countdown, then clear the console. Ctrl-C skips the wait."""
+    if delay <= 0:
+        return
+    try:
+        for remaining in range(delay, 0, -1):
+            print(f"  clearing console in {remaining:>2}s… (Ctrl-C to skip)",
+                  end="\r", flush=True)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    os.system("cls" if os.name == "nt" else "clear")
+
+
+def _append_batch_log(log_path: Path, line: str) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(f"[{ts}] {line}\n")
+
+
+def _write_error_log(base_dir: Path, chapter: str, exc: BaseException) -> Path:
+    """Full traceback for a failed chapter (its own logs folder if present)."""
+    ch_logs = base_dir / chapter / "logs"
+    target_dir = ch_logs if (base_dir / chapter).exists() else (base_dir / "logs")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    path = target_dir / f"error_{ts}.log"
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write(f"Chapter: {chapter}\n")
+        fh.write(f"Error: {exc}\n\n")
+        fh.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+    return path
+
+
+def run_batch(
+    input_folder: str,
+    base_dir: Path,
+    config,
+    fresh: bool = False,
+    resume: bool = True,
+    clear_delay: int = 10,
+    meta: dict | None = None,
+) -> int:
+    """Process every CBZ in a folder. Continue-on-error; skip completed;
+    resume pending; slim batch log + per-error logs; clean console per chapter."""
+    from manhua_pipeline.io.workspace import load_manifest
+
+    folder = Path(input_folder)
+    if not folder.is_dir():
+        logger.error("[batch] Not a folder: %s", folder)
+        return 2
+
+    cbz_files = _iter_batch_inputs(folder)
+    if not cbz_files:
+        logger.warning("[batch] No .cbz/.zip files in %s", folder)
+        return 1
+
+    run_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    batch_log = base_dir / "logs" / f"batch_{run_ts}.log"
+    meta = meta or {}
+
+    summary = {"done": [], "pending": [], "skipped": [], "failed": []}
+    total = len(cbz_files)
+    logger.info("[batch] Found %d chapter file(s) in %s", total, folder)
+    _append_batch_log(batch_log, f"BATCH START — {total} file(s) from {folder}")
+
+    for idx, src in enumerate(cbz_files, start=1):
+        chapter = src.stem
+        chapter_dir = base_dir / chapter
+        logger.info("=" * 60)
+        logger.info("[batch] (%d/%d) %s", idx, total, chapter)
+
+        # Skip completed / optionally skip any existing
+        existing_manifest = (
+            load_manifest(str(chapter_dir), config) if chapter_dir.exists() else None
+        )
+        if existing_manifest and existing_manifest.get("current_stage") == "complete":
+            logger.warning("[batch] SKIP (already complete): %s", chapter)
+            summary["skipped"].append(chapter)
+            _append_batch_log(batch_log, f"SKIP complete   | {chapter}")
+            continue
+        if chapter_dir.exists() and not resume:
+            logger.warning("[batch] SKIP (folder exists, --no-resume): %s", chapter)
+            summary["skipped"].append(chapter)
+            _append_batch_log(batch_log, f"SKIP exists     | {chapter}")
+            continue
+
+        # Run (fresh import OR manifest-driven resume, handled by _run_all_from)
+        stage_after = None
+        try:
+            rc = _run_all_from(
+                str(chapter_dir),
+                config,
+                start="import",
+                input_path=str(src),
+                meta={
+                    "title_romanized": meta.get("title_romanized"),
+                    "title_en": meta.get("title_en"),
+                    "source": meta.get("source"),
+                },
+                fresh=fresh,
+            )
+            m = load_manifest(str(chapter_dir), config)
+            stage_after = m.get("current_stage") if m else None
+
+            if rc == 2:
+                summary["failed"].append(chapter)
+                _append_batch_log(batch_log, f"FAIL rc=2       | {chapter}")
+                logger.error("[batch] %s failed (rc=2). Continuing.", chapter)
+            elif stage_after == "complete":
+                summary["done"].append(chapter)
+                _append_batch_log(batch_log, f"DONE            | {chapter}")
+            else:
+                summary["pending"].append((chapter, stage_after))
+                _append_batch_log(
+                    batch_log, f"PENDING @{stage_after} | {chapter}"
+                )
+        except Exception as exc:  # continue-on-error
+            err_path = _write_error_log(base_dir, chapter, exc)
+            summary["failed"].append(chapter)
+            _append_batch_log(batch_log, f"FAIL {type(exc).__name__} | {chapter} -> {err_path}")
+            logger.error("[batch] %s crashed: %s (log: %s). Continuing.", chapter, exc, err_path)
+            continue
+
+        # Console clear ONLY on genuine completion (ignore handoff)
+        if stage_after == "complete":
+            _clear_console_after(clear_delay)
+
+    _print_batch_summary(summary, batch_log)
+    return 0
+
+
+def _print_batch_summary(summary: dict, batch_log: Path) -> None:
+    logger.info("=" * 60)
+    logger.info("[batch] SUMMARY")
+    logger.info("  done    : %d  %s", len(summary["done"]), summary["done"])
+    logger.info("  pending : %d  %s", len(summary["pending"]),
+                [c for c, _ in summary["pending"]])
+    logger.info("  skipped : %d  %s", len(summary["skipped"]), summary["skipped"])
+    logger.info("  failed  : %d  %s", len(summary["failed"]), summary["failed"])
+    _append_batch_log(
+        batch_log,
+        f"BATCH END — done={len(summary['done'])} pending={len(summary['pending'])} "
+        f"skipped={len(summary['skipped'])} failed={len(summary['failed'])}",
+    )
+    if summary["pending"]:
+        logger.info(
+            "[batch] %d chapter(s) awaiting handoff. Process them via MCP "
+            "(list_pending → submit), then re-run the same batch command to finish "
+            "render→QA (completed chapters are skipped automatically).",
+            len(summary["pending"]),
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -103,6 +270,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Wipe prior stage outputs and prompts when starting from import",
     )
+
+    batch_sp = sub.add_parser("batch", help="Process a folder of CBZ chapters")
+    batch_sp.add_argument(
+        "--input", required=True, help="Folder containing .cbz/.zip chapter files"
+    )
+    batch_sp.add_argument("--title-romanized", default=None, dest="title_romanized")
+    batch_sp.add_argument("--title-en", default=None, dest="title_en")
+    batch_sp.add_argument("--source", default=None)
+    batch_sp.add_argument(
+        "--fresh", action="store_true",
+        help="Wipe prior stage outputs per chapter before importing",
+    )
+    batch_sp.add_argument(
+        "--no-resume", action="store_true",
+        help="Skip ANY existing chapter folder (default: resume pending, skip completed)",
+    )
+    batch_sp.add_argument(
+        "--clear-delay", type=int, default=10,
+        help="Seconds to show a completed chapter's output before clearing (0 = never)",
+    )
+
     return parser
 
 
@@ -153,6 +341,21 @@ def main(argv=None) -> int:
     from manhua_pipeline.io.settings import resolve_base_dir
 
     base_dir = resolve_base_dir(args, config)
+
+    if args.command == "batch":
+        return run_batch(
+            args.input,
+            base_dir,
+            config,
+            fresh=getattr(args, "fresh", False),
+            resume=not getattr(args, "no_resume", False),
+            clear_delay=getattr(args, "clear_delay", 10),
+            meta={
+                "title_romanized": getattr(args, "title_romanized", None),
+                "title_en": getattr(args, "title_en", None),
+                "source": getattr(args, "source", None),
+            },
+        )
 
     if args.command == "run-all":
         chapter_dir = _resolve_run_all_chapter_dir(args, base_dir)
