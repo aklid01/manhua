@@ -173,7 +173,7 @@ def test_render_original_filenames(tmp_path, monkeypatch):
         )
     )
     stage5_render.run_render(str(ch), config)
-    assert (ch / "stage5_render" / "rendered" / "00000000_00010000.jpg").exists()
+    assert (ch / "stage5_render" / "rendered" / "001.png").exists()
 
 
 def test_two_chapters_independent_overrides_and_overlays(tmp_path):
@@ -285,4 +285,4 @@ def test_bold_font_resolves_and_renders(tmp_path):
     )
 
     stage5_render.run_render(str(ch), config)
-    assert (ch / "stage5_render" / "rendered" / "00000000_00010000.jpg").exists()
+    assert (ch / "stage5_render" / "rendered" / "001.png").exists()

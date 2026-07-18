@@ -61,7 +61,7 @@ def test_run_batch_classifications(tmp_path, monkeypatch):
 
     runs = {}
 
-    def mock_run_all(workspace, cfg, start="import", input_path=None, meta=None, fresh=False):
+    def mock_run_all(workspace, cfg, start="import", input_path=None, meta=None, fresh=False, **kwargs):
         ch = Path(workspace).name
         runs[ch] = {
             "start": start,
