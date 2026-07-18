@@ -5,6 +5,7 @@ Model: ogkalu/comic-speech-bubble-detector-yolov8m.
 Outputs detection.json and optional visual debug overlays.
 """
 
+import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -211,6 +212,153 @@ def _detect_page_regions(
     return page_regions
 
 
+# ---- Stitching helpers (Feature 4) ----
+
+def _xywh(box) -> dict:
+    r = box.get("read_region") or box.get("bbox") or box
+    return {"x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"]}
+
+
+def _box_touches_bottom(r, page_h, eps) -> bool:
+    return (r["y"] + r["h"]) >= (page_h - eps)
+
+
+def _box_touches_top(r, eps) -> bool:
+    return r["y"] <= eps
+
+
+def _x_overlap_frac(a, b) -> float:
+    inter = max(0, min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"]))
+    narrower = min(a["w"], b["w"]) or 1
+    return inter / narrower
+
+
+def _find_split_pairs(det_by_page: dict, pages_meta: list, config) -> list:
+    """Return confirmed-by-geometry split candidates as tuples
+    (page_num_a, page_num_b, box_a, box_b). Enforces pairwise-only via a `used` set."""
+    eps = getattr(config, "STITCH_EDGE_EPS", 6)
+    min_ov = getattr(config, "STITCH_MIN_X_OVERLAP", 0.5)
+    order = [p for p in pages_meta if not p.get("skip") and p.get("filename")]
+    used, pairs = set(), []
+    for a, b in zip(order, order[1:]):
+        na, nb = a["page_number"], b["page_number"]
+        if na in used or nb in used:
+            continue
+        ha = a.get("height") or 0
+        bottom = [
+            x for x in det_by_page.get(na, [])
+            if x.get("type") == config.TYPE_SPEECH and _box_touches_bottom(_xywh(x), ha, eps)
+        ]
+        top = [
+            x for x in det_by_page.get(nb, [])
+            if x.get("type") == config.TYPE_SPEECH and _box_touches_top(_xywh(x), eps)
+        ]
+        found = None
+        for bx in bottom:
+            for tx in top:
+                if _x_overlap_frac(_xywh(bx), _xywh(tx)) >= min_ov:
+                    found = (na, nb, bx, tx)
+                    break
+            if found:
+                break
+        if found:
+            pairs.append(found)
+            used.add(na)
+            used.add(nb)
+    return pairs
+
+
+def _half_has_text(ws, page_meta, box, config, ocr_engine) -> bool:
+    from manhua_pipeline.stages.stage2_ocr import _preprocess_variant, _read_crop
+    img_path = ws / config.STAGE_FOLDERS["pages"] / page_meta["filename"]
+    with Image.open(img_path) as im:
+        r = _xywh(box)
+        crop = im.crop((r["x"], r["y"], r["x"] + r["w"], r["y"] + r["h"]))
+        text, mean, _min, _wm = _read_crop(ocr_engine, _preprocess_variant(crop, 0), config)
+    return bool(text.strip()) and mean >= getattr(config, "OCR_MIN_TEXT_CONF", 0.30)
+
+
+def _merge_page_images(ws, page_a, page_b, config) -> tuple:
+    """Vertically concat A over B into A's filename slot. Returns (new_w, new_h, seam_y)."""
+    pdir = ws / config.STAGE_FOLDERS["pages"]
+    ia = Image.open(pdir / page_a["filename"]).convert("RGB")
+    ib = Image.open(pdir / page_b["filename"]).convert("RGB")
+    W, seam, H = max(ia.width, ib.width), ia.height, ia.height + ib.height
+    merged = Image.new("RGB", (W, H), (255, 255, 255))
+    merged.paste(ia, (0, 0))
+    merged.paste(ib, (0, seam))
+    merged.save(pdir / page_a["filename"])
+    return W, H, seam
+
+
+def _apply_stitching(ws, manifest: dict, per_page_regions: dict, model, config, overlays_dir):
+    """per_page_regions: {page_number: [region,...]} from the just-completed detection.
+    Returns (new_pages_meta, new_regions_by_page) with merges applied + everything
+    renumbered sequentially. No-op when disabled or no confirmed splits."""
+    pages_meta = manifest.get("pages", [])
+    if not getattr(config, "STITCH_ENABLED", False):
+        return pages_meta, per_page_regions
+
+    candidates = _find_split_pairs(per_page_regions, pages_meta, config)
+
+    confirmed = []
+    if candidates and getattr(config, "STITCH_TEXT_PROBE", True):
+        from manhua_pipeline.stages.stage2_ocr import _get_ocr
+        ocr_engine = _get_ocr(config)
+        by_num = {p["page_number"]: p for p in pages_meta}
+        for na, nb, bx, tx in candidates:
+            if (_half_has_text(ws, by_num[na], bx, config, ocr_engine)
+                    and _half_has_text(ws, by_num[nb], tx, config, ocr_engine)):
+                confirmed.append((na, nb))
+            else:
+                logger.info(
+                    "[%s] Split candidate %d+%d rejected (text guard).",
+                    _STAGE_NAME, na, nb,
+                )
+    elif candidates:
+        confirmed = [(na, nb) for na, nb, _bx, _tx in candidates]
+
+    if not confirmed:
+        return pages_meta, per_page_regions
+
+    merged_away = {nb for _na, nb in confirmed}
+    merge_map = {na: nb for na, nb in confirmed}
+
+    new_pages, new_regions = [], {}
+    seq = 0
+    for p in pages_meta:
+        n = p["page_number"]
+        if n in merged_away:
+            continue
+        seq += 1
+        if n in merge_map:
+            nb = merge_map[n]
+            pb = next(x for x in pages_meta if x["page_number"] == nb)
+            W, H, seam = _merge_page_images(ws, p, pb, config)
+            merged_page = dict(p)
+            merged_page.update({"width": W, "height": H, "global_y_offset": seam})
+            merged_page["page_number"] = seq
+            regions = _detect_page_regions(merged_page, model, config, ws, overlays_dir)
+            logger.info(
+                "[%s] Stitched pages %d+%d -> merged page (seam y=%d).",
+                _STAGE_NAME, n, nb, seam,
+            )
+        else:
+            merged_page = dict(p)
+            regions = per_page_regions.get(n, [])
+        merged_page["page_number"] = seq
+        new_pages.append(merged_page)
+        renum = []
+        for idx, r in enumerate(regions, start=1):
+            r = dict(r)
+            r["page_number"] = seq
+            r["region_id"] = config.REGION_ID_FORMAT.format(page=seq, idx=idx)
+            renum.append(r)
+        new_regions[seq] = renum
+
+    manifest["total_pages"] = len(new_pages)
+    return new_pages, new_regions
+
 def run_detection(workspace: str, config) -> Path:
     """Run bubble and narration detection over all usable pages."""
     t0 = time.monotonic()
@@ -251,7 +399,7 @@ def run_detection(workspace: str, config) -> Path:
     pages_processed = 0
     overlays_written = 0
     warnings = 0
-    regions = []
+    per_page_regions = {}
 
     # 3. Iterate usable pages
     for page in manifest.get("pages", []):
@@ -270,7 +418,7 @@ def run_detection(workspace: str, config) -> Path:
 
         try:
             page_regions = _detect_page_regions(page, model, config, ws, overlays_dir)
-            regions.extend(page_regions)
+            per_page_regions[page_num] = page_regions
             pages_processed += 1
             if getattr(config, "OVERLAY_ENABLED", True):
                 overlays_written += 1
@@ -290,7 +438,15 @@ def run_detection(workspace: str, config) -> Path:
                 page_num,
                 exc,
             )
+            per_page_regions[page_num] = []
             warnings += 1
+
+    # 3b. Stitching sub-step (Feature 4) — before writing detection.json
+    new_pages_meta, new_regions_by_page = _apply_stitching(
+        ws, manifest, per_page_regions, model, config, overlays_dir
+    )
+    manifest["pages"] = new_pages_meta
+    regions = [r for pg in sorted(new_regions_by_page) for r in new_regions_by_page[pg]]
 
     # 4. Save output detection.json
     now = datetime.now(timezone.utc).isoformat()
