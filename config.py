@@ -31,6 +31,11 @@ OCR_USE_GPU = False
 OCR_MIN_TEXT_CONF = 0.30
 EDGE_TOUCH_EPS = 3
 
+# ---- OCR retry ----
+OCR_RETRY_ENABLED = True
+OCR_RETRY_MAX = 2        # extra attempts after the base pass (up to 3 total reads)
+OCR_RETRY_FLOOR = 0.30   # below this, don't retry (probably not text)
+
 WATERMARK_PATTERNS = [
     r"www\.",
     r"baozimh",

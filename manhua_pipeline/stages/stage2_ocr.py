@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_stage
@@ -36,6 +36,50 @@ def _get_ocr(config):
         device=device,
         enable_mkldnn=False,
     )
+
+
+def _preprocess_variant(crop_im: "Image.Image", attempt: int) -> "Image.Image":
+    """Escalating-preprocessing variant. attempt 0 = current (2x LANCZOS)."""
+    if attempt <= 0:
+        return crop_im.resize(
+            (crop_im.width * 2, crop_im.height * 2), Image.Resampling.LANCZOS
+        )
+    if attempt == 1:
+        g = ImageOps.grayscale(crop_im)
+        g = g.resize((g.width * 3, g.height * 3), Image.Resampling.LANCZOS)
+        return ImageOps.autocontrast(g)
+    g = ImageOps.grayscale(crop_im)
+    g = g.resize((g.width * 3, g.height * 3), Image.Resampling.LANCZOS)
+    g = ImageOps.autocontrast(g)
+    g = g.filter(ImageFilter.MedianFilter(size=3))
+    return g.point(lambda p: 255 if p > 140 else 0)
+
+
+def _read_best(ocr_engine, crop_im, config) -> tuple:
+    """Base read; if confidence is in the retry window, escalate preprocessing and
+    keep the highest-confidence attempt."""
+    best = _read_crop(ocr_engine, _preprocess_variant(crop_im, 0), config)
+    best_mean = best[1]
+
+    if not getattr(config, "OCR_RETRY_ENABLED", False):
+        return best
+
+    floor = getattr(config, "OCR_RETRY_FLOOR", 0.30)
+    ceil = getattr(config, "OCR_CONFIDENCE_THRESHOLD", 0.70)
+    if not (floor <= best_mean < ceil):
+        return best
+
+    for attempt in range(1, getattr(config, "OCR_RETRY_MAX", 2) + 1):
+        cand = _read_crop(ocr_engine, _preprocess_variant(crop_im, attempt), config)
+        if cand[1] > best_mean:
+            best, best_mean = cand, cand[1]
+            logger.info(
+                "[%s] OCR retry #%d improved confidence -> %.2f",
+                _STAGE_NAME, attempt, best_mean,
+            )
+        if best_mean >= ceil:
+            break
+    return best
 
 
 def _read_crop(ocr_engine, crop_image, config) -> tuple:
@@ -117,12 +161,8 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
             )
         else:
             crop_im = page_im.crop((x0, y0, x1, y1))
-            # Upscale crop by 2x to significantly improve PaddleOCR detection of small/tight text
-            crop_resized = crop_im.resize(
-                (crop_im.width * 2, crop_im.height * 2), Image.Resampling.LANCZOS
-            )
-            original_text, mean_conf, min_conf, watermark_filtered = _read_crop(
-                ocr_engine, crop_resized, config
+            original_text, mean_conf, min_conf, watermark_filtered = _read_best(
+                ocr_engine, crop_im, config
             )
 
     # Edge touching computation
