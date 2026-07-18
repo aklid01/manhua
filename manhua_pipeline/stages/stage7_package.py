@@ -23,8 +23,10 @@ def _natural_key(p: Path) -> tuple:
 
 def _collect(render_dir: Path, config) -> list[Path]:
     exts = getattr(config, "PACKAGE_IMAGE_EXTS", (".png", ".jpg", ".jpeg", ".webp"))
+    rendered_dir = render_dir / "rendered"
+    scan_dir = rendered_dir if rendered_dir.exists() else render_dir
     return sorted(
-        (p for p in render_dir.iterdir() if p.is_file() and p.suffix.lower() in exts),
+        (p for p in scan_dir.iterdir() if p.is_file() and p.suffix.lower() in exts),
         key=_natural_key,
     )
 

@@ -21,7 +21,9 @@ def test_credits_written(tmp_path, monkeypatch):
     monkeypatch.setattr(s5, "_fit_font", lambda *a, **k: ImageFont.load_default())
     render_dir = tmp_path / "render"
     render_dir.mkdir()
-    out = s5._render_credits_page(render_dir, config, (400, 600))
+    rendered_dir = render_dir / "rendered"
+    rendered_dir.mkdir()
+    out = s5._render_credits_page(rendered_dir, config, (400, 600))
     assert out is not None and out.exists()
     assert out.name == "zzz_credits.png"
 
@@ -30,9 +32,9 @@ def test_missing_dir_returns_none(tmp_path, monkeypatch):
     from manhua_pipeline.stages import stage5_render as s5
     monkeypatch.setattr(config, "CREDITS_DIR", str(tmp_path / "nope"), raising=False)
     monkeypatch.setattr(config, "CREDITS_TEMPLATES", {"x.png": _slots()}, raising=False)
-    render_dir = tmp_path / "render"
-    render_dir.mkdir()
-    assert s5._render_credits_page(render_dir, config, (400, 600)) is None
+    rendered_dir = tmp_path / "render" / "rendered"
+    rendered_dir.mkdir(parents=True)
+    assert s5._render_credits_page(rendered_dir, config, (400, 600)) is None
 
 
 def test_random_only_picks_existing(tmp_path, monkeypatch):
@@ -47,10 +49,10 @@ def test_random_only_picks_existing(tmp_path, monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(s5, "_fit_font", lambda *a, **k: ImageFont.load_default())
-    render_dir = tmp_path / "r"
-    render_dir.mkdir()
+    rendered_dir = tmp_path / "r" / "rendered"
+    rendered_dir.mkdir(parents=True)
     for _ in range(15):
-        assert s5._render_credits_page(render_dir, config, (400, 600)) is not None
+        assert s5._render_credits_page(rendered_dir, config, (400, 600)) is not None
 
 
 def test_credits_excluded_from_manifest_and_report(tmp_path, monkeypatch):
@@ -62,7 +64,7 @@ def test_credits_excluded_from_manifest_and_report(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CREDITS_DIR", str(cdir), raising=False)
     monkeypatch.setattr(config, "CREDITS_TEMPLATES", {"t1.png": _slots()}, raising=False)
     monkeypatch.setattr(s5, "_fit_font", lambda *a, **k: ImageFont.load_default())
-    render_dir = tmp_path / "render"
-    render_dir.mkdir()
-    s5._render_credits_page(render_dir, config, (400, 600))
-    assert [p.name for p in render_dir.iterdir()] == ["zzz_credits.png"]
+    rendered_dir = tmp_path / "render" / "rendered"
+    rendered_dir.mkdir(parents=True)
+    s5._render_credits_page(rendered_dir, config, (400, 600))
+    assert [p.name for p in rendered_dir.iterdir()] == ["zzz_credits.png"]

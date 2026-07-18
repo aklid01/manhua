@@ -619,10 +619,10 @@ def _render_single_page(
         page_left += left
         page_overflow += ovf
 
-    # Save output image
+    # Save output image with sequential page number name
     rendered_dir = render_dir / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
-    out_path = rendered_dir / orig_filename
+    out_path = rendered_dir / f"{page_num:03d}.png"
     page_img.save(out_path)
     logger.info(
         "[%d/%d %s] Page %d -> saved %s (%d drawn, %d left)",
@@ -790,7 +790,9 @@ def run_render(workspace: str, config) -> Path:
         if not page.get("skip") and page.get("width") and page.get("height"):
             last_size = (page["width"], page["height"])
             break
-    _render_credits_page(render_dir, config, last_size)
+    rendered_dir = render_dir / "rendered"
+    rendered_dir.mkdir(parents=True, exist_ok=True)
+    _render_credits_page(rendered_dir, config, last_size)
 
     output_report = {
         "chapter_id": manifest.get("chapter_id", "unknown"),

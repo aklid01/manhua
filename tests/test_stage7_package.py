@@ -8,7 +8,7 @@ from PIL import Image
 
 def _setup(tmp_path):
     ws = tmp_path / "0_001_"
-    render = ws / config.STAGE_FOLDERS["render"]
+    render = ws / config.STAGE_FOLDERS["render"] / "rendered"
     render.mkdir(parents=True)
     for n in ["001.png", "002.png", "010.png", "zzz_credits.png"]:
         Image.new("RGB", (50, 70), (200, 200, 200)).save(render / n)
