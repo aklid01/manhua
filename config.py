@@ -61,12 +61,17 @@ STAGE_FOLDERS = {
     "paraphrase": "stage4_paraphrase",
     "render": "stage5_render",
     "qa": "stage6_qa",
+    "package": "stage7_package",
     "logs": "logs",
 }
 
 MANIFEST_NAME = "manifest.json"
 GLOSSARY_NAME = "glossary.json"
 MCP_SERVER_NAME = "Manhua Pipeline"
+
+# ---- Packaging (Stage 7) ----
+VALID_PACKAGE_FORMATS = ("zip", "cbz", "tar", "pdf")
+PACKAGE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 # ---- Translation ----
 TRANSLATOR_BACKEND = "ollama"  # "manual" | "mcp" | "ollama"  (keep mcp default until benchmark passes)

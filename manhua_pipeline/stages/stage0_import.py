@@ -255,16 +255,13 @@ def _import_folder(
     # slug is kept here for simplicity — downstream can reformat if needed.
     return {
         "chapter_id": _chapter_id_from(source_name),
-        # Optional title/source fields — null when not provided (deferred to manual entry)
+        "source_archive": source_name,
         "title_romanized": meta.get("title_romanized"),
         "title_english": meta.get("title_english"),
         "source": meta.get("source"),
         "source_language": "zh",
         "target_language": "en-US",
         "input_format": input_format,
-        # total_pages counts ALL enumerated pages, including failed/skipped ones
-        # (filename=None, skip=True). Downstream stages MUST check skip==False and
-        # filename is not None before opening any page file.
         "total_pages": len(pages),
         "current_stage": "detect",
         "completed_stages": ["import"],

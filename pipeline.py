@@ -109,6 +109,7 @@ def run_batch(
     resume: bool = True,
     clear_delay: int = 10,
     meta: dict | None = None,
+    formats: list[str] | None = None,
 ) -> int:
     """Process every CBZ in a folder. Continue-on-error; skip completed;
     resume pending; slim batch log + per-error logs; clean console per chapter."""
@@ -168,6 +169,7 @@ def run_batch(
                     "source": meta.get("source"),
                 },
                 fresh=fresh,
+                formats=formats or [],
             )
             m = load_manifest(str(chapter_dir), config)
             stage_after = m.get("current_stage") if m else None
@@ -266,10 +268,13 @@ def build_parser() -> argparse.ArgumentParser:
     runall.add_argument("--title-romanized", default=None, dest="title_romanized")
     runall.add_argument("--title-en", default=None, dest="title_en")
     runall.add_argument("--source", default=None)
-    runall.add_argument(
-        "--fresh",
+    runall.add_argument("--fresh",
         action="store_true",
         help="Wipe prior stage outputs and prompts when starting from import",
+    )
+    runall.add_argument(
+        "--package", default=None,
+        help="Comma-separated formats to package after completion (zip,cbz,tar,pdf)",
     )
 
     batch_sp = sub.add_parser("batch", help="Process a folder of CBZ chapters")
@@ -290,6 +295,17 @@ def build_parser() -> argparse.ArgumentParser:
     batch_sp.add_argument(
         "--clear-delay", type=int, default=10,
         help="Seconds to show a completed chapter's output before clearing (0 = never)",
+    )
+    batch_sp.add_argument(
+        "--package", default=None,
+        help="Comma-separated formats to package after each chapter completes",
+    )
+
+    pkg_sp = sub.add_parser("package", help="Package rendered pages into archives")
+    pkg_sp.add_argument("--chapter", required=True, help="Chapter name in the series folder")
+    pkg_sp.add_argument(
+        "--package", required=True,
+        help="Comma-separated formats to package (zip,cbz,tar,pdf)",
     )
 
     return parser
@@ -356,6 +372,7 @@ def main(argv=None) -> int:
                 "title_en": getattr(args, "title_en", None),
                 "source": getattr(args, "source", None),
             },
+            formats=_parse_formats(getattr(args, "package", None)),
         )
 
     if args.command == "run-all":
@@ -372,6 +389,7 @@ def main(argv=None) -> int:
             input_path=getattr(args, "input", None),
             meta=meta,
             fresh=getattr(args, "fresh", False),
+            formats=_parse_formats(getattr(args, "package", None)),
         )
 
     if args.command == "import":
@@ -385,6 +403,14 @@ def main(argv=None) -> int:
             title_english=getattr(args, "title_en", None),
             source=getattr(args, "source", None),
             fresh=getattr(args, "fresh", False),
+        )
+        return 0
+
+    if args.command == "package":
+        from manhua_pipeline.stages import stage7_package
+        chapter_dir = base_dir / args.chapter
+        stage7_package.run_package(
+            str(chapter_dir), config, _parse_formats(args.package)
         )
         return 0
 
@@ -418,6 +444,10 @@ def main(argv=None) -> int:
     return 0
 
 
+def _parse_formats(raw: str | None) -> list[str]:
+    return [f.strip() for f in raw.split(",") if f.strip()] if raw else []
+
+
 def _run_all_from(
     workspace: str,
     config,
@@ -425,6 +455,7 @@ def _run_all_from(
     input_path: str | None = None,
     meta: dict | None = None,
     fresh: bool = False,
+    formats: list[str] | None = None,
 ) -> int:
     order = config.STAGE_ORDER
     if start not in order:
@@ -473,6 +504,9 @@ def _run_all_from(
             )
             return 0
     logger.info("run-all: complete")
+    if formats:
+        from manhua_pipeline.stages import stage7_package
+        stage7_package.run_package(workspace, config, formats)
     return 0
 
 
