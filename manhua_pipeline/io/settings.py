@@ -66,3 +66,15 @@ def resolve_base_dir(args, config) -> Path:
 
     set_output_dir(ans)
     return Path(ans).resolve()
+
+
+_CREDITS_DEFAULTS = {
+    "scanlator": "aklid",
+    "pipeline_name": "Manhua Pipeline",
+    "pipeline_url": "github.com/aklid01",
+}
+
+
+def get_credits() -> dict:
+    saved = load_settings().get("credits", {}) or {}
+    return {**_CREDITS_DEFAULTS, **{k: v for k, v in saved.items() if v}}

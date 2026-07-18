@@ -127,3 +127,25 @@ BUBBLE_WHITE_THRESHOLD = 220
 
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
+
+# ---- Credits page ----
+CREDITS_DIR = "assets/credits"
+CREDITS_TEXT_FILL = (240, 236, 225)
+CREDITS_MATCH_PAGE_SIZE = True
+
+_CREDITS_3COL = [
+    ("scanlator",     0.185, 0.852, "center", 34, 0.24, 0.030),
+    ("pipeline_name", 0.500, 0.852, "center", 30, 0.30, 0.030),
+    ("pipeline_url",  0.815, 0.852, "center", 30, 0.30, 0.030),
+]
+_CREDITS_WEBTOON = [
+    ("scanlator",     0.165, 0.622, "left", 28, 0.26, 0.026),
+    ("pipeline_name", 0.165, 0.700, "left", 24, 0.28, 0.026),
+    ("pipeline_url",  0.165, 0.780, "left", 24, 0.30, 0.026),
+]
+CREDITS_TEMPLATES = {
+    "credits_cliff.png":   _CREDITS_3COL,
+    "credits_lake.png":    _CREDITS_3COL,
+    "credits_chibi.png":   _CREDITS_3COL,
+    "credits_webtoon.png": _CREDITS_WEBTOON,
+}
