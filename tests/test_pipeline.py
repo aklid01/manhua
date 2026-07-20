@@ -8,7 +8,7 @@ import config
 from manhua_pipeline.stages import (
     stage6_qa,
 )
-from pipeline import STAGES, build_parser, main
+from pipeline import build_parser, main
 
 
 @pytest.fixture(autouse=True)
@@ -33,18 +33,19 @@ def test_build_parser():
 def test_pipeline_main_stage_execution(temp_workspace):
     """Test that non-import stages are called correctly from main."""
     (temp_workspace / config.MANIFEST_NAME).write_text(json.dumps({"chapter_id": "test_ch"}))
-    non_import = {k: v for k, v in STAGES.items() if k != "import"}
-    for stage_name in non_import:
+    from pipeline import STAGE_REGISTRY
+    for stage_name in [k for k in STAGE_REGISTRY if k != "import"]:
         mock_fn = MagicMock()
-        with patch.dict("pipeline.STAGES", {stage_name: mock_fn}):
+        with patch("pipeline._load_stage", return_value=mock_fn) as mock_load:
             exit_code = main([stage_name, "--workspace", str(temp_workspace)])
             assert exit_code == 0 or exit_code is None
+            mock_load.assert_called_once_with(stage_name)
             mock_fn.assert_called_once_with(str(temp_workspace), config)
 
 
 def test_pipeline_main_import_calls_run_import(temp_workspace):
     """Test that 'import' subcommand calls stage0_import.run_import with input_path."""
-    with patch("pipeline.stage0_import.run_import") as mock_run:
+    with patch("manhua_pipeline.stages.stage0_import.run_import") as mock_run:
         exit_code = main(
             [
                 "import",
@@ -68,19 +69,8 @@ def test_pipeline_main_import_calls_run_import(temp_workspace):
 
 def test_pipeline_run_all_from_stage(temp_workspace):
     """Test that run-all starting from a specific stage skips preceding stages."""
-    with patch("pipeline.STAGES") as mock_stages:
-        mock_stages.keys.return_value = [
-            "import",
-            "detect",
-            "ocr",
-            "translate",
-            "paraphrase",
-            "render",
-            "qa",
-        ]
-        mock_fns = {k: MagicMock() for k in mock_stages.keys()}
-        mock_stages.__getitem__.side_effect = lambda k: mock_fns[k]
-
+    mock_fns = {k: MagicMock() for k in ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]}
+    with patch("pipeline._load_stage", side_effect=lambda name: mock_fns[name]):
         exit_code = main(
             ["run-all", "--workspace", str(temp_workspace), "--from-stage", "ocr"]
         )
@@ -456,3 +446,12 @@ def test_pipeline_run_all_subprocess_handoff(temp_workspace, monkeypatch):
         assert exit_code == 0
         
         mock_run_sub.assert_called_once_with("translate", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
+
+
+def test_load_stage_lazy():
+    """Test that _load_stage successfully imports and returns correct functions."""
+    from pipeline import _load_stage
+    from manhua_pipeline.stages import stage1_detection, stage2_ocr
+    assert _load_stage("ocr") == stage2_ocr.run_ocr
+    assert _load_stage("detect") == stage1_detection.run_detection
+

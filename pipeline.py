@@ -29,32 +29,25 @@ from pathlib import Path
 
 import config
 from manhua_pipeline.logging_setup import get_logger, setup_logging
-from manhua_pipeline.stages import (
-    stage0_import,
-    stage1_detection,
-    stage2_ocr,
-    stage3_translation,
-    stage4_paraphrase,
-    stage5_render,
-    stage6_qa,
-)
-
 logger = get_logger(__name__)
 
-# Map CLI command -> (label, run function)
-STAGES = {
-    "import": lambda *args, **kwargs: stage0_import.run_import(*args, **kwargs),
-    "detect": lambda *args, **kwargs: stage1_detection.run_detection(*args, **kwargs),
-    "ocr": lambda *args, **kwargs: stage2_ocr.run_ocr(*args, **kwargs),
-    "translate": lambda *args, **kwargs: stage3_translation.run_translation(
-        *args, **kwargs
-    ),
-    "paraphrase": lambda *args, **kwargs: stage4_paraphrase.run_paraphrase(
-        *args, **kwargs
-    ),
-    "render": lambda *args, **kwargs: stage5_render.run_render(*args, **kwargs),
-    "qa": lambda *args, **kwargs: stage6_qa.run_qa(*args, **kwargs),
+STAGE_REGISTRY = {
+    "import":     ("stage0_import",      "run_import"),
+    "detect":     ("stage1_detection",   "run_detection"),
+    "ocr":        ("stage2_ocr",         "run_ocr"),
+    "translate":  ("stage3_translation", "run_translation"),
+    "paraphrase": ("stage4_paraphrase",  "run_paraphrase"),
+    "render":     ("stage5_render",      "run_render"),
+    "qa":         ("stage6_qa",          "run_qa"),
 }
+
+
+def _load_stage(name):
+    """Import a single stage module on demand and return its run function."""
+    import importlib
+    mod_name, func_name = STAGE_REGISTRY[name]
+    module = importlib.import_module(f"manhua_pipeline.stages.{mod_name}")
+    return getattr(module, func_name)
 
 
 def _iter_batch_inputs(folder: Path) -> list[Path]:
@@ -249,7 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--fresh", action="store_true", help="Wipe prior stage outputs and prompts"
     )
 
-    for name in [n for n in STAGES if n != "import"]:
+    for name in [n for n in STAGE_REGISTRY if n != "import"]:
         sp = sub.add_parser(name, help=f"Run the {name} stage")
         sp.add_argument("--workspace", default="workspace")
         sp.add_argument("--chapter", default=None)
@@ -395,7 +388,7 @@ def main(argv=None) -> int:
     if args.command == "import":
         chapter_dir = _resolve_import_chapter_dir(args, base_dir)
         logger.info("Running stage: import")
-        stage0_import.run_import(
+        _load_stage("import")(
             args.input,
             str(chapter_dir),
             config,
@@ -438,7 +431,7 @@ def main(argv=None) -> int:
         )
         return 2
 
-    run_fn = STAGES[args.command]
+    run_fn = _load_stage(args.command)
     logger.info("Running stage: %s", args.command)
     run_fn(str(chapter_dir), config)
     return 0
@@ -528,7 +521,7 @@ def _run_all_from(
                 return 0
         else:
             if name == "import":
-                res = stage0_import.run_import(
+                res = _load_stage("import")(
                     input_path,
                     workspace,
                     config,
@@ -538,7 +531,7 @@ def _run_all_from(
                     fresh=fresh,
                 )
             else:
-                res = STAGES[name](workspace, config)
+                res = _load_stage(name)(workspace, config)
 
             if res is None:
                 stage_title = name.title() if name != "ocr" else "OCR"

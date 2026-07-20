@@ -201,16 +201,20 @@ def test_run_all_stops_at_handoff(tmp_path, monkeypatch):
     import pipeline
 
     calls = []
+    import manhua_pipeline.stages.stage3_translation as s3
+    import manhua_pipeline.stages.stage4_paraphrase as s4
+    import manhua_pipeline.stages.stage5_render as s5
+
     monkeypatch.setattr(
-        pipeline.stage3_translation,
+        s3,
         "run_translation",
         lambda ws, cfg: calls.append("t") or None,
     )  # None => awaiting handoff
     monkeypatch.setattr(
-        pipeline.stage4_paraphrase, "run_paraphrase", lambda ws, cfg: calls.append("p")
+        s4, "run_paraphrase", lambda ws, cfg: calls.append("p")
     )
     monkeypatch.setattr(
-        pipeline.stage5_render, "run_render", lambda ws, cfg: calls.append("r")
+        s5, "run_render", lambda ws, cfg: calls.append("r")
     )
     pipeline._run_all_from(tmp_path, config, start="translate")
     assert calls == [
