@@ -448,6 +448,32 @@ def _parse_formats(raw: str | None) -> list[str]:
     return [f.strip() for f in raw.split(",") if f.strip()] if raw else []
 
 
+def _run_stage_subprocess(stage, chapter_dir, *, input_path=None, meta=None, fresh=False) -> int:
+    import subprocess
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        stage,
+        "--workspace",
+        str(chapter_dir),
+    ]
+    if stage == "import":
+        if not input_path:
+            raise ValueError("import subprocess requires input_path")
+        cmd += ["--input", input_path]
+        meta = meta or {}
+        for flag, key in (
+            ("--title-romanized", "title_romanized"),
+            ("--title-en", "title_en"),
+            ("--source", "source"),
+        ):
+            if meta.get(key):
+                cmd += [flag, meta[key]]
+        if fresh:
+            cmd += ["--fresh"]
+    return subprocess.run(cmd).returncode
+
+
 def _run_all_from(
     workspace: str,
     config,
@@ -483,26 +509,44 @@ def _run_all_from(
     meta = meta or {}
     for name in order[start_idx:]:
         logger.info("=" * 60)
-        if name == "import":
-            res = stage0_import.run_import(
-                input_path,
-                workspace,
-                config,
-                title_romanized=meta.get("title_romanized"),
-                title_english=meta.get("title_en"),
-                source=meta.get("source"),
-                fresh=fresh,
-            )
+        if getattr(config, "BATCH_SUBPROCESS", False):
+            rc = _run_stage_subprocess(name, workspace, input_path=input_path, meta=meta, fresh=fresh)
+            if rc != 0:
+                logger.error("Subprocess for stage %r failed with return code %d", name, rc)
+                return 2
+            manifest = load_manifest(workspace, config)
+            if not manifest:
+                logger.error("Failed to load manifest after subprocess for stage %r", name)
+                return 2
+            current_stage = manifest.get("current_stage")
+            if current_stage == name:
+                stage_title = name.title() if name != "ocr" else "OCR"
+                logger.info(
+                    "Stopping run-all: manual handoff required at %s. Resume with: python pipeline.py run-all",
+                    stage_title,
+                )
+                return 0
         else:
-            res = STAGES[name](workspace, config)
+            if name == "import":
+                res = stage0_import.run_import(
+                    input_path,
+                    workspace,
+                    config,
+                    title_romanized=meta.get("title_romanized"),
+                    title_english=meta.get("title_en"),
+                    source=meta.get("source"),
+                    fresh=fresh,
+                )
+            else:
+                res = STAGES[name](workspace, config)
 
-        if res is None:
-            stage_title = name.title() if name != "ocr" else "OCR"
-            logger.info(
-                "Stopping run-all: manual handoff required at %s. Resume with: python pipeline.py run-all",
-                stage_title,
-            )
-            return 0
+            if res is None:
+                stage_title = name.title() if name != "ocr" else "OCR"
+                logger.info(
+                    "Stopping run-all: manual handoff required at %s. Resume with: python pipeline.py run-all",
+                    stage_title,
+                )
+                return 0
     logger.info("run-all: complete")
     if formats:
         from manhua_pipeline.stages import stage7_package

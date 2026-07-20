@@ -22,8 +22,15 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "OCR"
 
 
+_OCR_ENGINE = None
+
+
 def _get_ocr(config):
-    """Lazy-load and initialize PaddleOCR engine once."""
+    """Lazy-load and initialize PaddleOCR engine once (per process)."""
+    global _OCR_ENGINE
+    if _OCR_ENGINE is not None:
+        return _OCR_ENGINE
+
     import logging
 
     logging.getLogger("ppocr").setLevel(logging.WARNING)
@@ -31,11 +38,16 @@ def _get_ocr(config):
     from paddleocr import PaddleOCR
 
     device = "gpu" if getattr(config, "OCR_USE_GPU", False) else "cpu"
-    return PaddleOCR(
+    _OCR_ENGINE = PaddleOCR(
         lang=getattr(config, "OCR_LANG", "ch"),
+        ocr_version=getattr(config, "OCR_VERSION", "PP-OCRv6"),
         device=device,
         enable_mkldnn=False,
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
     )
+    return _OCR_ENGINE
 
 
 def _preprocess_variant(crop_im: "Image.Image", attempt: int) -> "Image.Image":
@@ -88,27 +100,30 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
     Returns:
         tuple: (original_text string, mean_confidence float, min_confidence float, watermark_filtered bool)
     """
-    crop_bgr = np.array(crop_image.convert("RGB"))[:, :, ::-1]
+    crop_bgr = np.ascontiguousarray(
+        np.array(crop_image.convert("RGB"))[:, :, ::-1]
+    )
     results = ocr_engine.predict(crop_bgr)
-
-    if not results or not isinstance(results, list):
+    res = next(iter(results), None)
+    if res is None:
         return "", 0.0, 0.0, False
-
-    res = results[0]
-    texts = res.get("rec_texts", [])
-    scores = res.get("rec_scores", [])
-
+    if not hasattr(res, "get"):
+        raise TypeError(f"Unexpected PaddleOCR result type: {type(res).__name__}")
+    texts = list(res.get("rec_texts", []) or [])
+    scores = list(res.get("rec_scores", []) or [])
     if not texts:
         return "", 0.0, 0.0, False
-
-    lines = []
-    confidences = []
-    filtered_any = False
-    for txt, conf in zip(texts, scores):
-        if not txt:
+    if len(texts) != len(scores):
+        logger.warning("[%s] PaddleOCR returned %d texts but %d scores",
+                       _STAGE_NAME, len(texts), len(scores))
+    lines, confidences, filtered_any = [], [], False
+    for index, txt in enumerate(texts):
+        if txt is None:
             continue
-
-        # Check watermark
+        txt = str(txt)
+        if not txt.strip():
+            continue
+        conf = float(scores[index]) if index < len(scores) else 0.0
         is_wm = False
         for rx in getattr(config, "WATERMARK_REGEX", []):
             if rx.search(txt):
@@ -117,17 +132,11 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
         if is_wm:
             filtered_any = True
             continue
-
         lines.append(txt)
-        confidences.append(float(conf))
-
+        confidences.append(conf)
     if not lines:
         return "", 0.0, 0.0, filtered_any
-
-    text = "\n".join(lines)
-    mean_conf = sum(confidences) / len(confidences)
-    min_conf = min(confidences)
-    return text, mean_conf, min_conf, filtered_any
+    return "\n".join(lines), sum(confidences) / len(confidences), min(confidences), filtered_any
 
 
 def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
@@ -152,6 +161,7 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
         x1 = min(W, x + w)
         y1 = min(H, y + h)
 
+        status = "success"
         if x1 <= x0 or y1 <= y0:
             original_text, mean_conf, min_conf, watermark_filtered = (
                 "",
@@ -159,11 +169,17 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
                 0.0,
                 False,
             )
+            status = "no_text"
         else:
             crop_im = page_im.crop((x0, y0, x1, y1))
             original_text, mean_conf, min_conf, watermark_filtered = _read_best(
                 ocr_engine, crop_im, config
             )
+            if not original_text.strip():
+                if watermark_filtered:
+                    status = "watermark_only"
+                else:
+                    status = "no_prediction" if mean_conf == 0.0 else "no_text"
 
     # Edge touching computation
     eps = config.EDGE_TOUCH_EPS
@@ -210,6 +226,7 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
         "edge": edge,
         "note": note,
         "watermark_filtered": watermark_filtered,
+        "status": status,
     }
 
 
@@ -263,12 +280,12 @@ def _process_single_region_ocr(
             )
         return res, False
     except Exception as exc:
-        logger.warning(
-            "[%s] Region %s — failed OCR: %s",
+        logger.exception(
+            "[%s] Region %s — failed OCR",
             _STAGE_NAME,
             region["region_id"],
-            exc,
         )
+        status = "schema_error" if isinstance(exc, TypeError) else "inference_error"
         # Error isolation entry
         fallback = {
             "region_id": region["region_id"],
@@ -285,6 +302,7 @@ def _process_single_region_ocr(
             "edge": "none",
             "note": "ocr_error",
             "watermark_filtered": False,
+            "status": status,
         }
         return fallback, True
 
@@ -361,14 +379,32 @@ def run_ocr(workspace: str, config) -> Path:
             edge_touching_count += 1
 
     # Output OCR JSON
+    from importlib.metadata import version
     now = datetime.now(timezone.utc).isoformat()
     output_json = {
         "chapter_id": manifest.get("chapter_id", "unknown_chapter"),
         "stage": "ocr",
         "generated_at": now,
         "ocr_engine": config.OCR_ENGINE,
+        "ocr_version": getattr(config, "OCR_VERSION", None),
+        "ocr_language": getattr(config, "OCR_LANG", "ch"),
+        "ocr_device": "gpu" if getattr(config, "OCR_USE_GPU", False) else "cpu",
+        "paddleocr_package_version": version("paddleocr"),
         "results": results,
     }
+    # Check if all regions failed (safety net)
+    if results:
+        if warnings == len(results):
+            raise RuntimeError(
+                "PaddleOCR failed for every processed region; OCR output not accepted."
+            )
+        if len(results) > 1:
+            non_wm_results = [r for r in results if r.get("status") != "watermark_only"]
+            if non_wm_results and all(r.get("status") in {"no_prediction", "schema_error", "inference_error"} for r in non_wm_results):
+                raise RuntimeError(
+                    "PaddleOCR returned no text for any region; OCR output not accepted."
+                )
+
     ocr_json_path = ocr_dir / "ocr.json"
 
     with ocr_json_path.open("w", encoding="utf-8") as fh:

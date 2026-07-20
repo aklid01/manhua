@@ -11,6 +11,11 @@ from manhua_pipeline.stages import (
 from pipeline import STAGES, build_parser, main
 
 
+@pytest.fixture(autouse=True)
+def disable_batch_subprocess(monkeypatch):
+    monkeypatch.setattr(config, "BATCH_SUBPROCESS", False)
+
+
 def test_build_parser():
     """Test that build_parser constructs the CLI parser with all expected commands."""
     parser = build_parser()
@@ -381,3 +386,73 @@ def test_import_chapter_id_no_trailing_underscore(tmp_path):
     m = json.loads((ws / "manifest.json").read_text())
     assert not m["chapter_id"].endswith("_")
     assert "1_001" in m["chapter_id"]
+
+
+def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
+    """Test run-all subprocess batch mode execution."""
+    monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
+
+    manifest = {
+        "chapter_id": "test_ch",
+        "current_stage": "ocr",
+        "completed_stages": ["import", "detect"],
+    }
+    (temp_workspace / "manifest.json").write_text(json.dumps(manifest))
+
+    with (
+        patch("pipeline._run_stage_subprocess", return_value=0) as mock_run_sub,
+        patch("manhua_pipeline.io.workspace.load_manifest") as mock_load_manifest,
+    ):
+        manifest_ocr = {"current_stage": "translate"}
+        manifest_translate = {"current_stage": "paraphrase"}
+        manifest_paraphrase = {"current_stage": "render"}
+        manifest_render = {"current_stage": "qa"}
+        manifest_qa = {"current_stage": "complete"}
+        
+        mock_load_manifest.side_effect = [
+            manifest,
+            manifest_ocr,
+            manifest_translate,
+            manifest_paraphrase,
+            manifest_render,
+            manifest_qa,
+        ]
+
+        exit_code = main(
+            ["run-all", "--workspace", str(temp_workspace), "--from-stage", "ocr"]
+        )
+        assert exit_code == 0
+
+        mock_run_sub.assert_any_call("ocr", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
+        mock_run_sub.assert_any_call("translate", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
+        mock_run_sub.assert_any_call("paraphrase", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
+        mock_run_sub.assert_any_call("render", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
+        mock_run_sub.assert_any_call("qa", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
+
+
+def test_pipeline_run_all_subprocess_handoff(temp_workspace, monkeypatch):
+    """Test that subprocess run-all stops when a stage requires handoff."""
+    monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
+
+    manifest = {
+        "chapter_id": "test_ch",
+        "current_stage": "translate",
+        "completed_stages": ["import", "detect", "ocr"],
+    }
+    (temp_workspace / "manifest.json").write_text(json.dumps(manifest))
+
+    with (
+        patch("pipeline._run_stage_subprocess", return_value=0) as mock_run_sub,
+        patch("manhua_pipeline.io.workspace.load_manifest") as mock_load_manifest,
+    ):
+        mock_load_manifest.side_effect = [
+            manifest,
+            manifest,
+        ]
+
+        exit_code = main(
+            ["run-all", "--workspace", str(temp_workspace), "--from-stage", "translate"]
+        )
+        assert exit_code == 0
+        
+        mock_run_sub.assert_called_once_with("translate", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)

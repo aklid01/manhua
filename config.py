@@ -29,7 +29,9 @@ OCR_CONFIDENCE_THRESHOLD = 0.7  # below this -> needs_correction
 OCR_LANG = "ch"
 OCR_USE_GPU = False
 OCR_MIN_TEXT_CONF = 0.30
+OCR_VERSION = "PP-OCRv6"
 EDGE_TOUCH_EPS = 3
+BATCH_SUBPROCESS = True
 
 # ---- OCR retry ----
 OCR_RETRY_ENABLED = True

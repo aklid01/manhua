@@ -1,6 +1,12 @@
 import json
 
 import config
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def disable_batch_subprocess(monkeypatch):
+    monkeypatch.setattr(config, "BATCH_SUBPROCESS", False)
 
 
 def test_settings_prompt_saved_and_reused(tmp_path, monkeypatch):

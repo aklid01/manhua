@@ -1,4 +1,5 @@
 import json
+import pytest
 from unittest.mock import MagicMock, patch
 
 from PIL import Image
@@ -289,3 +290,43 @@ def test_read_crop_filters_traditional_watermark():
     text, mean_c, min_c, filtered = _read_crop(eng, crop, config)
     assert text == "快逃啊！"
     assert filtered is True
+
+
+def test_ocr_results_include_status(tmp_path):
+    from manhua_pipeline.stages.stage2_ocr import run_ocr
+
+    ws = tmp_path / "workspace"
+    _setup(ws, regions=[_region("P001_R001", 100, 300, 200, 120)])
+    with (
+        patch("manhua_pipeline.stages.stage2_ocr._get_ocr", return_value=MagicMock()),
+        patch(
+            "manhua_pipeline.stages.stage2_ocr._read_crop",
+            return_value=("朝阳集团", 0.90, 0.90, False),
+        ),
+    ):
+        run_ocr(str(ws), config)
+    ocr = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))
+    res = ocr["results"][0]
+    assert res["status"] == "success"
+
+
+def test_ocr_all_regions_empty_raises_error(tmp_path):
+    from manhua_pipeline.stages.stage2_ocr import run_ocr
+
+    ws = tmp_path / "workspace"
+    _setup(
+        ws,
+        regions=[
+            _region("P001_R001", 100, 300, 200, 120),
+            _region("P001_R002", 100, 450, 200, 120),
+        ],
+    )
+    with (
+        patch("manhua_pipeline.stages.stage2_ocr._get_ocr", return_value=MagicMock()),
+        patch(
+            "manhua_pipeline.stages.stage2_ocr._read_crop",
+            return_value=("", 0.0, 0.0, False),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="PaddleOCR returned no text for any region"):
+            run_ocr(str(ws), config)
