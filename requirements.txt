@@ -1,6 +1,6 @@
 ultralytics>=8.0
-paddleocr>=2.7
-paddlepaddle>=2.6
+paddleocr>=3.0
+paddlepaddle>=3.0
 pillow>=10.0
 numpy>=1.24
 
