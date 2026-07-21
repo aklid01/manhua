@@ -330,3 +330,28 @@ def test_ocr_all_regions_empty_raises_error(tmp_path):
     ):
         with pytest.raises(RuntimeError, match="PaddleOCR returned no text for any region"):
             run_ocr(str(ws), config)
+
+
+def test_ocr_engine_fallback():
+    from manhua_pipeline.stages.stage2_ocr import _get_ocr
+    import manhua_pipeline.stages.stage2_ocr as stage2_ocr
+
+    # Reset globals
+    stage2_ocr._OCR_ENGINE = None
+    stage2_ocr._ACTIVE_OCR_ENGINE = None
+
+    class MockConfig:
+        OCR_ENGINE = "transformers"
+        OCR_LANG = "ch"
+        OCR_VERSION = "PP-OCRv6"
+        OCR_USE_GPU = False
+
+    # Simulate preferred initialization failure, forcing fallback to paddle
+    with patch("paddleocr.PaddleOCR") as mock_paddle_ocr:
+        # First call (transformers) raises exception, second call (paddle) succeeds
+        mock_paddle_ocr.side_effect = [ValueError("Failed preferred"), MagicMock()]
+        
+        engine = _get_ocr(MockConfig)
+        assert engine is not None
+        assert stage2_ocr._ACTIVE_OCR_ENGINE == "paddle"
+

@@ -23,11 +23,12 @@ _STAGE_NAME = "OCR"
 
 
 _OCR_ENGINE = None
+_ACTIVE_OCR_ENGINE = None
 
 
 def _get_ocr(config):
-    """Lazy-load and initialize PaddleOCR engine once (per process)."""
-    global _OCR_ENGINE
+    """Lazy-load and initialize PaddleOCR engine once (per process) with fallback."""
+    global _OCR_ENGINE, _ACTIVE_OCR_ENGINE
     if _OCR_ENGINE is not None:
         return _OCR_ENGINE
 
@@ -38,16 +39,48 @@ def _get_ocr(config):
     from paddleocr import PaddleOCR
 
     device = "gpu" if getattr(config, "OCR_USE_GPU", False) else "cpu"
+    preferred_engine = getattr(config, "OCR_ENGINE", "paddle")
+    if preferred_engine == "PaddleOCR":
+        preferred_engine = "paddle"
+
+    fallback_engine = "paddle" if preferred_engine == "transformers" else "transformers"
+
+    try:
+        logger.info(
+            "[%s] Initializing PaddleOCR with preferred engine: %s (device=%s)",
+            _STAGE_NAME, preferred_engine, device
+        )
+        _OCR_ENGINE = PaddleOCR(
+            lang=getattr(config, "OCR_LANG", "ch"),
+            ocr_version=getattr(config, "OCR_VERSION", "PP-OCRv6"),
+            device=device,
+            engine=preferred_engine,
+            enable_mkldnn=False,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+        _ACTIVE_OCR_ENGINE = preferred_engine
+        return _OCR_ENGINE
+    except Exception as exc:
+        logger.warning(
+            "[%s] Failed to initialize preferred OCR engine %s: %s. Falling back to %s.",
+            _STAGE_NAME, preferred_engine, exc, fallback_engine
+        )
+
     _OCR_ENGINE = PaddleOCR(
         lang=getattr(config, "OCR_LANG", "ch"),
         ocr_version=getattr(config, "OCR_VERSION", "PP-OCRv6"),
         device=device,
+        engine=fallback_engine,
         enable_mkldnn=False,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
     )
+    _ACTIVE_OCR_ENGINE = fallback_engine
     return _OCR_ENGINE
+
 
 
 def _preprocess_variant(crop_im: "Image.Image", attempt: int) -> "Image.Image":
@@ -385,7 +418,7 @@ def run_ocr(workspace: str, config) -> Path:
         "chapter_id": manifest.get("chapter_id", "unknown_chapter"),
         "stage": "ocr",
         "generated_at": now,
-        "ocr_engine": config.OCR_ENGINE,
+        "ocr_engine": _ACTIVE_OCR_ENGINE or config.OCR_ENGINE,
         "ocr_version": getattr(config, "OCR_VERSION", None),
         "ocr_language": getattr(config, "OCR_LANG", "ch"),
         "ocr_device": "gpu" if getattr(config, "OCR_USE_GPU", False) else "cpu",

@@ -4,7 +4,7 @@ import re
 
 # ---- Models ----
 MODEL_DETECTION = "ogkalu/comic-speech-bubble-detector-yolov8m"
-OCR_ENGINE = "PaddleOCR"
+OCR_ENGINE = "transformers"
 
 # ---- Detection ----
 DETECTION_MODEL = MODEL_DETECTION
