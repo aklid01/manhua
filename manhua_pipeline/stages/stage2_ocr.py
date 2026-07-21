@@ -4,6 +4,7 @@ PaddleOCR over detected regions. v0 = horizontal text only.
 Records original Chinese + confidence; flags needs_correction below threshold.
 """
 
+import atexit
 import json
 import time
 from datetime import datetime, timezone
@@ -24,6 +25,40 @@ _STAGE_NAME = "OCR"
 
 _OCR_ENGINE = None
 _ACTIVE_OCR_ENGINE = None
+
+
+def _close_ocr():
+    """Best-effort shutdown of the PaddleOCR/PaddleX engine and any worker it spawned."""
+    global _OCR_ENGINE
+    if _OCR_ENGINE is None:
+        return
+    engine = _OCR_ENGINE
+    _OCR_ENGINE = None
+    for attr in ("close", "shutdown", "release", "__del__"):
+        fn = getattr(engine, attr, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+    for attr in ("paddlex_pipeline", "_pipeline", "pipeline"):
+        inner = getattr(engine, attr, None)
+        if inner is not None:
+            for m in ("close", "shutdown"):
+                fn = getattr(inner, m, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+
+
+atexit.register(_close_ocr)
 
 
 def _get_ocr(config):
@@ -462,4 +497,5 @@ def run_ocr(workspace: str, config) -> Path:
         f"done: {len(results)} regions OCR'd, {needs_correction_count} need correction, "
         f"{edge_touching_count} edge-touching, {warnings} warnings -> {ocr_json_path} (elapsed {elapsed:.1f}s)",
     )
+    _close_ocr()
     return ocr_json_path

@@ -355,3 +355,31 @@ def test_ocr_engine_fallback():
         assert engine is not None
         assert stage2_ocr._ACTIVE_OCR_ENGINE == "paddle"
 
+
+def test_ocr_close_clears_singleton():
+    from manhua_pipeline.stages.stage2_ocr import _close_ocr
+    import manhua_pipeline.stages.stage2_ocr as stage2_ocr
+    from unittest.mock import MagicMock
+
+    # 1. Safe to call when _OCR_ENGINE is None
+    stage2_ocr._OCR_ENGINE = None
+    _close_ocr()  # Should not raise any error
+    assert stage2_ocr._OCR_ENGINE is None
+
+    # 2. Clears the singleton and calls cleanup hooks
+    mock_engine = MagicMock()
+    mock_engine.close = MagicMock()
+    mock_engine.shutdown = MagicMock()
+    
+    mock_inner = MagicMock()
+    mock_inner.close = MagicMock()
+    mock_engine.paddlex_pipeline = mock_inner
+
+    stage2_ocr._OCR_ENGINE = mock_engine
+    _close_ocr()
+
+    assert stage2_ocr._OCR_ENGINE is None
+    mock_engine.close.assert_called_once()
+    mock_inner.close.assert_called_once()
+
+
