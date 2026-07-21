@@ -279,7 +279,7 @@ def _process_single_region_ocr(
             res["edge_touching"] and not res["has_usable_text"]
         ):
             logger.info(
-                "[%d/%d %s] Page %03d %s -> low confidence %.2f (needs_correction) ⚠",
+                "[%d/%d %s] Page %03d %s -> low confidence %.2f (needs_correction) [WARNING]",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
@@ -289,7 +289,7 @@ def _process_single_region_ocr(
             )
         elif res["edge_touching"] and not res["has_usable_text"]:
             logger.info(
-                "[%d/%d %s] Page %03d %s -> edge_touching(%s), no usable text — possible split ⚠",
+                "[%d/%d %s] Page %03d %s -> edge_touching(%s), no usable text — possible split [WARNING]",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
@@ -301,14 +301,15 @@ def _process_single_region_ocr(
             snippet = res["original_text"].replace("\n", " ")
             if len(snippet) > 15:
                 snippet = snippet[:15] + "..."
+            snippet_repr = repr(snippet).encode("ascii", errors="backslashreplace").decode("ascii")
             logger.info(
-                "[%d/%d %s] Page %03d %s -> %r (conf %.2f)",
+                "[%d/%d %s] Page %03d %s -> %s (conf %.2f)",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
                 page_num,
                 res["region_id"],
-                snippet,
+                snippet_repr,
                 res["ocr_confidence"],
             )
         return res, False
