@@ -23,11 +23,23 @@ import argparse
 import os
 import sys
 import time
-# comment these if you want to see HF and transformers requests warnings
-os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
-os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
-os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+import warnings
+
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["PYTHONWARNINGS"] = "ignore"
+
+warnings.filterwarnings("ignore")
+
+try:
+    from huggingface_hub.utils import disable_progress_bars
+
+    disable_progress_bars()
+except Exception:
+    pass
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
