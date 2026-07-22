@@ -287,3 +287,15 @@ def test_translation_no_overrides_file_unchanged(tmp_path):
     result = run_translation(str(ws), config)
     assert result is None
     assert (ws / "stage3_translation" / "translation_prompt.json").exists()
+
+
+def test_validate_batch_newline_normalization():
+    from manhua_pipeline.stages.stage3_translation import OllamaBackend
+
+    parsed = {"P001_R001": "Line 1\\nLine 2\\r\\nLine 3"}
+    expected = {"P001_R001"}
+    accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, expected)
+    assert accepted["P001_R001"] == "Line 1\nLine 2\nLine 3"
+    assert missing == []
+    assert unexpected == []
+

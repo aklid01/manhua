@@ -268,7 +268,12 @@ class OllamaBackend:
                 continue
             if not isinstance(v, str) or not v.strip():
                 continue
-            val = v.strip()
+            val = (
+                v.strip()
+                .replace("\\r\\n", "\n")
+                .replace("\\n", "\n")
+                .replace("\\r", "\n")
+            )
             if _cjk_ratio(val) > 0.30:
                 continue
             if literals.get(k, "").strip() and val == literals[k].strip():

@@ -306,3 +306,30 @@ def test_render_edge_touching_erase(tmp_path, monkeypatch):
     assert out.getpixel((75, 10)) == (255, 255, 255)
     # Assert green outside is untouched
     assert out.getpixel((45, 10)) == (0, 255, 0)
+
+
+def test_wrap_text_literal_newlines(monkeypatch):
+    from PIL import ImageFont
+
+    from manhua_pipeline.stages import stage5_render
+
+    font = ImageFont.load_default()
+    raw = "Name: Lin\\nAge: 18\\r\\nGender: Male"
+    lines = stage5_render._wrap_text(raw, font, 200)
+    assert len(lines) == 3
+    assert lines[0] == "Name: Lin"
+    assert lines[1] == "Age: 18"
+    assert lines[2] == "Gender: Male"
+
+
+def test_text_color_for_bg():
+    from manhua_pipeline.stages import stage5_render
+
+    # Light backgrounds -> black text
+    assert stage5_render._text_color_for_bg((255, 255, 255)) == (0, 0, 0)
+    assert stage5_render._text_color_for_bg((200, 200, 200)) == (0, 0, 0)
+
+    # Dark backgrounds -> white text
+    assert stage5_render._text_color_for_bg((0, 0, 0)) == (255, 255, 255)
+    assert stage5_render._text_color_for_bg((20, 20, 20)) == (255, 255, 255)
+

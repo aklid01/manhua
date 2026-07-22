@@ -292,3 +292,17 @@ def test_paraphrase_override_not_bundled(tmp_path):
     )
     ids = [i["region_id"] for i in bundle["regions"]]
     assert ids == ["P001_R001"]
+
+
+def test_validate_batch_newline_normalization():
+    from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
+
+    parsed = {"P001_R001": "Name: Lin\\nAge: 18\\r\\nGender: Male"}
+    expected = {"P001_R001"}
+    accepted, missing, unexpected = OllamaBackend._validate_batch(
+        parsed, expected, literals={}
+    )
+    assert accepted["P001_R001"] == "Name: Lin\nAge: 18\nGender: Male"
+    assert missing == []
+    assert unexpected == []
+

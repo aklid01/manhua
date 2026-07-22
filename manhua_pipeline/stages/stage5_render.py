@@ -105,6 +105,14 @@ def _estimate_bg(
     )
 
 
+def _text_color_for_bg(bg: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Black text on light backgrounds, white text on dark - WCAG-style luminance."""
+    r, g, b = bg[:3]
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    return (0, 0, 0) if luminance >= 128 else (255, 255, 255)
+
+
+
 def _bfs(
     sx: int,
     sy: int,
@@ -231,6 +239,7 @@ def _get_bubble_mask(
 
 def _wrap_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
     """Word wraps lines to stay within max_width."""
+    text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
     paragraphs = text.split("\n")
     all_lines = []
 
@@ -413,12 +422,20 @@ def _render_region(
             bubble_w = bbox["w"]
             bubble_h = bbox["h"]
 
-        if use_mask:
+        interior = _estimate_bg(page_img, mx, my, mw, mh)
+        is_dark_bubble = (
+            0.299 * interior[0] + 0.587 * interior[1] + 0.114 * interior[2]
+        ) < 128
+
+        if use_mask and not is_dark_bubble:
             white_img = Image.new("RGB", (mw, mh), (255, 255, 255))
             page_img.paste(white_img, (mx, my), mask=mask)
+            text_bg = (255, 255, 255)
         else:
-            bg_color = _estimate_bg(page_img, mx, my, mw, mh)
-            draw.rectangle([mx, my, mx + mw, my + mh], fill=bg_color)
+            draw.rectangle([mx, my, mx + mw, my + mh], fill=interior)
+            text_bg = interior
+
+        text_fill = _text_color_for_bg(text_bg)
 
         # 3. Draw English final text
         # Apply spiky/rude style emphasis
@@ -478,7 +495,7 @@ def _render_region(
         for line in lines:
             line_w = font.getlength(line)
             start_x = bubble_x + (bubble_w - line_w) // 2
-            draw.text((start_x, start_y), line, font=font, fill=(0, 0, 0))
+            draw.text((start_x, start_y), line, font=font, fill=text_fill)
             start_y += int(line_h * line_spacing)
 
         lines_count = len(lines)

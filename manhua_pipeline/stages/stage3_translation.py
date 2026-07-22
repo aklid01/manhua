@@ -270,10 +270,16 @@ class OllamaBackend:
                 continue
             if not isinstance(v, str) or not v.strip():
                 continue
-            if _cjk_ratio(v) > 0.30:
+            val = (
+                v.strip()
+                .replace("\\r\\n", "\n")
+                .replace("\\n", "\n")
+                .replace("\\r", "\n")
+            )
+            if _cjk_ratio(val) > 0.30:
                 continue
             if k not in accepted:
-                accepted[k] = _normalize_punct(v.strip())
+                accepted[k] = _normalize_punct(val)
         missing = [i for i in expected_ids if i not in accepted]
         return accepted, missing, unexpected
 
