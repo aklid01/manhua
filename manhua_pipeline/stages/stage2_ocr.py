@@ -29,11 +29,12 @@ _ACTIVE_OCR_ENGINE = None
 
 def _close_ocr():
     """Best-effort shutdown of the PaddleOCR/PaddleX engine and any worker it spawned."""
-    global _OCR_ENGINE
+    global _OCR_ENGINE, _ACTIVE_OCR_ENGINE
     if _OCR_ENGINE is None:
         return
     engine = _OCR_ENGINE
     _OCR_ENGINE = None
+    _ACTIVE_OCR_ENGINE = None
     for attr in ("close", "shutdown", "release", "__del__"):
         fn = getattr(engine, attr, None)
         if callable(fn):
@@ -53,6 +54,7 @@ def _close_ocr():
                         pass
     try:
         import gc
+
         gc.collect()
     except Exception:
         pass
@@ -69,11 +71,37 @@ def _get_ocr(config):
 
     import logging
 
-    logging.getLogger("ppocr").setLevel(logging.WARNING)
+    for _name in ["ppocr", "paddlex", "paddle", "transformers", "huggingface_hub"]:
+        logging.getLogger(_name).setLevel(logging.ERROR)
 
     from paddleocr import PaddleOCR
 
-    device = "gpu" if getattr(config, "OCR_USE_GPU", False) else "cpu"
+    requested_gpu = getattr(config, "OCR_USE_GPU", False)
+    gpu_available = False
+    if requested_gpu:
+        try:
+            import torch
+
+            gpu_available = torch.cuda.is_available()
+        except Exception:
+            pass
+        if not gpu_available:
+            try:
+                import paddle
+
+                gpu_available = (
+                    paddle.is_compiled_with_cuda()
+                    and paddle.device.cuda.device_count() > 0
+                )
+            except Exception:
+                pass
+        if not gpu_available:
+            logger.warning(
+                "[%s] OCR_USE_GPU=True requested, but CUDA GPU support is not available. Falling back to device='cpu'.",
+                _STAGE_NAME,
+            )
+
+    device = "gpu" if (requested_gpu and gpu_available) else "cpu"
     preferred_engine = getattr(config, "OCR_ENGINE", "paddle")
     if preferred_engine == "PaddleOCR":
         preferred_engine = "paddle"
@@ -83,7 +111,9 @@ def _get_ocr(config):
     try:
         logger.info(
             "[%s] Initializing PaddleOCR with preferred engine: %s (device=%s)",
-            _STAGE_NAME, preferred_engine, device
+            _STAGE_NAME,
+            preferred_engine,
+            device,
         )
         _OCR_ENGINE = PaddleOCR(
             lang=getattr(config, "OCR_LANG", "ch"),
@@ -100,7 +130,10 @@ def _get_ocr(config):
     except Exception as exc:
         logger.warning(
             "[%s] Failed to initialize preferred OCR engine %s: %s. Falling back to %s.",
-            _STAGE_NAME, preferred_engine, exc, fallback_engine
+            _STAGE_NAME,
+            preferred_engine,
+            exc,
+            fallback_engine,
         )
 
     _OCR_ENGINE = PaddleOCR(
@@ -115,7 +148,6 @@ def _get_ocr(config):
     )
     _ACTIVE_OCR_ENGINE = fallback_engine
     return _OCR_ENGINE
-
 
 
 def _preprocess_variant(crop_im: "Image.Image", attempt: int) -> "Image.Image":
@@ -155,7 +187,9 @@ def _read_best(ocr_engine, crop_im, config) -> tuple:
             best, best_mean = cand, cand[1]
             logger.info(
                 "[%s] OCR retry #%d improved confidence -> %.2f",
-                _STAGE_NAME, attempt, best_mean,
+                _STAGE_NAME,
+                attempt,
+                best_mean,
             )
         if best_mean >= ceil:
             break
@@ -168,9 +202,7 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
     Returns:
         tuple: (original_text string, mean_confidence float, min_confidence float, watermark_filtered bool)
     """
-    crop_bgr = np.ascontiguousarray(
-        np.array(crop_image.convert("RGB"))[:, :, ::-1]
-    )
+    crop_bgr = np.ascontiguousarray(np.array(crop_image.convert("RGB"))[:, :, ::-1])
     results = ocr_engine.predict(crop_bgr)
     res = next(iter(results), None)
     if res is None:
@@ -182,8 +214,12 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
     if not texts:
         return "", 0.0, 0.0, False
     if len(texts) != len(scores):
-        logger.warning("[%s] PaddleOCR returned %d texts but %d scores",
-                       _STAGE_NAME, len(texts), len(scores))
+        logger.warning(
+            "[%s] PaddleOCR returned %d texts but %d scores",
+            _STAGE_NAME,
+            len(texts),
+            len(scores),
+        )
     lines, confidences, filtered_any = [], [], False
     for index, txt in enumerate(texts):
         if txt is None:
@@ -204,7 +240,12 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
         confidences.append(conf)
     if not lines:
         return "", 0.0, 0.0, filtered_any
-    return "\n".join(lines), sum(confidences) / len(confidences), min(confidences), filtered_any
+    return (
+        "\n".join(lines),
+        sum(confidences) / len(confidences),
+        min(confidences),
+        filtered_any,
+    )
 
 
 def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
@@ -336,15 +377,14 @@ def _process_single_region_ocr(
             snippet = res["original_text"].replace("\n", " ")
             if len(snippet) > 15:
                 snippet = snippet[:15] + "..."
-            snippet_repr = repr(snippet).encode("ascii", errors="backslashreplace").decode("ascii")
             logger.info(
-                "[%d/%d %s] Page %03d %s -> %s (conf %.2f)",
+                "[%d/%d %s] Page %03d %s -> %r (conf %.2f)",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
                 page_num,
                 res["region_id"],
-                snippet_repr,
+                snippet,
                 res["ocr_confidence"],
             )
         return res, False
@@ -434,7 +474,8 @@ def run_ocr(workspace: str, config) -> Path:
                 page_num,
             )
             continue
-
+        if getattr(config, "RTDETR_SKIP_TEXT_FREE", False) and region.get("is_free_text"):
+            continue
         res, is_warning = _process_single_region_ocr(
             region, page, ocr_engine, config, ws
         )
@@ -449,6 +490,12 @@ def run_ocr(workspace: str, config) -> Path:
 
     # Output OCR JSON
     from importlib.metadata import version
+
+    try:
+        paddleocr_version = version("paddleocr")
+    except Exception:
+        paddleocr_version = "not_installed"
+
     now = datetime.now(timezone.utc).isoformat()
     output_json = {
         "chapter_id": manifest.get("chapter_id", "unknown_chapter"),
@@ -458,7 +505,7 @@ def run_ocr(workspace: str, config) -> Path:
         "ocr_version": getattr(config, "OCR_VERSION", None),
         "ocr_language": getattr(config, "OCR_LANG", "ch"),
         "ocr_device": "gpu" if getattr(config, "OCR_USE_GPU", False) else "cpu",
-        "paddleocr_package_version": version("paddleocr"),
+        "paddleocr_package_version": paddleocr_version,
         "results": results,
     }
     # Check if all regions failed (safety net)
@@ -469,7 +516,10 @@ def run_ocr(workspace: str, config) -> Path:
             )
         if len(results) > 1:
             non_wm_results = [r for r in results if r.get("status") != "watermark_only"]
-            if non_wm_results and all(r.get("status") in {"no_prediction", "schema_error", "inference_error"} for r in non_wm_results):
+            if non_wm_results and all(
+                r.get("status") in {"no_prediction", "schema_error", "inference_error"}
+                for r in non_wm_results
+            ):
                 raise RuntimeError(
                     "PaddleOCR returned no text for any region; OCR output not accepted."
                 )

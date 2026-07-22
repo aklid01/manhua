@@ -584,6 +584,8 @@ def run_detection(workspace: str, config) -> Path:
             resolved_model_path,
         )
         model = YOLO(resolved_model_path)
+    elif backend == "rtdetr":
+        _get_rtdetr(config)
 
     total_pages = manifest.get("total_pages", 0)
     pages_processed = 0
