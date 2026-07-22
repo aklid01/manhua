@@ -1,6 +1,8 @@
 """Offline tests for the multi-template random credits page."""
-import config
+
 from PIL import Image, ImageFont
+
+import config
 
 
 def _mk(path, size=(400, 600)):
@@ -13,11 +15,14 @@ def _slots():
 
 def test_credits_written(tmp_path, monkeypatch):
     from manhua_pipeline.stages import stage5_render as s5
+
     cdir = tmp_path / "credits"
     cdir.mkdir()
     _mk(cdir / "t1.png")
     monkeypatch.setattr(config, "CREDITS_DIR", str(cdir), raising=False)
-    monkeypatch.setattr(config, "CREDITS_TEMPLATES", {"t1.png": _slots()}, raising=False)
+    monkeypatch.setattr(
+        config, "CREDITS_TEMPLATES", {"t1.png": _slots()}, raising=False
+    )
     monkeypatch.setattr(s5, "_fit_font", lambda *a, **k: ImageFont.load_default())
     render_dir = tmp_path / "render"
     render_dir.mkdir()
@@ -30,6 +35,7 @@ def test_credits_written(tmp_path, monkeypatch):
 
 def test_missing_dir_returns_none(tmp_path, monkeypatch):
     from manhua_pipeline.stages import stage5_render as s5
+
     monkeypatch.setattr(config, "CREDITS_DIR", str(tmp_path / "nope"), raising=False)
     monkeypatch.setattr(config, "CREDITS_TEMPLATES", {"x.png": _slots()}, raising=False)
     rendered_dir = tmp_path / "render" / "rendered"
@@ -39,12 +45,14 @@ def test_missing_dir_returns_none(tmp_path, monkeypatch):
 
 def test_random_only_picks_existing(tmp_path, monkeypatch):
     from manhua_pipeline.stages import stage5_render as s5
+
     cdir = tmp_path / "credits"
     cdir.mkdir()
     _mk(cdir / "real.png")
     monkeypatch.setattr(config, "CREDITS_DIR", str(cdir), raising=False)
     monkeypatch.setattr(
-        config, "CREDITS_TEMPLATES",
+        config,
+        "CREDITS_TEMPLATES",
         {"real.png": _slots(), "ghost.png": _slots()},
         raising=False,
     )
@@ -58,11 +66,14 @@ def test_random_only_picks_existing(tmp_path, monkeypatch):
 def test_credits_excluded_from_manifest_and_report(tmp_path, monkeypatch):
     """The credits helper must not append to render results or manifest pages."""
     from manhua_pipeline.stages import stage5_render as s5
+
     cdir = tmp_path / "credits"
     cdir.mkdir()
     _mk(cdir / "t1.png")
     monkeypatch.setattr(config, "CREDITS_DIR", str(cdir), raising=False)
-    monkeypatch.setattr(config, "CREDITS_TEMPLATES", {"t1.png": _slots()}, raising=False)
+    monkeypatch.setattr(
+        config, "CREDITS_TEMPLATES", {"t1.png": _slots()}, raising=False
+    )
     monkeypatch.setattr(s5, "_fit_font", lambda *a, **k: ImageFont.load_default())
     rendered_dir = tmp_path / "render" / "rendered"
     rendered_dir.mkdir(parents=True)

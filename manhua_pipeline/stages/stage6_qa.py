@@ -108,14 +108,11 @@ def _analyze_single_region(
     )
 
     ocr_note = (ocr_r.get("note") or "").lower()
-    benign_no_text = (
-        not ocr_r.get("has_usable_text")
-        and (
-            ocr_r.get("watermark_filtered")
-            or "watermark" in ocr_note
-            or "split" in ocr_note
-            or ocr_r.get("edge_touching")
-        )
+    benign_no_text = not ocr_r.get("has_usable_text") and (
+        ocr_r.get("watermark_filtered")
+        or "watermark" in ocr_note
+        or "split" in ocr_note
+        or ocr_r.get("edge_touching")
     )
     low_sev = "info" if benign_no_text else "warning"
 

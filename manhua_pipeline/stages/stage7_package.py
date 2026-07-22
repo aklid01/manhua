@@ -110,7 +110,10 @@ def run_package(workspace: str, config, formats: list[str]) -> list[Path]:
             logger.error("[%s] Failed %s: %s", _STAGE_NAME, out.name, exc)
 
     log_stage(
-        logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
-        f"done: {len(written)} archive(s) -> {pkg_dir} (elapsed {time.monotonic()-t0:.1f}s)",
+        logger,
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        f"done: {len(written)} archive(s) -> {pkg_dir} (elapsed {time.monotonic() - t0:.1f}s)",
     )
     return written

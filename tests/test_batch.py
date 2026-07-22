@@ -2,8 +2,9 @@
 
 import json
 from pathlib import Path
-import pipeline
+
 import config
+import pipeline
 
 
 def _create_dummy_cbz(folder: Path, name: str):
@@ -20,7 +21,9 @@ def _setup_chapter(base_dir: Path, chapter: str, stage: str):
         "total_pages": 1,
         "pages": [{"page_number": 1, "filename": "001.png", "skip": False}],
         "current_stage": stage,
-        "completed_stages": ["import", "detect", "ocr", "translate"] if stage != "import" else [],
+        "completed_stages": ["import", "detect", "ocr", "translate"]
+        if stage != "import"
+        else [],
         "warning_count": 0,
         "status": "in_progress" if stage != "complete" else "success",
     }
@@ -61,13 +64,17 @@ def test_run_batch_classifications(tmp_path, monkeypatch):
 
     runs = {}
 
-    def mock_run_all(workspace, cfg, start="import", input_path=None, meta=None, fresh=False, **kwargs):
+    def mock_run_all(
+        workspace,
+        cfg,
+        start="import",
+        input_path=None,
+        meta=None,
+        fresh=False,
+        **kwargs,
+    ):
         ch = Path(workspace).name
-        runs[ch] = {
-            "start": start,
-            "input_path": input_path,
-            "fresh": fresh
-        }
+        runs[ch] = {"start": start, "input_path": input_path, "fresh": fresh}
         if ch == "c4":
             raise RuntimeError("C4 blew up")
         if ch == "c3":
@@ -83,7 +90,7 @@ def test_run_batch_classifications(tmp_path, monkeypatch):
         config=config,
         fresh=False,
         resume=True,
-        clear_delay=0
+        clear_delay=0,
     )
 
     assert rc == 0
@@ -127,10 +134,7 @@ def test_run_batch_no_resume(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "_run_all_from", mock_run_all)
 
     rc = pipeline.run_batch(
-        input_folder=str(input_folder),
-        base_dir=base_dir,
-        config=config,
-        resume=False
+        input_folder=str(input_folder), base_dir=base_dir, config=config, resume=False
     )
     assert rc == 0
     assert "c1" not in runs

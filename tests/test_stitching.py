@@ -1,21 +1,36 @@
 """Offline tests for split-bubble stitching geometry + guards."""
+
 import config
 from manhua_pipeline.stages import stage1_detection as s1
 
 
 def _box(x, y, w, h, typ=None):
-    return {"type": typ or config.TYPE_SPEECH, "read_region": {"x": x, "y": y, "w": w, "h": h}}
+    return {
+        "type": typ or config.TYPE_SPEECH,
+        "read_region": {"x": x, "y": y, "w": w, "h": h},
+    }
 
 
 def _pages(*nums, h=600):
-    return [{"page_number": n, "height": h, "skip": False, "filename": f"{n}.png"} for n in nums]
+    return [
+        {"page_number": n, "height": h, "skip": False, "filename": f"{n}.png"}
+        for n in nums
+    ]
 
 
 def test_x_overlap_positive_and_zero():
-    assert s1._x_overlap_frac({"x": 10, "y": 0, "w": 100, "h": 20},
-                              {"x": 30, "y": 0, "w": 100, "h": 20}) > 0.5
-    assert s1._x_overlap_frac({"x": 0, "y": 0, "w": 50, "h": 20},
-                              {"x": 200, "y": 0, "w": 50, "h": 20}) == 0.0
+    assert (
+        s1._x_overlap_frac(
+            {"x": 10, "y": 0, "w": 100, "h": 20}, {"x": 30, "y": 0, "w": 100, "h": 20}
+        )
+        > 0.5
+    )
+    assert (
+        s1._x_overlap_frac(
+            {"x": 0, "y": 0, "w": 50, "h": 20}, {"x": 200, "y": 0, "w": 50, "h": 20}
+        )
+        == 0.0
+    )
 
 
 def test_edge_touch():

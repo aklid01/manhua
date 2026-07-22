@@ -9,9 +9,7 @@ import pipeline
 def test_missing_chapter_lists_available(tmp_path, monkeypatch, capsys):
     base = tmp_path / "SeriesA"
     (base / "Ch1").mkdir(parents=True)
-    (base / "Ch1" / config.MANIFEST_NAME).write_text(
-        json.dumps({"chapter_id": "Ch1"})
-    )
+    (base / "Ch1" / config.MANIFEST_NAME).write_text(json.dumps({"chapter_id": "Ch1"}))
     monkeypatch.setattr(
         "manhua_pipeline.io.settings.resolve_base_dir", lambda a, c: base
     )
@@ -70,9 +68,7 @@ def test_qa_benign_no_text_not_failed(tmp_path):
         (ws / sub / name).write_text(json.dumps(data), encoding="utf-8")
 
     run_qa(str(ws), config)
-    qa = json.loads(
-        (ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8")
-    )
+    qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
     assert qa["status"] in ("SUCCESS", "REVIEW")  # NOT FAILED
     assert qa["checks"]["low_ocr_confidence"] >= 1
 
@@ -114,8 +110,6 @@ def test_bubble_mask_fills_white_region(tmp_path):
     for y in range(10, 30):
         for x in range(10, 30):
             img.putpixel((x, y), (255, 255, 255))
-    mask = stage5_render._get_bubble_mask(
-        img, 0, 0, 40, 40, 40, 40, config
-    )
+    mask = stage5_render._get_bubble_mask(img, 0, 0, 40, 40, 40, 40, config)
     assert mask.getpixel((20, 20)) == 255
     assert mask.getpixel((2, 2)) == 0

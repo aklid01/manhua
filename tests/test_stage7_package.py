@@ -1,9 +1,12 @@
 """Offline tests for Stage 7 packaging."""
+
 import json
 import tarfile
 import zipfile
-import config
+
 from PIL import Image
+
+import config
 
 
 def _setup(tmp_path):
@@ -20,6 +23,7 @@ def _setup(tmp_path):
 
 def test_zip_and_cbz_contents_and_order(tmp_path):
     from manhua_pipeline.stages import stage7_package as s7
+
     ws = _setup(tmp_path)
     out = s7.run_package(str(ws), config, ["zip", "cbz"])
     assert {p.name for p in out} == {"0_001_.zip", "0_001_.cbz"}
@@ -32,6 +36,7 @@ def test_zip_and_cbz_contents_and_order(tmp_path):
 
 def test_tar_contents(tmp_path):
     from manhua_pipeline.stages import stage7_package as s7
+
     ws = _setup(tmp_path)
     s7.run_package(str(ws), config, ["tar"])
     with tarfile.open(ws / config.STAGE_FOLDERS["package"] / "0_001_.tar") as tf:
@@ -40,6 +45,7 @@ def test_tar_contents(tmp_path):
 
 def test_pdf_written(tmp_path):
     from manhua_pipeline.stages import stage7_package as s7
+
     ws = _setup(tmp_path)
     s7.run_package(str(ws), config, ["pdf"])
     pdf = ws / config.STAGE_FOLDERS["package"] / "0_001_.pdf"
@@ -49,6 +55,7 @@ def test_pdf_written(tmp_path):
 
 def test_unknown_format_ignored(tmp_path):
     from manhua_pipeline.stages import stage7_package as s7
+
     ws = _setup(tmp_path)
     out = s7.run_package(str(ws), config, ["zip", "rar"])
     assert {p.name for p in out} == {"0_001_.zip"}
@@ -56,6 +63,7 @@ def test_unknown_format_ignored(tmp_path):
 
 def test_manifest_unchanged(tmp_path):
     from manhua_pipeline.stages import stage7_package as s7
+
     ws = _setup(tmp_path)
     before = (ws / config.MANIFEST_NAME).read_text()
     s7.run_package(str(ws), config, ["cbz"])
