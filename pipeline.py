@@ -29,22 +29,24 @@ from pathlib import Path
 
 import config
 from manhua_pipeline.logging_setup import get_logger, setup_logging
+
 logger = get_logger(__name__)
 
 STAGE_REGISTRY = {
-    "import":     ("stage0_import",      "run_import"),
-    "detect":     ("stage1_detection",   "run_detection"),
-    "ocr":        ("stage2_ocr",         "run_ocr"),
-    "translate":  ("stage3_translation", "run_translation"),
-    "paraphrase": ("stage4_paraphrase",  "run_paraphrase"),
-    "render":     ("stage5_render",      "run_render"),
-    "qa":         ("stage6_qa",          "run_qa"),
+    "import": ("stage0_import", "run_import"),
+    "detect": ("stage1_detection", "run_detection"),
+    "ocr": ("stage2_ocr", "run_ocr"),
+    "translate": ("stage3_translation", "run_translation"),
+    "paraphrase": ("stage4_paraphrase", "run_paraphrase"),
+    "render": ("stage5_render", "run_render"),
+    "qa": ("stage6_qa", "run_qa"),
 }
 
 
 def _load_stage(name):
     """Import a single stage module on demand and return its run function."""
     import importlib
+
     mod_name, func_name = STAGE_REGISTRY[name]
     module = importlib.import_module(f"manhua_pipeline.stages.{mod_name}")
     return getattr(module, func_name)
@@ -53,8 +55,11 @@ def _load_stage(name):
 def _iter_batch_inputs(folder: Path) -> list[Path]:
     """CBZ/ZIP files in a folder, lexically sorted (assumes user pre-sorted names)."""
     return sorted(
-        (p for p in folder.iterdir()
-         if p.is_file() and p.suffix.lower() in {".cbz", ".zip"}),
+        (
+            p
+            for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in {".cbz", ".zip"}
+        ),
         key=lambda p: p.name,
     )
 
@@ -65,8 +70,11 @@ def _clear_console_after(delay: int) -> None:
         return
     try:
         for remaining in range(delay, 0, -1):
-            print(f"  clearing console in {remaining:>2}s… (Ctrl-C to skip)",
-                  end="\r", flush=True)
+            print(
+                f"  clearing console in {remaining:>2}s… (Ctrl-C to skip)",
+                end="\r",
+                flush=True,
+            )
             time.sleep(1)
     except KeyboardInterrupt:
         pass
@@ -137,7 +145,7 @@ def run_batch(
         existing_manifest = (
             load_manifest(str(chapter_dir), config) if chapter_dir.exists() else None
         )
-        if existing_manifest and existing_manifest.get("current_stage") == "complete":
+        if existing_manifest and existing_manifest.get("current_stage") == "complete" and not fresh:
             logger.warning("[batch] SKIP (already complete): %s", chapter)
             summary["skipped"].append(chapter)
             _append_batch_log(batch_log, f"SKIP complete   | {chapter}")
@@ -176,14 +184,16 @@ def run_batch(
                 _append_batch_log(batch_log, f"DONE            | {chapter}")
             else:
                 summary["pending"].append((chapter, stage_after))
-                _append_batch_log(
-                    batch_log, f"PENDING @{stage_after} | {chapter}"
-                )
+                _append_batch_log(batch_log, f"PENDING @{stage_after} | {chapter}")
         except Exception as exc:  # continue-on-error
             err_path = _write_error_log(base_dir, chapter, exc)
             summary["failed"].append(chapter)
-            _append_batch_log(batch_log, f"FAIL {type(exc).__name__} | {chapter} -> {err_path}")
-            logger.error("[batch] %s crashed: %s (log: %s). Continuing.", chapter, exc, err_path)
+            _append_batch_log(
+                batch_log, f"FAIL {type(exc).__name__} | {chapter} -> {err_path}"
+            )
+            logger.error(
+                "[batch] %s crashed: %s (log: %s). Continuing.", chapter, exc, err_path
+            )
             continue
 
         # Console clear ONLY on genuine completion (ignore handoff)
@@ -198,8 +208,11 @@ def _print_batch_summary(summary: dict, batch_log: Path) -> None:
     logger.info("=" * 60)
     logger.info("[batch] SUMMARY")
     logger.info("  done    : %d  %s", len(summary["done"]), summary["done"])
-    logger.info("  pending : %d  %s", len(summary["pending"]),
-                [c for c, _ in summary["pending"]])
+    logger.info(
+        "  pending : %d  %s",
+        len(summary["pending"]),
+        [c for c, _ in summary["pending"]],
+    )
     logger.info("  skipped : %d  %s", len(summary["skipped"]), summary["skipped"])
     logger.info("  failed  : %d  %s", len(summary["failed"]), summary["failed"])
     _append_batch_log(
@@ -261,12 +274,14 @@ def build_parser() -> argparse.ArgumentParser:
     runall.add_argument("--title-romanized", default=None, dest="title_romanized")
     runall.add_argument("--title-en", default=None, dest="title_en")
     runall.add_argument("--source", default=None)
-    runall.add_argument("--fresh",
+    runall.add_argument(
+        "--fresh",
         action="store_true",
         help="Wipe prior stage outputs and prompts when starting from import",
     )
     runall.add_argument(
-        "--package", default=None,
+        "--package",
+        default=None,
         help="Comma-separated formats to package after completion (zip,cbz,tar,pdf)",
     )
 
@@ -278,26 +293,34 @@ def build_parser() -> argparse.ArgumentParser:
     batch_sp.add_argument("--title-en", default=None, dest="title_en")
     batch_sp.add_argument("--source", default=None)
     batch_sp.add_argument(
-        "--fresh", action="store_true",
+        "--fresh",
+        action="store_true",
         help="Wipe prior stage outputs per chapter before importing",
     )
     batch_sp.add_argument(
-        "--no-resume", action="store_true",
+        "--no-resume",
+        action="store_true",
         help="Skip ANY existing chapter folder (default: resume pending, skip completed)",
     )
     batch_sp.add_argument(
-        "--clear-delay", type=int, default=10,
+        "--clear-delay",
+        type=int,
+        default=10,
         help="Seconds to show a completed chapter's output before clearing (0 = never)",
     )
     batch_sp.add_argument(
-        "--package", default=None,
+        "--package",
+        default=None,
         help="Comma-separated formats to package after each chapter completes",
     )
 
     pkg_sp = sub.add_parser("package", help="Package rendered pages into archives")
-    pkg_sp.add_argument("--chapter", required=True, help="Chapter name in the series folder")
     pkg_sp.add_argument(
-        "--package", required=True,
+        "--chapter", required=True, help="Chapter name in the series folder"
+    )
+    pkg_sp.add_argument(
+        "--package",
+        required=True,
         help="Comma-separated formats to package (zip,cbz,tar,pdf)",
     )
 
@@ -310,9 +333,7 @@ def _resolve_run_all_chapter_dir(args, base_dir) -> Path:
         return base_dir / chapter
     if args.input:
         src = Path(args.input)
-        chapter_stem = (
-            src.stem if src.suffix.lower() in {".cbz", ".zip"} else src.name
-        )
+        chapter_stem = src.stem if src.suffix.lower() in {".cbz", ".zip"} else src.name
         return base_dir / chapter_stem
     chapter_stem = args.workspace
     if Path(chapter_stem).is_absolute():
@@ -401,6 +422,7 @@ def main(argv=None) -> int:
 
     if args.command == "package":
         from manhua_pipeline.stages import stage7_package
+
         chapter_dir = base_dir / args.chapter
         stage7_package.run_package(
             str(chapter_dir), config, _parse_formats(args.package)
@@ -441,8 +463,11 @@ def _parse_formats(raw: str | None) -> list[str]:
     return [f.strip() for f in raw.split(",") if f.strip()] if raw else []
 
 
-def _run_stage_subprocess(stage, chapter_dir, *, input_path=None, meta=None, fresh=False) -> int:
+def _run_stage_subprocess(
+    stage, chapter_dir, *, input_path=None, meta=None, fresh=False
+) -> int:
     import subprocess
+
     cmd = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -485,7 +510,7 @@ def _run_all_from(
     from manhua_pipeline.io.workspace import load_manifest
 
     manifest = load_manifest(workspace, config)
-    if manifest:
+    if manifest and not fresh:
         current_stage = manifest.get("current_stage")
         if current_stage == "complete":
             logger.info("run-all: chapter is already complete.")
@@ -503,13 +528,19 @@ def _run_all_from(
     for name in order[start_idx:]:
         logger.info("=" * 60)
         if getattr(config, "BATCH_SUBPROCESS", False):
-            rc = _run_stage_subprocess(name, workspace, input_path=input_path, meta=meta, fresh=fresh)
+            rc = _run_stage_subprocess(
+                name, workspace, input_path=input_path, meta=meta, fresh=fresh
+            )
             if rc != 0:
-                logger.error("Subprocess for stage %r failed with return code %d", name, rc)
+                logger.error(
+                    "Subprocess for stage %r failed with return code %d", name, rc
+                )
                 return 2
             manifest = load_manifest(workspace, config)
             if not manifest:
-                logger.error("Failed to load manifest after subprocess for stage %r", name)
+                logger.error(
+                    "Failed to load manifest after subprocess for stage %r", name
+                )
                 return 2
             current_stage = manifest.get("current_stage")
             if current_stage == name:
@@ -543,6 +574,7 @@ def _run_all_from(
     logger.info("run-all: complete")
     if formats:
         from manhua_pipeline.stages import stage7_package
+
         stage7_package.run_package(workspace, config, formats)
     return 0
 

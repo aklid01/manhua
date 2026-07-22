@@ -32,8 +32,11 @@ def test_build_parser():
 
 def test_pipeline_main_stage_execution(temp_workspace):
     """Test that non-import stages are called correctly from main."""
-    (temp_workspace / config.MANIFEST_NAME).write_text(json.dumps({"chapter_id": "test_ch"}))
+    (temp_workspace / config.MANIFEST_NAME).write_text(
+        json.dumps({"chapter_id": "test_ch"})
+    )
     from pipeline import STAGE_REGISTRY
+
     for stage_name in [k for k in STAGE_REGISTRY if k != "import"]:
         mock_fn = MagicMock()
         with patch("pipeline._load_stage", return_value=mock_fn) as mock_load:
@@ -69,7 +72,10 @@ def test_pipeline_main_import_calls_run_import(temp_workspace):
 
 def test_pipeline_run_all_from_stage(temp_workspace):
     """Test that run-all starting from a specific stage skips preceding stages."""
-    mock_fns = {k: MagicMock() for k in ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]}
+    mock_fns = {
+        k: MagicMock()
+        for k in ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
+    }
     with patch("pipeline._load_stage", side_effect=lambda name: mock_fns[name]):
         exit_code = main(
             ["run-all", "--workspace", str(temp_workspace), "--from-stage", "ocr"]
@@ -91,6 +97,63 @@ def test_pipeline_run_all_invalid_stage(temp_workspace):
         ["run-all", "--workspace", str(temp_workspace), "--from-stage", "invalid_stage"]
     )
     assert exit_code == 2
+
+
+def test_pipeline_run_all_fresh_bypasses_manifest_resume(temp_workspace, tmp_path):
+    """Test that run-all --fresh runs import stage even if manifest says complete."""
+    import json
+    (temp_workspace / "manifest.json").write_text(
+        json.dumps({"version": "v1", "current_stage": "complete"}), encoding="utf-8"
+    )
+    dummy_input = tmp_path / "dummy.cbz"
+    dummy_input.write_text("dummy", encoding="utf-8")
+
+    mock_fns = {
+        k: MagicMock(return_value=None if k == "qa" else True)
+        for k in ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
+    }
+    with patch("pipeline._load_stage", side_effect=lambda name: mock_fns[name]):
+        exit_code = main(
+            [
+                "run-all",
+                "--workspace",
+                str(temp_workspace),
+                "--input",
+                str(dummy_input),
+                "--fresh",
+            ]
+        )
+        assert exit_code == 0
+        mock_fns["import"].assert_called_once()
+        assert mock_fns["import"].call_args.kwargs.get("fresh") is True
+
+
+def test_pipeline_run_all_fresh_bypasses_in_progress_manifest(temp_workspace, tmp_path):
+    """Test that run-all --fresh starts from import even if manifest is at a later stage."""
+    import json
+    (temp_workspace / "manifest.json").write_text(
+        json.dumps({"version": "v1", "current_stage": "translation"}), encoding="utf-8"
+    )
+    dummy_input = tmp_path / "dummy.cbz"
+    dummy_input.write_text("dummy", encoding="utf-8")
+
+    mock_fns = {
+        k: MagicMock(return_value=None if k == "qa" else True)
+        for k in ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
+    }
+    with patch("pipeline._load_stage", side_effect=lambda name: mock_fns[name]):
+        exit_code = main(
+            [
+                "run-all",
+                "--workspace",
+                str(temp_workspace),
+                "--input",
+                str(dummy_input),
+                "--fresh",
+            ]
+        )
+        assert exit_code == 0
+        mock_fns["import"].assert_called_once()
 
 
 def test_pipeline_run_all_missing_input(temp_workspace):
@@ -398,7 +461,7 @@ def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
         manifest_paraphrase = {"current_stage": "render"}
         manifest_render = {"current_stage": "qa"}
         manifest_qa = {"current_stage": "complete"}
-        
+
         mock_load_manifest.side_effect = [
             manifest,
             manifest_ocr,
@@ -413,11 +476,41 @@ def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
         )
         assert exit_code == 0
 
-        mock_run_sub.assert_any_call("ocr", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
-        mock_run_sub.assert_any_call("translate", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
-        mock_run_sub.assert_any_call("paraphrase", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
-        mock_run_sub.assert_any_call("render", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
-        mock_run_sub.assert_any_call("qa", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
+        mock_run_sub.assert_any_call(
+            "ocr",
+            str(temp_workspace),
+            input_path=None,
+            meta={"title_romanized": None, "title_en": None, "source": None},
+            fresh=False,
+        )
+        mock_run_sub.assert_any_call(
+            "translate",
+            str(temp_workspace),
+            input_path=None,
+            meta={"title_romanized": None, "title_en": None, "source": None},
+            fresh=False,
+        )
+        mock_run_sub.assert_any_call(
+            "paraphrase",
+            str(temp_workspace),
+            input_path=None,
+            meta={"title_romanized": None, "title_en": None, "source": None},
+            fresh=False,
+        )
+        mock_run_sub.assert_any_call(
+            "render",
+            str(temp_workspace),
+            input_path=None,
+            meta={"title_romanized": None, "title_en": None, "source": None},
+            fresh=False,
+        )
+        mock_run_sub.assert_any_call(
+            "qa",
+            str(temp_workspace),
+            input_path=None,
+            meta={"title_romanized": None, "title_en": None, "source": None},
+            fresh=False,
+        )
 
 
 def test_pipeline_run_all_subprocess_handoff(temp_workspace, monkeypatch):
@@ -444,14 +537,20 @@ def test_pipeline_run_all_subprocess_handoff(temp_workspace, monkeypatch):
             ["run-all", "--workspace", str(temp_workspace), "--from-stage", "translate"]
         )
         assert exit_code == 0
-        
-        mock_run_sub.assert_called_once_with("translate", str(temp_workspace), input_path=None, meta={"title_romanized": None, "title_en": None, "source": None}, fresh=False)
+
+        mock_run_sub.assert_called_once_with(
+            "translate",
+            str(temp_workspace),
+            input_path=None,
+            meta={"title_romanized": None, "title_en": None, "source": None},
+            fresh=False,
+        )
 
 
 def test_load_stage_lazy():
     """Test that _load_stage successfully imports and returns correct functions."""
-    from pipeline import _load_stage
     from manhua_pipeline.stages import stage1_detection, stage2_ocr
+    from pipeline import _load_stage
+
     assert _load_stage("ocr") == stage2_ocr.run_ocr
     assert _load_stage("detect") == stage1_detection.run_detection
-
