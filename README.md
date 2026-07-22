@@ -38,7 +38,7 @@ an API key.
 
 > [!NOTE]
 > **Your workflow. Your models. Your choice.**
-> No mandatory AI credits. No complicated GUI. No required API keys. Just a pipeline that
+> No mandatory AI credits. No mandatory API keys. Just a pipeline that
 > does one job well and gets out of your way.
 
 ---
@@ -66,7 +66,7 @@ built for you.
 
 ## Feature Highlights
 
-- **Local-first** - YOLOv8 detection + PaddleOCR + local LLMs, all on your box.
+- **Local-first** - RT-DETR / YOLOv8 text & bubble detection + PaddleOCR / Transformers (PP-OCRv6) + local LLMs, all on your box.
 - **Modular** - seven decoupled stages, plain-JSON handoffs.
 - **Vendor-neutral** - `manual`, `mcp`, and `ollama` backends for translate & refine.
 - **Human-in-the-loop** - per-region overrides, glossary locking, manual handoff.
@@ -84,11 +84,11 @@ built for you.
         └─────┬─────┘
               ▼
         ┌───────────┐
-        │ Detection  │  YOLOv8 speech-bubble + narration boxes
+        │ Detection  │  RT-DETR / YOLOv8 speech-bubble + narration boxes
         └─────┬─────┘
               ▼
         ┌───────────┐
-        │    OCR     │  PaddleOCR (zh) + confidence retry
+        │    OCR     │  PaddleOCR / Transformers (PP-OCRv6 zh) + confidence retry
         └─────┬─────┘
               ▼
         ┌───────────┐
@@ -121,10 +121,10 @@ Every arrow is a JSON file on disk. Stop anywhere, inspect it, edit it, rerun fr
 > [!TIP]
 > **The sweet spot: local translation, agent-assisted refinement.**
 >
-> | Stage           | Backend                                                       | Why                                                                                                                                                           |
-> | --------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-> | **Translation** | `ollama` - a strong Chinese→English model (e.g. `qwen2.5:3b`) | Literal translation is a low-creativity task a small local model handles well - free and fully automated.                                                     |
-> | **Refinement**  | `mcp` via Antigravity - Gemini 3.1 Pro / 3.5 Flash            | Turning literal English into natural dialogue needs real language skill; a capable model shines here, and Antigravity's free tier keeps credit use near zero. |
+> | Stage           | Backend                                                            | Why                                                                                                                                                           |
+> | --------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | **Translation** | `ollama` - a strong Chinese→English model (e.g. `qwen2.5:3b-instruct`) | Literal translation is a low-creativity task a small local model handles well - free and fully automated.                                                     |
+> | **Refinement**  | `mcp` via Antigravity - Gemini 3.1 Pro / 3.5 Flash                 | Turning literal English into natural dialogue needs real language skill; a capable model shines here, and Antigravity's free tier keeps credit use near zero. |
 >
 > This split gives you excellent quality while minimizing AI-credit spend - the local model
 > does the bulk work, the strong model does only the part that needs judgment.
@@ -163,7 +163,7 @@ pip install -r requirements.txt
 python pipeline.py --set-output-dir "/path/to/your/series"
 
 # 3. (Optional) pull a local translation model
-ollama pull qwen2.5:3b
+ollama pull qwen2.5:3b-instruct
 
 # 4. Run a chapter end-to-end via CLI
 python pipeline.py run-all --input "/path/to/chapter_001.cbz"
@@ -177,7 +177,7 @@ every run after is offline for detection.
 
 > [!TIP]
 > If a stage needs a human (a `manual`/`mcp` handoff), the pipeline stops cleanly and tells
-> you exactly what to do. Resume by re-running the same command.
+> you exactly what to do. Resume by re-running the same command or clicking **Resume ▶** in the GUI.
 
 ---
 
@@ -191,16 +191,17 @@ pip install -r requirements.txt
 
 **Core dependencies** (`requirements.txt`):
 
-| Package                      | Role                                 |
-| ---------------------------- | ------------------------------------ |
-| `ultralytics`                | YOLOv8 speech-bubble detection       |
-| `paddleocr` / `paddlepaddle` | Chinese OCR                          |
-| `pillow`                     | Image handling & rendering           |
-| `numpy`                      | Array ops for OCR/detection          |
-| `fastmcp`                    | MCP server for agent-driven backends |
+| Package                      | Role                                              |
+| ---------------------------- | ------------------------------------------------- |
+| `transformers`               | RT-DETR text & bubble detector + HF OCR model     |
+| `ultralytics`                | YOLOv8 speech-bubble detection (fallback)        |
+| `paddleocr` / `paddlepaddle` | Chinese OCR engine                                |
+| `pillow`                     | Image handling & rendering                        |
+| `numpy`                      | Array ops for OCR/detection                       |
+| `fastmcp`                    | MCP server for agent-driven backends              |
 
 > [!NOTE]
-> The detection model (`ogkalu/comic-speech-bubble-detector-yolov8m`) downloads
+> The detection model (`ogkalu/comic-text-and-bubble-detector` for RT-DETR or `ogkalu/comic-speech-bubble-detector-yolov8m` for YOLOv8) downloads
 > automatically on first detection run and is cached by Hugging Face thereafter.
 
 ---
@@ -213,10 +214,11 @@ In addition to the command-line interface, Manhua Pipeline includes a guided gra
 python pipeline_gui.py
 ```
 
-- **Sequential execution**: Stages unlock step-by-step as each preceding stage completes.
-- **Handoff & Resume tracking**: If a `manual` or `mcp` backend requires external input, the stage button dynamically updates to **Resume ▶ <Stage>** and the log displays step-by-step handoff instructions.
-- **Idempotent continuation**: Saving the response file and clicking **Resume ▶** ingests the response, advances the chapter manifest, and unlocks the next stage.
-- **Log filtering**: Output pane filters log messages to surface warnings, re-runs, overrides, and verdicts without cluttering the screen.
+- **Series & Input Pickers**: Set your series folder and choose a chapter input (folder or CBZ/ZIP archive).
+- **Sequential Execution**: Stages unlock step-by-step as each preceding stage completes.
+- **Handoff & Resume Tracking**: If a `manual` or `mcp` backend requires external input, the stage button dynamically updates to **Resume ▶ <Stage>** and the log displays step-by-step handoff instructions.
+- **Idempotent Continuation**: Saving the response file and clicking **Resume ▶** ingests the response, advances the chapter manifest, and unlocks the next stage.
+- **Log Filtering**: Output pane filters log messages to surface warnings, re-runs, overrides, and verdicts without cluttering the screen.
 - **Packaging**: Select archive formats (`cbz`, `zip`, `tar`, `pdf`) and package chapters directly from the interface.
 
 ---
@@ -270,9 +272,13 @@ python pipeline.py package --chapter chapter_001 --package zip,cbz,tar,pdf
 | ------------------ | ------------------------- | ---------------------------------------------------------------------- |
 | `--input`          | import / run-all / batch  | Source CBZ/ZIP/folder (import, run-all) or folder of chapters (batch). |
 | `--chapter`        | most stages               | Target an existing chapter by name.                                    |
+| `--workspace`      | most stages               | Target a chapter by workspace path (relative or absolute).             |
 | `--fresh`          | import / run-all          | Wipe prior stage outputs before importing.                             |
 | `--from-stage`     | run-all                   | Resume from a given stage.                                             |
 | `--package`        | run-all / batch / package | Comma-separated formats: `zip,cbz,tar,pdf`.                            |
+| `--title-romanized`| import / run-all          | Set romanized series/chapter title metadata.                           |
+| `--title-en`       | import / run-all          | Set English series/chapter title metadata.                             |
+| `--source`         | import / run-all          | Set source URL/provenance metadata.                                    |
 | `--no-resume`      | batch                     | Skip any existing chapter folder instead of resuming pending ones.     |
 | `--clear-delay`    | batch                     | Seconds a completed chapter's output stays on screen before clearing.  |
 | `--set-output-dir` | (top level)               | Persist your series base directory and exit.                           |
@@ -309,27 +315,24 @@ your-series/
 
 ## Pipeline Stages
 
-| #   | Stage           | Input              | Output                     | Engine            |
-| --- | --------------- | ------------------ | -------------------------- | ----------------- |
-| 0   | **Import**      | CBZ / ZIP / folder | `manifest.json` + `pages/` | Pillow            |
-| 1   | **Detection**   | pages              | `detection.json`           | YOLOv8            |
-| 2   | **OCR**         | pages + boxes      | `ocr.json`                 | PaddleOCR (zh)    |
-| 3   | **Translation** | `ocr.json`         | `translation.json`         | pluggable backend |
-| 4   | **Paraphrase**  | `translation.json` | `paraphrase.json`          | pluggable backend |
-| 5   | **Rendering**   | pages + paraphrase | `rendered/*.png`           | Pillow            |
-| 6   | **QA**          | all artifacts      | quality report             | rule-based        |
-| 7   | **Package**     | rendered pages     | `zip / cbz / tar / pdf`    | stdlib + Pillow   |
+| #   | Stage           | Input              | Output                     | Engine                        |
+| --- | --------------- | ------------------ | -------------------------- | ----------------------------- |
+| 0   | **Import**      | CBZ / ZIP / folder | `manifest.json` + `pages/` | Pillow                        |
+| 1   | **Detection**   | pages              | `detection.json`           | RT-DETR (default) / YOLOv8    |
+| 2   | **OCR**         | pages + boxes      | `ocr.json`                 | PaddleOCR / Transformers (zh) |
+| 3   | **Translation** | `ocr.json`         | `translation.json`         | pluggable backend             |
+| 4   | **Paraphrase**  | `translation.json` | `paraphrase.json`          | pluggable backend             |
+| 5   | **Rendering**   | pages + paraphrase | `rendered/*.png`           | Pillow                        |
+| 6   | **QA**          | all artifacts      | quality report             | rule-based                    |
+| 7   | **Package**     | rendered pages     | `zip / cbz / tar / pdf`    | stdlib + Pillow               |
 
 **Notable stage behaviors**
 
-- **OCR** retries low-confidence regions with escalating image preprocessing, keeping the
-  best result - deterministic OCR only improves when the _input_ changes.
-- **Translation / Paraphrase** each pick a backend independently (`manual`, `mcp`,
-  `ollama`) and enforce a locked glossary, flagging conflicts rather than silently rewriting.
-- **Rendering** typesets each bubble with the `ComicNeue-Bold` font and appends a randomly
-  chosen **credits page** (outside the QA/manifest page count).
-- **Split-bubble stitching** (detection sub-step) merges a bubble sliced across two pages
-  into one, with a strict "text on both halves" guard so corrupt pages fall back safely.
+- **Detection** defaults to RT-DETR (`ogkalu/comic-text-and-bubble-detector`) with YOLOv8 as fallback, skipping text-free regions (SFX/watermark/credits) during downstream OCR.
+- **OCR** retries low-confidence regions with escalating image preprocessing, keeping the best result - deterministic OCR only improves when the _input_ changes.
+- **Translation / Paraphrase** each pick a backend independently (`manual`, `mcp`, `ollama`) and enforce a locked glossary, flagging conflicts rather than silently rewriting.
+- **Rendering** typesets each bubble with the `ComicNeue-Bold` font and appends a randomly chosen **credits page** (outside the QA/manifest page count).
+- **Split-bubble stitching** (detection sub-step) merges a bubble sliced across two pages into one, with a strict "text on both halves" guard so corrupt pages fall back safely.
 
 ---
 
@@ -352,9 +355,9 @@ PARAPHRASE_BACKEND = "mcp"      # "manual" | "mcp" | "ollama"
 **Ollama configuration** (`config.py`):
 
 ```python
-OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b"   # CJK-capable; fits a 6 GB GPU
+OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b-instruct"   # CJK-capable; fits a 6 GB GPU
 OLLAMA_HOST            = "http://localhost:11434"
-OLLAMA_BATCH_SIZE      = 15
+OLLAMA_BATCH_SIZE      = 8
 # Paraphrase uses its own OLLAMA_PARA_* knobs (higher temperature for natural phrasing)
 ```
 
@@ -425,8 +428,8 @@ All tunables live in `config.py`. Highlights:
 | **Backends**            | `TRANSLATOR_BACKEND`, `PARAPHRASE_BACKEND`                                |
 | **Ollama (translate)**  | `OLLAMA_*` - host, model, batch size, retries, completion gate            |
 | **Ollama (paraphrase)** | `OLLAMA_PARA_*` - same knobs, tuned for natural phrasing                  |
-| **OCR**                 | `OCR_CONFIDENCE_THRESHOLD`, `OCR_RETRY_ENABLED`, `OCR_RETRY_MAX`          |
-| **Detection**           | `DETECTION_MODEL`, `DETECTION_CONF`                                       |
+| **OCR**                 | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`, `OCR_RETRY_ENABLED`, `OCR_RETRY_MAX` |
+| **Detection**           | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `RTDETR_CONF`, `RTDETR_SKIP_TEXT_FREE`, `DETECTOR_USE_GPU` |
 | **Rendering**           | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                 |
 | **Credits**             | `CREDITS_TEMPLATES`, `CREDITS_DIR` (+ `credits` block in `settings.json`) |
 | **Stitching**           | `STITCH_ENABLED`, `STITCH_EDGE_EPS`, `STITCH_MIN_X_OVERLAP`               |
@@ -441,7 +444,7 @@ the series **glossary** (`glossary.json`) locks names/terms across every chapter
 ## Troubleshooting
 
 > [!WARNING]
-> **Detection model won't download.** The first `detect` run fetches the YOLOv8 weights from
+> **Detection model won't download.** The first `detect` run fetches the RT-DETR / YOLOv8 weights from
 > Hugging Face. If you're offline or rate-limited, pre-cache the model or set
 > `HF_HUB_OFFLINE=1` once it's cached.
 
@@ -450,7 +453,7 @@ the series **glossary** (`glossary.json`) locks names/terms across every chapter
 | Untranslated Chinese renders as boxes (□□) | A backend left text untranslated               | The CJK guard flags these as `needs_translation`; check the translate completion gate / try a stronger model. |
 | Paraphrase "ruined" the meaning            | Small local model over-creative on refinement  | Use `mcp` for paraphrase; keep local for translation.                                                         |
 | Ollama errors immediately                  | `ollama serve` not running or model not pulled | Start Ollama and `ollama pull <model>`.                                                                       |
-| A stage keeps "waiting"                    | `manual`/`mcp` handoff pending                 | Provide the response file / run the MCP tool, then re-run.                                                    |
+| A stage keeps "waiting"                    | `manual`/`mcp` handoff pending                 | Provide the response file / run the MCP tool, then re-run or click **Resume ▶**.                              |
 | Batch stops early                          | (it shouldn't)                                 | Batch continues past errors - check `logs/` for the per-chapter error log.                                    |
 
 ---
