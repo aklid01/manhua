@@ -71,3 +71,35 @@ def test_non_speech_boxes_ignored():
         2: [_box(20, 0, 100, 15, typ=getattr(config, "TYPE_NARRATION", "narration"))],
     }
     assert s1._find_split_pairs(det, _pages(1, 2), config) == []
+
+
+def test_stitch_box_prefers_parent_bubble():
+    box_with_pb = {
+        "read_region": {"x": 30, "y": 500, "w": 40, "h": 20},
+        "parent_bubble": {"x": 20, "y": 480, "w": 60, "h": 120},
+    }
+    box_no_pb = {
+        "read_region": {"x": 30, "y": 500, "w": 40, "h": 20},
+    }
+
+    assert s1._stitch_box(box_with_pb) == {"x": 20, "y": 480, "w": 60, "h": 120}
+    assert s1._stitch_box(box_no_pb) == {"x": 30, "y": 500, "w": 40, "h": 20}
+
+
+def test_find_pair_rtdetr_parent_bubble_edge_touch():
+    # Tight text boxes do NOT touch the edge (y=500..550, y=50..100)
+    # But parent_bubbles touch edge (y=500..600, y=0..100)
+    box_a = {
+        "type": config.TYPE_SPEECH,
+        "read_region": {"x": 30, "y": 500, "w": 40, "h": 50},
+        "parent_bubble": {"x": 20, "y": 500, "w": 80, "h": 100},
+    }
+    box_b = {
+        "type": config.TYPE_SPEECH,
+        "read_region": {"x": 30, "y": 50, "w": 40, "h": 50},
+        "parent_bubble": {"x": 20, "y": 0, "w": 80, "h": 100},
+    }
+    det = {1: [box_a], 2: [box_b]}
+    pairs = s1._find_split_pairs(det, _pages(1, 2, h=600), config)
+    assert len(pairs) == 1 and pairs[0][0] == 1 and pairs[0][1] == 2
+

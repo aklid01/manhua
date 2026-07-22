@@ -384,6 +384,15 @@ def _xywh(box) -> dict:
     return {"x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"]}
 
 
+def _stitch_box(box) -> dict:
+    """Geometry box for split detection: prefer the bubble container (it's what touches the
+    page edge). Falls back to read_region/bbox for the old YOLO detector (no parent_bubble)."""
+    pb = box.get("parent_bubble")
+    if pb and all(k in pb for k in ("x", "y", "w", "h")):
+        return {"x": pb["x"], "y": pb["y"], "w": pb["w"], "h": pb["h"]}
+    return _xywh(box)
+
+
 def _box_touches_bottom(r, page_h, eps) -> bool:
     return (r["y"] + r["h"]) >= (page_h - eps)
 
@@ -414,17 +423,35 @@ def _find_split_pairs(det_by_page: dict, pages_meta: list, config) -> list:
             x
             for x in det_by_page.get(na, [])
             if x.get("type") == config.TYPE_SPEECH
-            and _box_touches_bottom(_xywh(x), ha, eps)
+            and _box_touches_bottom(_stitch_box(x), ha, eps)
         ]
         top = [
             x
             for x in det_by_page.get(nb, [])
-            if x.get("type") == config.TYPE_SPEECH and _box_touches_top(_xywh(x), eps)
+            if x.get("type") == config.TYPE_SPEECH
+            and _box_touches_top(_stitch_box(x), eps)
         ]
+        if bottom or top:
+            logger.info(
+                "[%s] Stitch check %d->%d: %d bottom-edge bubble(s), %d top-edge bubble(s)",
+                _STAGE_NAME,
+                na,
+                nb,
+                len(bottom),
+                len(top),
+            )
         found = None
         for bx in bottom:
             for tx in top:
-                if _x_overlap_frac(_xywh(bx), _xywh(tx)) >= min_ov:
+                ov = _x_overlap_frac(_stitch_box(bx), _stitch_box(tx))
+                logger.info(
+                    "[%s]   candidate overlap=%.2f (need >= %.2f) %s",
+                    _STAGE_NAME,
+                    ov,
+                    min_ov,
+                    "MATCH" if ov >= min_ov else "below-threshold",
+                )
+                if ov >= min_ov:
                     found = (na, nb, bx, tx)
                     break
             if found:
@@ -446,7 +473,8 @@ def _half_has_text(ws, page_meta, box, config, ocr_engine) -> bool:
         text, mean, _min, _wm = _read_crop(
             ocr_engine, _preprocess_variant(crop, 0), config
         )
-    return bool(text.strip()) and mean >= getattr(config, "OCR_MIN_TEXT_CONF", 0.30)
+    stitch_floor = getattr(config, "STITCH_TEXT_MIN_CONF", 0.15)
+    return bool(text.strip()) and mean >= stitch_floor
 
 
 def _merge_page_images(ws, page_a, page_b, config) -> tuple:
