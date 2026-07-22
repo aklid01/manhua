@@ -18,9 +18,10 @@ from pathlib import Path
 @dataclass
 class BackendPaths:
     """Per-stage file/folder wiring."""
-    folder_key: str          # e.g. "translation" | "paraphrase"
-    prompt_name: str         # config.TRANSLATION_PROMPT_NAME | PARAPHRASE_PROMPT_NAME
-    response_name: str       # config.TRANSLATION_RESPONSE_NAME | PARAPHRASE_RESPONSE_NAME
+
+    folder_key: str  # e.g. "translation" | "paraphrase"
+    prompt_name: str  # config.TRANSLATION_PROMPT_NAME | PARAPHRASE_PROMPT_NAME
+    response_name: str  # config.TRANSLATION_RESPONSE_NAME | PARAPHRASE_RESPONSE_NAME
 
 
 def _stage_dir(ws: Path, config, paths: BackendPaths) -> Path:
@@ -37,8 +38,9 @@ def write_bundle(bundle: dict, ws: Path, config, paths: BackendPaths) -> Path:
     return p
 
 
-def manual_request(bundle, ws, config, paths, logger, stage_index, total_stages,
-                   stage_name) -> dict | None:
+def manual_request(
+    bundle, ws, config, paths, logger, stage_index, total_stages, stage_name
+) -> dict | None:
     """Manual handoff: write prompt; ingest response file if present, else wait."""
     write_bundle(bundle, ws, config, paths)
     d = _stage_dir(ws, config, paths)
@@ -51,16 +53,22 @@ def manual_request(bundle, ws, config, paths, logger, stage_index, total_stages,
             "  3. Save the assistant's JSON reply as: %s\n"
             "  4. Re-run: python pipeline.py %s\n"
             "  (Awaiting %s — no changes written.)",
-            stage_index, total_stages, stage_name,
-            d / paths.prompt_name, resp, stage_name.lower(), paths.response_name,
+            stage_index,
+            total_stages,
+            stage_name,
+            d / paths.prompt_name,
+            resp,
+            stage_name.lower(),
+            paths.response_name,
         )
         return None
     with resp.open("r", encoding="utf-8") as fh:
         return json.load(fh)
 
 
-def mcp_request(bundle, ws, config, paths, logger, stage_index, total_stages,
-                stage_name) -> dict | None:
+def mcp_request(
+    bundle, ws, config, paths, logger, stage_index, total_stages, stage_name
+) -> dict | None:
     """MCP handoff: write prompt; ingest response file if present, else wait."""
     write_bundle(bundle, ws, config, paths)
     d = _stage_dir(ws, config, paths)
@@ -69,7 +77,10 @@ def mcp_request(bundle, ws, config, paths, logger, stage_index, total_stages,
         logger.info(
             "[%d/%d %s] MCP handoff required.\n"
             "  (Awaiting %s via MCP tool — no changes written.)",
-            stage_index, total_stages, stage_name, paths.response_name,
+            stage_index,
+            total_stages,
+            stage_name,
+            paths.response_name,
         )
         return None
     with resp.open("r", encoding="utf-8") as fh:
@@ -84,7 +95,9 @@ class OllamaSettings:
     temperature: float
     max_retries: int
     backoff: float
-    batch_size: int = 15
+    batch_size: int = 8
+    num_ctx: int = 2048
+    keep_alive: str = "0"
 
     @classmethod
     def from_config(cls, config, prefix: str) -> "OllamaSettings":
@@ -101,7 +114,9 @@ class OllamaSettings:
             temperature=g("TEMPERATURE", 0.2),
             max_retries=g("MAX_RETRIES", 3),
             backoff=g("RETRY_BACKOFF", 1.0),
-            batch_size=g("BATCH_SIZE", 15),
+            batch_size=g("BATCH_SIZE", 8),
+            num_ctx=g("NUM_CTX", 2048),
+            keep_alive=str(g("KEEP_ALIVE", "0")),
         )
 
 
@@ -120,8 +135,9 @@ def validate_ollama_settings(s: OllamaSettings, prefix: str) -> None:
         raise ValueError(f"{prefix}_MAX_RETRIES must be an integer >= 1.")
 
 
-def call_ollama(s: OllamaSettings, system_prompt: str, user_prompt: str,
-                logger, stage_name: str) -> str:
+def call_ollama(
+    s: OllamaSettings, system_prompt: str, user_prompt: str, logger, stage_name: str
+) -> str:
     payload = {
         "model": s.model,
         "messages": [
@@ -130,7 +146,11 @@ def call_ollama(s: OllamaSettings, system_prompt: str, user_prompt: str,
         ],
         "stream": False,
         "format": "json",
-        "options": {"temperature": s.temperature},
+        "keep_alive": s.keep_alive,
+        "options": {
+            "temperature": s.temperature,
+            "num_ctx": s.num_ctx,
+        },
     }
     data = json.dumps(payload).encode("utf-8")
     last_exc = None
@@ -138,7 +158,8 @@ def call_ollama(s: OllamaSettings, system_prompt: str, user_prompt: str,
         try:
             req = urllib.request.Request(
                 f"{s.host.rstrip('/')}/api/chat",
-                data=data, headers={"Content-Type": "application/json"},
+                data=data,
+                headers={"Content-Type": "application/json"},
             )
             with urllib.request.urlopen(req, timeout=s.timeout) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
@@ -149,7 +170,11 @@ def call_ollama(s: OllamaSettings, system_prompt: str, user_prompt: str,
                 wait = s.backoff * (2 ** (attempt - 1))
                 logger.warning(
                     "[%s] Ollama call failed (attempt %d/%d): %s; retrying in %.1fs",
-                    stage_name, attempt, s.max_retries, exc, wait,
+                    stage_name,
+                    attempt,
+                    s.max_retries,
+                    exc,
+                    wait,
                 )
                 time.sleep(wait)
     raise RuntimeError(
@@ -169,7 +194,7 @@ def parse_json(text: str) -> dict:
         cleaned = re.sub(r"\n?```$", "", cleaned).strip()
     start, end = cleaned.find("{"), cleaned.rfind("}")
     if start != -1 and end != -1 and end > start:
-        cleaned = cleaned[start:end + 1]
+        cleaned = cleaned[start : end + 1]
     try:
         obj = json.loads(cleaned)
     except json.JSONDecodeError:

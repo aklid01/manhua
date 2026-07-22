@@ -191,18 +191,30 @@ class OllamaBackend:
         if not missing:
             return accepted
 
-        if len(retry_chunk) > 1 and depth < 4:
-            still = [r for r in retry_chunk if r["region_id"] in missing]
-            mid = len(still) // 2
-            accepted.update(self._translate_batch(still[:mid], depth + 1))
-            accepted.update(self._translate_batch(still[mid:], depth + 1))
-        else:
-            logger.warning(
-                "[%s] Giving up on %d region(s) after recovery: %s",
-                _STAGE_NAME,
-                len(missing),
-                sorted(missing),
-            )
+        if len(retry_chunk) <= 1 or depth >= 4:
+            single_max = getattr(self, "single_retry_max", 3)
+            for _attempt in range(single_max):
+                if not missing:
+                    break
+                still = [r for r in chunk if r["region_id"] in missing]
+                raw = self._call_ollama(self._build_user_prompt(still, strict=True))
+                acc_n, missing, _ = self._validate_batch(
+                    self._parse_json(raw), set(missing)
+                )
+                accepted.update(acc_n)
+            if missing:
+                logger.warning(
+                    "[%s] Giving up on %d region(s) after recovery: %s",
+                    _STAGE_NAME,
+                    len(missing),
+                    sorted(missing),
+                )
+            return accepted
+
+        still = [r for r in retry_chunk if r["region_id"] in missing]
+        mid = len(still) // 2
+        accepted.update(self._translate_batch(still[:mid], depth + 1))
+        accepted.update(self._translate_batch(still[mid:], depth + 1))
         return accepted
 
     def _build_user_prompt(self, chunk, strict: bool) -> str:
@@ -526,20 +538,23 @@ def run_translation(workspace: str, config) -> Path | None:
     if backend_name == "ollama" and usable_ids:
         ratio = len(translation_map) / len(usable_ids)
         min_ratio = getattr(config, "OLLAMA_MIN_COMPLETION_RATIO", 0.95)
+        missing_count = len(usable_ids) - len(translation_map)
+        max_missing = getattr(config, "OLLAMA_MAX_MISSING", 0)
         if len(translation_map) == 0:
             raise ValueError(
                 "Ollama returned zero usable translations. Not advancing. "
                 "Check model output and `ollama serve`."
             )
-        if ratio < min_ratio:
+        if ratio < min_ratio or missing_count > max_missing:
             logger.error(
-                "[%d/%d %s] Completion %.0f%% < %.0f%% threshold - writing artifacts "
+                "[%d/%d %s] Completion %.0f%% (%d missing > %d allowed) - writing artifacts "
                 "but NOT advancing manifest. Re-run after investigating.",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
                 ratio * 100,
-                min_ratio * 100,
+                missing_count,
+                max_missing,
             )
             _write_output(
                 TranslationWriteContext(
