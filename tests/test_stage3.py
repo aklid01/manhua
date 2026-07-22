@@ -299,3 +299,19 @@ def test_validate_batch_newline_normalization():
     assert missing == []
     assert unexpected == []
 
+
+def test_cjk_char_count_and_is_trivial_region():
+    from manhua_pipeline.stages.stage3_translation import (
+        _cjk_char_count,
+        _is_trivial_region,
+    )
+
+    assert _cjk_char_count("一") == 1
+    assert _cjk_char_count("你好") == 2
+    assert _cjk_char_count("Hello 123!") == 0
+
+    assert _is_trivial_region("一", config) is True
+    assert _is_trivial_region("你好", config) is False
+    assert _is_trivial_region("ABC", config) is False
+
+

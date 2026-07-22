@@ -68,6 +68,19 @@ def _cjk_ratio(text: str) -> float:
     return sum(1 for c in chars if _contains_cjk(c)) / len(chars)
 
 
+def _cjk_char_count(text: str) -> int:
+    """Count Han ideographs in a string."""
+    return sum(1 for c in (text or "") if _contains_cjk(c))
+
+
+def _is_trivial_region(original_text: str, config) -> bool:
+    """True for very short CJK regions (SFX/counters/noise) that shouldn't block a chapter."""
+    thresh = getattr(config, "OLLAMA_TRIVIAL_CJK_CHARS", 1)
+    n = _cjk_char_count(original_text)
+    return 0 < n <= thresh
+
+
+
 def _normalize_punct(text: str) -> str:
     """Replace full-width CJK punctuation with ASCII equivalents."""
     return "".join(_FULLWIDTH_MAP.get(c, c) for c in text)
@@ -550,24 +563,47 @@ def run_translation(workspace: str, config) -> Path | None:
 
     backend_name = getattr(config, "TRANSLATOR_BACKEND", "manual")
     if backend_name == "ollama" and usable_ids:
-        ratio = len(translation_map) / len(usable_ids)
+        orig_by_id = {r["region_id"]: r.get("original_text", "") for r in usable}
+        missing_ids = [rid for rid in usable_ids if rid not in translation_map]
+        trivial_missing = [
+            rid
+            for rid in missing_ids
+            if _is_trivial_region(orig_by_id.get(rid, ""), config)
+        ]
+        substantial_missing = [
+            rid for rid in missing_ids if rid not in set(trivial_missing)
+        ]
+
+        substantial_total = max(1, len(usable_ids) - len(trivial_missing))
+        ratio = (substantial_total - len(substantial_missing)) / substantial_total
         min_ratio = getattr(config, "OLLAMA_MIN_COMPLETION_RATIO", 0.95)
-        missing_count = len(usable_ids) - len(translation_map)
         max_missing = getattr(config, "OLLAMA_MAX_MISSING", 0)
+
         if len(translation_map) == 0:
             raise ValueError(
                 "Ollama returned zero usable translations. Not advancing. "
                 "Check model output and `ollama serve`."
             )
-        if ratio < min_ratio or missing_count > max_missing:
+
+        if trivial_missing:
+            logger.info(
+                "[%d/%d %s] %d trivial region(s) left untranslated (SFX/noise, not blocking): %s",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                len(trivial_missing),
+                sorted(trivial_missing),
+            )
+
+        if ratio < min_ratio or len(substantial_missing) > max_missing:
             logger.error(
-                "[%d/%d %s] Completion %.0f%% (%d missing > %d allowed) - writing artifacts "
+                "[%d/%d %s] Completion %.0f%% (%d substantial missing > %d allowed) - writing artifacts "
                 "but NOT advancing manifest. Re-run after investigating.",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
                 ratio * 100,
-                missing_count,
+                len(substantial_missing),
                 max_missing,
             )
             _write_output(
@@ -703,29 +739,48 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
 
             from manhua_pipeline.io.glossary_series import append_glossary_term
 
-            cjk_bits = re.findall(r"[\u3400-\u9fff]+", region.get("original_text", ""))
+            original = region.get("original_text", "")
+            cjk_bits = re.findall(r"[\u3400-\u9fff]+", original)
             snippet = cjk_bits[0] if cjk_bits else region["region_id"]
-            logger.warning(
-                "[%s] %s not translated. Checking glossary for %r ...",
-                _STAGE_NAME,
-                region["region_id"],
-                snippet,
-            )
-            glossary_terms = {t.get("source_term") for t in glossary.get("terms", [])}
-            if snippet in glossary_terms:
+
+            if _is_trivial_region(original, config):
                 logger.info(
-                    "[%s]   Found %r in glossary - model should use it next run.",
+                    "[%s] %s left untranslated (trivial: %r) - leaving original, not seeding glossary.",
                     _STAGE_NAME,
+                    region["region_id"],
+                    original,
+                )
+            elif len(snippet) <= 1:
+                logger.info(
+                    "[%s] %s: %r is a single char - not a name, not seeding glossary.",
+                    _STAGE_NAME,
+                    region["region_id"],
                     snippet,
                 )
             else:
-                append_glossary_term(ws.parent, config, snippet)
                 logger.warning(
-                    "[%s]   %r not in glossary. Added a stub - please set its English translation in %s/glossary.json and re-run to fix this region.",
+                    "[%s] %s not translated. Checking glossary for %r ...",
                     _STAGE_NAME,
+                    region["region_id"],
                     snippet,
-                    ws.parent.name,
                 )
+                glossary_terms = {
+                    t.get("source_term") for t in glossary.get("terms", [])
+                }
+                if snippet in glossary_terms:
+                    logger.info(
+                        "[%s]   Found %r in glossary - model should use it next run.",
+                        _STAGE_NAME,
+                        snippet,
+                    )
+                else:
+                    append_glossary_term(ws.parent, config, snippet)
+                    logger.warning(
+                        "[%s]   %r not in glossary. Added a stub - set its English translation in %s/glossary.json and re-run.",
+                        _STAGE_NAME,
+                        snippet,
+                        ws.parent.name,
+                    )
 
         if translated:
             translated_count += 1

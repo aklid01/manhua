@@ -498,3 +498,41 @@ def test_contains_cjk_helper():
     assert not _contains_cjk("hello!")
     assert not _contains_cjk("")
     assert not _contains_cjk(None)
+
+
+def test_trivial_missing_region_bypasses_hold_and_skips_glossary(
+    tmp_path, ollama_config, monkeypatch
+):
+    from manhua_pipeline.stages import stage3_translation
+
+    ws = tmp_path / "workspace"
+    # P001_R001 is single-char CJK "一", P001_R002 is multi-char "滚吧！"
+    _setup(
+        ws,
+        [
+            _ocr_entry("P001_R001", "一", usable=True),
+            _ocr_entry("P001_R002", "滚吧！", usable=True),
+        ],
+    )
+
+    # Monkeypatch Ollama backend to return translation only for P001_R002 ("Get out!"), leaving P001_R001 ("一") missing
+    monkeypatch.setattr(
+        stage3_translation.OllamaBackend,
+        "_call_ollama",
+        lambda self, prompt: json.dumps({"P001_R002": "Get out!"}),
+    )
+
+    result = stage3_translation.run_translation(str(ws), ollama_config)
+
+    # Manifest should advance because P001_R001 is single-char (trivial)
+    assert result is not None
+    m = json.loads((ws / "manifest.json").read_text())
+    assert m["current_stage"] == "paraphrase"
+
+    # Glossary should NOT have a stub for "一"
+    glossary_path = ws.parent / "glossary.json"
+    if glossary_path.exists():
+        g_data = json.loads(glossary_path.read_text(encoding="utf-8"))
+        terms = [t.get("source_term") for t in g_data.get("terms", [])]
+        assert "一" not in terms
+
