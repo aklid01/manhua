@@ -13,11 +13,11 @@ OVERLAY_ENABLED = True
 READING_ORDER_BAND_FRACTION = 0.02
 
 # ---- Detector backend ----
-DETECTOR_BACKEND = "rtdetr"          # "yolov8" (current, fallback) | "rtdetr"
+DETECTOR_BACKEND = "rtdetr"          # "yolov8" (fallback) | "rtdetr"
 RTDETR_REPO = "ogkalu/comic-text-and-bubble-detector"
 RTDETR_CONF = 0.30                   # score threshold
 RTDETR_SKIP_TEXT_FREE = True         # don't OCR text_free (SFX/watermark/credits)
-# Class ids from the model card
+# Class ids from the model card. DON'T CHANGE THESE!
 RTDETR_CLASS_BUBBLE = 0
 RTDETR_CLASS_TEXT_BUBBLE = 1
 RTDETR_CLASS_TEXT_FREE = 2
@@ -37,12 +37,12 @@ OVERRIDES_NAME = "overrides.json"
 # ---- OCR ----
 OCR_CONFIDENCE_THRESHOLD = 0.7  # below this -> needs_correction
 OCR_LANG = "ch"
-OCR_USE_GPU = True
-DETECTOR_USE_GPU = True
+OCR_USE_GPU = True # set to false if not using GPU
+DETECTOR_USE_GPU = True # set to false if not using GPU
 OCR_MIN_TEXT_CONF = 0.30
-OCR_VERSION = "PP-OCRv6"
+OCR_VERSION = "PP-OCRv6" # check https://github.com/PaddlePaddle/PaddleOCR/releases to see which version is latest
 EDGE_TOUCH_EPS = 3
-BATCH_SUBPROCESS = True
+BATCH_SUBPROCESS = True # use subprocesses for batch flag
 
 # ---- OCR retry ----
 OCR_RETRY_ENABLED = True
