@@ -22,6 +22,11 @@ with this program. If not, see <https://www.gnu.org/licenses/>.
 import argparse
 import os
 import sys
+
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import time
 import warnings
 

@@ -17,6 +17,10 @@ def setup_logging(stream: str = "stdout", level: int = logging.INFO) -> None:
     """Configure the root logger once. stream is 'stdout' or 'stderr'."""
     global _CONFIGURED
     target = sys.stdout if stream == "stdout" else sys.stderr
+    try:
+        target.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     handler = logging.StreamHandler(target)
     handler.setFormatter(logging.Formatter(_FORMAT, datefmt=_DATEFMT))
 
