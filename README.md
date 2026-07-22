@@ -70,6 +70,7 @@ built for you.
 - **Modular** - seven decoupled stages, plain-JSON handoffs.
 - **Vendor-neutral** - `manual`, `mcp`, and `ollama` backends for translate & refine.
 - **Human-in-the-loop** - per-region overrides, glossary locking, manual handoff.
+- **Guided GUI** - visual step-by-step runner with automatic handoff & resume tracking.
 - **MCP Ready** - drive translation/refinement from any MCP client (e.g. Antigravity).
 - **Fully rerunnable** - idempotent stages, manifest-driven resume, batch processing.
 
@@ -164,8 +165,11 @@ python pipeline.py --set-output-dir "/path/to/your/series"
 # 3. (Optional) pull a local translation model
 ollama pull qwen2.5:3b
 
-# 4. Translate a whole chapter end-to-end
+# 4. Run a chapter end-to-end via CLI
 python pipeline.py run-all --input "/path/to/chapter_001.cbz"
+
+# ...or launch the Guided GUI Runner
+python pipeline_gui.py
 ```
 
 That's it. The first run downloads the detection model from Hugging Face and caches it;
@@ -198,6 +202,22 @@ pip install -r requirements.txt
 > [!NOTE]
 > The detection model (`ogkalu/comic-speech-bubble-detector-yolov8m`) downloads
 > automatically on first detection run and is cached by Hugging Face thereafter.
+
+---
+
+## Guided GUI Runner
+
+In addition to the command-line interface, Manhua Pipeline includes a guided graphical runner:
+
+```bash
+python pipeline_gui.py
+```
+
+- **Sequential execution**: Stages unlock step-by-step as each preceding stage completes.
+- **Handoff & Resume tracking**: If a `manual` or `mcp` backend requires external input, the stage button dynamically updates to **Resume ▶ <Stage>** and the log displays step-by-step handoff instructions.
+- **Idempotent continuation**: Saving the response file and clicking **Resume ▶** ingests the response, advances the chapter manifest, and unlocks the next stage.
+- **Log filtering**: Output pane filters log messages to surface warnings, re-runs, overrides, and verdicts without cluttering the screen.
+- **Packaging**: Select archive formats (`cbz`, `zip`, `tar`, `pdf`) and package chapters directly from the interface.
 
 ---
 
