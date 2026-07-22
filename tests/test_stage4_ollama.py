@@ -10,7 +10,6 @@ import pytest
 
 import config
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -63,22 +62,31 @@ def _trans_entry(rid, literal, translated=True):
 @pytest.fixture
 def ollama_config(monkeypatch):
     monkeypatch.setattr(config, "PARAPHRASE_BACKEND", "ollama", raising=False)
-    monkeypatch.setattr(config, "OLLAMA_PARA_HOST", "http://localhost:11434", raising=False)
-    monkeypatch.setattr(config, "OLLAMA_PARA_MODEL", "qwen2.5:3b-instruct", raising=False)
+    monkeypatch.setattr(
+        config, "OLLAMA_PARA_HOST", "http://localhost:11434", raising=False
+    )
+    monkeypatch.setattr(
+        config, "OLLAMA_PARA_MODEL", "qwen2.5:3b-instruct", raising=False
+    )
     monkeypatch.setattr(config, "OLLAMA_PARA_BATCH_SIZE", 2, raising=False)
     monkeypatch.setattr(config, "OLLAMA_PARA_TIMEOUT", 30, raising=False)
     monkeypatch.setattr(config, "OLLAMA_PARA_TEMPERATURE", 0.7, raising=False)
     monkeypatch.setattr(config, "OLLAMA_PARA_MAX_RETRIES", 3, raising=False)
     monkeypatch.setattr(config, "OLLAMA_PARA_RETRY_BACKOFF", 0.0, raising=False)
     monkeypatch.setattr(config, "OLLAMA_PARA_MIN_COMPLETION_RATIO", 0.80, raising=False)
-    monkeypatch.setattr(config, "OLLAMA_PARA_PROMPT_VERSION", "paraphrase-v1", raising=False)
+    monkeypatch.setattr(
+        config, "OLLAMA_PARA_PROMPT_VERSION", "paraphrase-v1", raising=False
+    )
     return config
 
 
 def _patch_call(monkeypatch, responder):
     from manhua_pipeline.stages import stage4_paraphrase as s4
+
     monkeypatch.setattr(
-        s4.OllamaBackend, "_call_ollama", lambda self, user_prompt: responder(user_prompt)
+        s4.OllamaBackend,
+        "_call_ollama",
+        lambda self, user_prompt: responder(user_prompt),
     )
     return s4
 
@@ -101,6 +109,7 @@ def _read_paraphrase(ws):
 
 def test_get_backend_returns_ollama(ollama_config):
     from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend, _get_backend
+
     assert isinstance(_get_backend(ollama_config), OllamaBackend)
 
 
@@ -146,11 +155,14 @@ def test_multiple_batches(tmp_path, ollama_config, monkeypatch):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
-    _setup(ws, [
-        _trans_entry("P001_R001", "a a a"),
-        _trans_entry("P001_R002", "b b b"),
-        _trans_entry("P001_R003", "c c c"),
-    ])
+    _setup(
+        ws,
+        [
+            _trans_entry("P001_R001", "a a a"),
+            _trans_entry("P001_R002", "b b b"),
+            _trans_entry("P001_R003", "c c c"),
+        ],
+    )
     run_paraphrase(str(ws), ollama_config)
 
     pa = _read_paraphrase(ws)
@@ -181,6 +193,7 @@ def test_code_fenced_json_parses(tmp_path, ollama_config, monkeypatch):
 
 def test_parse_json_static_helpers():
     from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
+
     assert OllamaBackend._parse_json('```json\n{"a": "b"}\n```') == {"a": "b"}
     assert OllamaBackend._parse_json('prose {"a": "b"} tail') == {"a": "b"}
     assert OllamaBackend._parse_json("garbage") == {}
@@ -230,7 +243,10 @@ def test_missing_falls_back_to_literal(tmp_path, ollama_config, monkeypatch):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
-    _setup(ws, [_trans_entry("P001_R001", "a"), _trans_entry("P001_R002", "keep me literal")])
+    _setup(
+        ws,
+        [_trans_entry("P001_R001", "a"), _trans_entry("P001_R002", "keep me literal")],
+    )
     run_paraphrase(str(ws), ollama_config)
 
     pa = _read_paraphrase(ws)
@@ -248,6 +264,7 @@ def test_missing_falls_back_to_literal(tmp_path, ollama_config, monkeypatch):
 
 def test_echo_of_literal_allowed():
     from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
+
     literals = {"P001_R001": "ACME Corp", "P001_R002": "hello there"}
     parsed = {"P001_R001": "ACME Corp", "P001_R002": "hey!"}
     accepted, missing, _ = OllamaBackend._validate_batch(
@@ -264,6 +281,7 @@ def test_echo_of_literal_allowed():
 
 def test_unexpected_ids_rejected():
     from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
+
     parsed = {"P001_R001": "good", "P999_R999": "ghost"}
     accepted, missing, unexpected = OllamaBackend._validate_batch(
         parsed, {"P001_R001"}, {"P001_R001": "g"}
@@ -275,6 +293,7 @@ def test_unexpected_ids_rejected():
 
 def test_invalid_values_dropped():
     from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
+
     parsed = {
         "P001_R001": "",
         "P001_R002": "   ",
@@ -296,7 +315,7 @@ def test_invalid_values_dropped():
 
 def test_connectivity_failure_raises(tmp_path, ollama_config, monkeypatch):
     import urllib.error
-    from manhua_pipeline.stages import stage4_paraphrase as s4
+
 
     def boom(req, timeout=None):
         raise urllib.error.URLError("refused")
@@ -351,11 +370,14 @@ def test_below_threshold_does_not_advance(tmp_path, ollama_config, monkeypatch):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
-    _setup(ws, [
-        _trans_entry("P001_R001", "a"),
-        _trans_entry("P001_R002", "b"),
-        _trans_entry("P001_R003", "c"),
-    ])
+    _setup(
+        ws,
+        [
+            _trans_entry("P001_R001", "a"),
+            _trans_entry("P001_R002", "b"),
+            _trans_entry("P001_R003", "c"),
+        ],
+    )
     out = run_paraphrase(str(ws), ollama_config)
 
     assert out is None
@@ -370,10 +392,21 @@ def test_below_threshold_does_not_advance(tmp_path, ollama_config, monkeypatch):
 
 
 def test_config_validation(monkeypatch):
-    from manhua_pipeline.stages.stage4_paraphrase import _validate_ollama_para_config
+    from manhua_pipeline.stages._backends import (
+        OllamaSettings,
+        validate_ollama_settings,
+    )
 
-    monkeypatch.setattr(config, "OLLAMA_PARA_HOST", "http://localhost:11434", raising=False)
-    monkeypatch.setattr(config, "OLLAMA_PARA_MODEL", "qwen2.5:3b-instruct", raising=False)
+    def _validate_ollama_para_config(cfg):
+        s = OllamaSettings.from_config(cfg, prefix="OLLAMA_PARA")
+        validate_ollama_settings(s, "OLLAMA_PARA")
+
+    monkeypatch.setattr(
+        config, "OLLAMA_PARA_HOST", "http://localhost:11434", raising=False
+    )
+    monkeypatch.setattr(
+        config, "OLLAMA_PARA_MODEL", "qwen2.5:3b-instruct", raising=False
+    )
     monkeypatch.setattr(config, "OLLAMA_PARA_TIMEOUT", 30, raising=False)
     monkeypatch.setattr(config, "OLLAMA_PARA_TEMPERATURE", 0.7, raising=False)
     monkeypatch.setattr(config, "OLLAMA_PARA_MAX_RETRIES", 3, raising=False)
@@ -387,7 +420,9 @@ def test_config_validation(monkeypatch):
     with pytest.raises(ValueError):
         _validate_ollama_para_config(config)
 
-    monkeypatch.setattr(config, "OLLAMA_PARA_HOST", "http://localhost:11434", raising=False)
+    monkeypatch.setattr(
+        config, "OLLAMA_PARA_HOST", "http://localhost:11434", raising=False
+    )
     monkeypatch.setattr(config, "OLLAMA_PARA_MODEL", "", raising=False)
     with pytest.raises(ValueError):
         _validate_ollama_para_config(config)

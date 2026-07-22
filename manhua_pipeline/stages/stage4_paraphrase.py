@@ -53,8 +53,7 @@ class ManualBackend:
             config.PARAPHRASE_RESPONSE_NAME,
         )
         return be.manual_request(
-            bundle, ws, config, paths, logger,
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
+            bundle, ws, config, paths, logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
         )
 
 
@@ -66,14 +65,8 @@ class McpBackend:
             config.PARAPHRASE_RESPONSE_NAME,
         )
         return be.mcp_request(
-            bundle, ws, config, paths, logger,
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
+            bundle, ws, config, paths, logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
         )
-
-
-def _validate_ollama_para_config(config) -> None:
-    s = be.OllamaSettings.from_config(config, prefix="OLLAMA_PARA")
-    be.validate_ollama_settings(s, "OLLAMA_PARA")
 
 
 class OllamaBackend:
@@ -118,20 +111,31 @@ class OllamaBackend:
         n_batches = (total + batch_size - 1) // batch_size
         logger.info(
             "[%d/%d %s] Ollama: %d regions, %d batch(es), model=%s",
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, total, n_batches, self.model,
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            total,
+            n_batches,
+            self.model,
         )
 
         merged: dict = {}
         for bi in range(n_batches):
-            chunk = regions[bi * batch_size:(bi + 1) * batch_size]
+            chunk = regions[bi * batch_size : (bi + 1) * batch_size]
             t_batch = time.monotonic()
             accepted = self._paraphrase_batch(chunk, depth=0)
             merged.update(accepted)
             logger.info(
                 "[%d/%d %s] Batch %d/%d: expected %d, accepted %d, missing %d (%.1fs)",
-                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
-                bi + 1, n_batches, len(chunk), len(accepted),
-                len(chunk) - len(accepted), time.monotonic() - t_batch,
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                bi + 1,
+                n_batches,
+                len(chunk),
+                len(accepted),
+                len(chunk) - len(accepted),
+                time.monotonic() - t_batch,
             )
 
         para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
@@ -149,7 +153,9 @@ class OllamaBackend:
             self._parse_json(raw), expected_ids, literals
         )
         if unexpected:
-            logger.warning("[%s] Rejected %d unexpected IDs", _STAGE_NAME, len(unexpected))
+            logger.warning(
+                "[%s] Rejected %d unexpected IDs", _STAGE_NAME, len(unexpected)
+            )
         if not missing:
             return accepted
 
@@ -170,32 +176,45 @@ class OllamaBackend:
         else:
             logger.warning(
                 "[%s] Giving up on %d region(s); literal fallback will apply: %s",
-                _STAGE_NAME, len(missing), sorted(missing),
+                _STAGE_NAME,
+                len(missing),
+                sorted(missing),
             )
         return accepted
 
     def _build_user_prompt(self, chunk, strict: bool) -> str:
         payload = json.dumps(
-            [{"region_id": r["region_id"],
-              "literal_translation": r.get("literal_translation", "")} for r in chunk],
+            [
+                {
+                    "region_id": r["region_id"],
+                    "literal_translation": r.get("literal_translation", ""),
+                }
+                for r in chunk
+            ],
             ensure_ascii=False,
         )
         strict_note = (
             "\nSTRICT: Return ONLY a valid JSON object. No prose, no code fences. "
             "One key per region_id. Do not merge or omit any region."
-            if strict else ""
+            if strict
+            else ""
         )
-        gloss = ("GLOSSARY (keep exactly):\n" + self.gloss_txt + "\n\n") if self.gloss_txt else ""
+        gloss = (
+            ("GLOSSARY (keep exactly):\n" + self.gloss_txt + "\n\n")
+            if self.gloss_txt
+            else ""
+        )
         directives = ""
         if self.tone:
             directives += f"TONE: {self.tone}\n"
         if self.shorten:
             directives += f"{self.shorten}\n"
         return (
-            directives + gloss
+            directives
+            + gloss
             + "Rewrite each object's literal_translation into punchy, natural spoken "
-              "US English. Return a JSON object mapping region_id -> final_english. "
-              "REGIONS:\n" + payload + strict_note
+            "US English. Return a JSON object mapping region_id -> final_english. "
+            "REGIONS:\n" + payload + strict_note
         )
 
     def _call_ollama(self, user_prompt: str) -> str:
@@ -210,7 +229,9 @@ class OllamaBackend:
         return be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
 
     @staticmethod
-    def _validate_batch(parsed: dict, expected_ids: set, literals: dict) -> tuple[dict, list, list]:
+    def _validate_batch(
+        parsed: dict, expected_ids: set, literals: dict
+    ) -> tuple[dict, list, list]:
         """Accept any non-empty string. No CJK guard (English->English). Echoes allowed."""
         accepted, unexpected = {}, []
         for k, v in parsed.items():
@@ -221,7 +242,9 @@ class OllamaBackend:
                 continue
             val = v.strip()
             if literals.get(k, "").strip() and val == literals[k].strip():
-                logger.info("[%s] %s: paraphrase echoes literal (allowed).", _STAGE_NAME, k)
+                logger.info(
+                    "[%s] %s: paraphrase echoes literal (allowed).", _STAGE_NAME, k
+                )
             if k not in accepted:
                 accepted[k] = val
         missing = [i for i in expected_ids if i not in accepted]
@@ -476,12 +499,21 @@ def run_paraphrase(workspace: str, config) -> Path | None:
             _TOTAL_STAGES,
             _STAGE_NAME,
         )
-        return _write_output(ParaphraseWriteContext(
-            ws=ws, config=config, manifest=manifest, trans_data=trans_data,
-            paraphrase_map={}, usable=usable, skipped=skipped,
-            overridden_regions=overridden_regions, overrides=overrides,
-            locked=locked, t0=t0,
-        ))
+        return _write_output(
+            ParaphraseWriteContext(
+                ws=ws,
+                config=config,
+                manifest=manifest,
+                trans_data=trans_data,
+                paraphrase_map={},
+                usable=usable,
+                skipped=skipped,
+                overridden_regions=overridden_regions,
+                overrides=overrides,
+                locked=locked,
+                t0=t0,
+            )
+        )
 
     bundle = _build_bundle(usable, locked, config)
     backend = _get_backend(config)
@@ -511,28 +543,54 @@ def run_paraphrase(workspace: str, config) -> Path | None:
             logger.error(
                 "[%d/%d %s] Paraphrase completion %.0f%% < %.0f%% - writing artifacts "
                 "(literal fallback applied) but NOT advancing manifest.",
-                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100, min_ratio * 100,
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                ratio * 100,
+                min_ratio * 100,
             )
-            _write_output(ParaphraseWriteContext(
-                ws=ws, config=config, manifest=manifest, trans_data=trans_data,
-                paraphrase_map=paraphrase_map, usable=usable, skipped=skipped,
-                overridden_regions=overridden_regions, overrides=overrides,
-                locked=locked, t0=t0, advance=False,
-            ))
+            _write_output(
+                ParaphraseWriteContext(
+                    ws=ws,
+                    config=config,
+                    manifest=manifest,
+                    trans_data=trans_data,
+                    paraphrase_map=paraphrase_map,
+                    usable=usable,
+                    skipped=skipped,
+                    overridden_regions=overridden_regions,
+                    overrides=overrides,
+                    locked=locked,
+                    t0=t0,
+                    advance=False,
+                )
+            )
             return None
         if ratio < 1.0:
             logger.warning(
                 "[%d/%d %s] Paraphrase completion %.0f%% (advancing; literal fallback "
                 "for the remainder).",
-                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100,
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                ratio * 100,
             )
 
-    return _write_output(ParaphraseWriteContext(
-        ws=ws, config=config, manifest=manifest, trans_data=trans_data,
-        paraphrase_map=paraphrase_map, usable=usable, skipped=skipped,
-        overridden_regions=overridden_regions, overrides=overrides,
-        locked=locked, t0=t0,
-    ))
+    return _write_output(
+        ParaphraseWriteContext(
+            ws=ws,
+            config=config,
+            manifest=manifest,
+            trans_data=trans_data,
+            paraphrase_map=paraphrase_map,
+            usable=usable,
+            skipped=skipped,
+            overridden_regions=overridden_regions,
+            overrides=overrides,
+            locked=locked,
+            t0=t0,
+        )
+    )
 
 
 @dataclass
@@ -554,7 +612,11 @@ class ParaphraseWriteContext:
 def _write_output(ctx: ParaphraseWriteContext) -> Path:
     ws, config, manifest = ctx.ws, ctx.config, ctx.manifest
     trans_data, paraphrase_map = ctx.trans_data, ctx.paraphrase_map
-    usable, skipped, overridden_regions = ctx.usable, ctx.skipped, ctx.overridden_regions
+    usable, skipped, overridden_regions = (
+        ctx.usable,
+        ctx.skipped,
+        ctx.overridden_regions,
+    )
     overrides, locked, t0, advance = ctx.overrides, ctx.locked, ctx.t0, ctx.advance
 
     now = datetime.now(timezone.utc).isoformat()
@@ -583,7 +645,9 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
                 "register": reg,
                 "char_count": len(override_text),
                 "skip_reason": None,
-                "glossary_conflict": conflict or region.get("glossary_conflict") or False,
+                "glossary_conflict": conflict
+                or region.get("glossary_conflict")
+                or False,
                 "paraphrase_source": "override",
             }
         )
@@ -600,7 +664,8 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
             reg = _detect_register(final_text, rude_markers)
             para_source = (
                 f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
-                if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama" else "llm"
+                if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama"
+                else "llm"
             )
         else:
             final_text = region.get("literal_translation") or ""
@@ -629,7 +694,9 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
                 "register": reg,
                 "char_count": len(final_text),
                 "skip_reason": skip_reason,
-                "glossary_conflict": conflict or region.get("glossary_conflict") or False,
+                "glossary_conflict": conflict
+                or region.get("glossary_conflict")
+                or False,
                 "paraphrase_source": para_source,
             }
         )
@@ -657,10 +724,14 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
         "generated_at": now,
         "paraphraser_backend": getattr(config, "PARAPHRASE_BACKEND", "manual"),
         "paraphraser_model": getattr(config, "OLLAMA_PARA_MODEL", None)
-            if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama" else None,
+        if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama"
+        else None,
         "paraphraser_temperature": getattr(config, "OLLAMA_PARA_TEMPERATURE", None)
-            if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama" else None,
-        "prompt_version": getattr(config, "OLLAMA_PARA_PROMPT_VERSION", "paraphrase-v1"),
+        if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama"
+        else None,
+        "prompt_version": getattr(
+            config, "OLLAMA_PARA_PROMPT_VERSION", "paraphrase-v1"
+        ),
         "tone_directive": getattr(
             config,
             "PARAPHRASE_TONE_DIRECTIVE",
@@ -716,7 +787,9 @@ def build_paraphrase_bundle(chapter_dir: str | Path, config) -> dict:
     overrides = load_overrides(ws, config)
 
     all_results = trans_data.get("results", [])
-    _, usable, _ = _partition_regions_paraphrase(all_results, overrides, config, log=False)
+    _, usable, _ = _partition_regions_paraphrase(
+        all_results, overrides, config, log=False
+    )
 
     glossary = load_series_glossary(ws.parent, config)
     locked = _locked_terms(glossary)
@@ -747,7 +820,9 @@ def write_paraphrase_response(
     overrides = load_overrides(ws, config)
 
     all_results = trans_data.get("results", [])
-    _, usable, _ = _partition_regions_paraphrase(all_results, overrides, config, log=False)
+    _, usable, _ = _partition_regions_paraphrase(
+        all_results, overrides, config, log=False
+    )
 
     usable_ids = [r["region_id"] for r in usable]
     clean_map, warnings = _validate_response(mapping, usable_ids)

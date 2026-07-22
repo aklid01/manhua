@@ -17,7 +17,6 @@ import pytest
 
 import config
 
-
 # ---------------------------------------------------------------------------
 # Helpers (mirrors tests/test_stage3.py)
 # ---------------------------------------------------------------------------
@@ -83,7 +82,9 @@ def ollama_config(monkeypatch):
     monkeypatch.setattr(config, "OLLAMA_MAX_RETRIES", 3, raising=False)
     monkeypatch.setattr(config, "OLLAMA_RETRY_BACKOFF", 0.0, raising=False)
     monkeypatch.setattr(config, "OLLAMA_MIN_COMPLETION_RATIO", 0.95, raising=False)
-    monkeypatch.setattr(config, "OLLAMA_PROMPT_VERSION", "translation-v2", raising=False)
+    monkeypatch.setattr(
+        config, "OLLAMA_PROMPT_VERSION", "translation-v2", raising=False
+    )
     return config
 
 
@@ -92,7 +93,9 @@ def _patch_call(monkeypatch, responder):
     from manhua_pipeline.stages import stage3_translation as s3
 
     monkeypatch.setattr(
-        s3.OllamaBackend, "_call_ollama", lambda self, user_prompt: responder(user_prompt)
+        s3.OllamaBackend,
+        "_call_ollama",
+        lambda self, user_prompt: responder(user_prompt),
     )
     return s3
 
@@ -271,9 +274,7 @@ def test_unexpected_ids_rejected():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
     parsed = {"P001_R001": "good", "P999_R999": "ghost", "P002_R002": "other batch"}
-    accepted, missing, unexpected = OllamaBackend._validate_batch(
-        parsed, {"P001_R001"}
-    )
+    accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, {"P001_R001"})
     assert accepted == {"P001_R001": "good"}
     assert set(unexpected) == {"P999_R999", "P002_R002"}
     assert missing == []
@@ -305,9 +306,7 @@ def test_invalid_values_dropped():
 def test_validate_batch_no_overwrite():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
-    accepted, _, _ = OllamaBackend._validate_batch(
-        {"P001_R001": "keep"}, {"P001_R001"}
-    )
+    accepted, _, _ = OllamaBackend._validate_batch({"P001_R001": "keep"}, {"P001_R001"})
     assert accepted == {"P001_R001": "keep"}
 
 
@@ -318,7 +317,7 @@ def test_validate_batch_no_overwrite():
 
 def test_connectivity_failure_raises_clear(tmp_path, ollama_config, monkeypatch):
     import urllib.error
-    from manhua_pipeline.stages import stage3_translation as s3
+
 
     def boom(req, timeout=None):
         raise urllib.error.URLError("connection refused")
@@ -404,9 +403,17 @@ def test_zero_translations_raises(tmp_path, ollama_config, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_config_validation_rejects_bad_values(monkeypatch):
-    from manhua_pipeline.stages.stage3_translation import _validate_ollama_config
+def _validate_ollama_config(cfg):
+    from manhua_pipeline.stages._backends import (
+        OllamaSettings,
+        validate_ollama_settings,
+    )
 
+    s = OllamaSettings.from_config(cfg, prefix="OLLAMA")
+    validate_ollama_settings(s, "OLLAMA")
+
+
+def test_config_validation_rejects_bad_values(monkeypatch):
     monkeypatch.setattr(config, "OLLAMA_HOST", "http://localhost:11434", raising=False)
     monkeypatch.setattr(config, "OLLAMA_TRANSLATE_MODEL", "qwen2.5:3b", raising=False)
     monkeypatch.setattr(config, "OLLAMA_TIMEOUT", 30, raising=False)
@@ -433,8 +440,6 @@ def test_config_validation_rejects_bad_values(monkeypatch):
 
 
 def test_config_validation_accepts_good_values(monkeypatch):
-    from manhua_pipeline.stages.stage3_translation import _validate_ollama_config
-
     monkeypatch.setattr(config, "OLLAMA_HOST", "http://localhost:11434", raising=False)
     monkeypatch.setattr(config, "OLLAMA_TRANSLATE_MODEL", "qwen2.5:3b", raising=False)
     monkeypatch.setattr(config, "OLLAMA_BATCH_SIZE", 15, raising=False)

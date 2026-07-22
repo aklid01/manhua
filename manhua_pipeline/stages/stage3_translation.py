@@ -39,9 +39,18 @@ _PROMPT_INSTRUCTIONS = (
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 _FULLWIDTH_MAP = {
-    "\uff01": "!", "\uff1f": "?", "\uff0c": ",", "\u3002": ".",
-    "\uff1a": ":", "\uff1b": ";", "\uff08": "(", "\uff09": ")",
-    "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
+    "\uff01": "!",
+    "\uff1f": "?",
+    "\uff0c": ",",
+    "\u3002": ".",
+    "\uff1a": ":",
+    "\uff1b": ";",
+    "\uff08": "(",
+    "\uff09": ")",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u2018": "'",
+    "\u2019": "'",
     "\u3001": ",",
 }
 
@@ -74,8 +83,7 @@ class ManualBackend:
             config.TRANSLATION_RESPONSE_NAME,
         )
         return be.manual_request(
-            bundle, ws, config, paths, logger,
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
+            bundle, ws, config, paths, logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
         )
 
 
@@ -87,14 +95,8 @@ class McpBackend:
             config.TRANSLATION_RESPONSE_NAME,
         )
         return be.mcp_request(
-            bundle, ws, config, paths, logger,
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
+            bundle, ws, config, paths, logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
         )
-
-
-def _validate_ollama_config(config) -> None:
-    s = be.OllamaSettings.from_config(config, prefix="OLLAMA")
-    be.validate_ollama_settings(s, "OLLAMA")
 
 
 class OllamaBackend:
@@ -133,12 +135,17 @@ class OllamaBackend:
         n_batches = (total + batch_size - 1) // batch_size
         logger.info(
             "[%d/%d %s] Ollama: %d regions, %d batch(es), model=%s",
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, total, n_batches, self.model,
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            total,
+            n_batches,
+            self.model,
         )
 
         merged: dict = {}
         for bi in range(n_batches):
-            chunk = regions[bi * batch_size:(bi + 1) * batch_size]
+            chunk = regions[bi * batch_size : (bi + 1) * batch_size]
             t_batch = time.monotonic()
             accepted = self._translate_batch(chunk, depth=0)
             merged.update(accepted)
@@ -146,8 +153,14 @@ class OllamaBackend:
             missing = expected - len(accepted)
             logger.info(
                 "[%d/%d %s] Batch %d/%d: expected %d, accepted %d, missing %d (%.1fs)",
-                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
-                bi + 1, n_batches, expected, len(accepted), missing,
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                bi + 1,
+                n_batches,
+                expected,
+                len(accepted),
+                missing,
                 time.monotonic() - t_batch,
             )
 
@@ -165,7 +178,9 @@ class OllamaBackend:
             self._parse_json(raw), expected_ids
         )
         if unexpected:
-            logger.warning("[%s] Rejected %d unexpected IDs", _STAGE_NAME, len(unexpected))
+            logger.warning(
+                "[%s] Rejected %d unexpected IDs", _STAGE_NAME, len(unexpected)
+            )
         if not missing:
             return accepted
 
@@ -184,25 +199,35 @@ class OllamaBackend:
         else:
             logger.warning(
                 "[%s] Giving up on %d region(s) after recovery: %s",
-                _STAGE_NAME, len(missing), sorted(missing),
+                _STAGE_NAME,
+                len(missing),
+                sorted(missing),
             )
         return accepted
 
     def _build_user_prompt(self, chunk, strict: bool) -> str:
         payload = json.dumps(
-            [{"region_id": r["region_id"], "original_text": r["original_text"]} for r in chunk],
+            [
+                {"region_id": r["region_id"], "original_text": r["original_text"]}
+                for r in chunk
+            ],
             ensure_ascii=False,
         )
         strict_note = (
             "\nSTRICT: Return ONLY a valid JSON object. No prose, no code fences. "
             "One key per region_id. Do not merge or omit any region."
-            if strict else ""
+            if strict
+            else ""
         )
-        gloss = ("GLOSSARY (keep exactly):\n" + self.gloss_txt + "\n\n") if self.gloss_txt else ""
+        gloss = (
+            ("GLOSSARY (keep exactly):\n" + self.gloss_txt + "\n\n")
+            if self.gloss_txt
+            else ""
+        )
         return (
             gloss
             + "Translate each object's original_text. Return a JSON object mapping "
-              "region_id -> english. REGIONS:\n" + payload + strict_note
+            "region_id -> english. REGIONS:\n" + payload + strict_note
         )
 
     def _call_ollama(self, user_prompt: str) -> str:
@@ -460,12 +485,22 @@ def run_translation(workspace: str, config) -> Path | None:
             _TOTAL_STAGES,
             _STAGE_NAME,
         )
-        return _write_output(TranslationWriteContext(
-            ws=ws, config=config, manifest=manifest, ocr_data=ocr_data,
-            glossary=glossary, translation_map={}, usable=usable, skipped=skipped,
-            overridden_regions=overridden_regions, overrides=overrides,
-            locked=locked, t0=t0,
-        ))
+        return _write_output(
+            TranslationWriteContext(
+                ws=ws,
+                config=config,
+                manifest=manifest,
+                ocr_data=ocr_data,
+                glossary=glossary,
+                translation_map={},
+                usable=usable,
+                skipped=skipped,
+                overridden_regions=overridden_regions,
+                overrides=overrides,
+                locked=locked,
+                t0=t0,
+            )
+        )
 
     bundle = _build_bundle(usable, locked)
     backend = _get_backend(config)
@@ -500,27 +535,55 @@ def run_translation(workspace: str, config) -> Path | None:
             logger.error(
                 "[%d/%d %s] Completion %.0f%% < %.0f%% threshold - writing artifacts "
                 "but NOT advancing manifest. Re-run after investigating.",
-                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100, min_ratio * 100,
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                ratio * 100,
+                min_ratio * 100,
             )
-            _write_output(TranslationWriteContext(
-                ws=ws, config=config, manifest=manifest, ocr_data=ocr_data,
-                glossary=glossary, translation_map=translation_map,
-                usable=usable, skipped=skipped, overridden_regions=overridden_regions,
-                overrides=overrides, locked=locked, t0=t0, advance=False,
-            ))
+            _write_output(
+                TranslationWriteContext(
+                    ws=ws,
+                    config=config,
+                    manifest=manifest,
+                    ocr_data=ocr_data,
+                    glossary=glossary,
+                    translation_map=translation_map,
+                    usable=usable,
+                    skipped=skipped,
+                    overridden_regions=overridden_regions,
+                    overrides=overrides,
+                    locked=locked,
+                    t0=t0,
+                    advance=False,
+                )
+            )
             return None
         if ratio < 1.0:
             logger.warning(
                 "[%d/%d %s] Completion %.0f%% (advancing with warning).",
-                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, ratio * 100,
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                ratio * 100,
             )
 
-    return _write_output(TranslationWriteContext(
-        ws=ws, config=config, manifest=manifest, ocr_data=ocr_data,
-        glossary=glossary, translation_map=translation_map,
-        usable=usable, skipped=skipped, overridden_regions=overridden_regions,
-        overrides=overrides, locked=locked, t0=t0,
-    ))
+    return _write_output(
+        TranslationWriteContext(
+            ws=ws,
+            config=config,
+            manifest=manifest,
+            ocr_data=ocr_data,
+            glossary=glossary,
+            translation_map=translation_map,
+            usable=usable,
+            skipped=skipped,
+            overridden_regions=overridden_regions,
+            overrides=overrides,
+            locked=locked,
+            t0=t0,
+        )
+    )
 
 
 @dataclass
@@ -542,8 +605,16 @@ class TranslationWriteContext:
 
 def _write_output(ctx: TranslationWriteContext) -> Path:
     ws, config, manifest = ctx.ws, ctx.config, ctx.manifest
-    ocr_data, glossary, translation_map = ctx.ocr_data, ctx.glossary, ctx.translation_map
-    usable, skipped, overridden_regions = ctx.usable, ctx.skipped, ctx.overridden_regions
+    ocr_data, glossary, translation_map = (
+        ctx.ocr_data,
+        ctx.glossary,
+        ctx.translation_map,
+    )
+    usable, skipped, overridden_regions = (
+        ctx.usable,
+        ctx.skipped,
+        ctx.overridden_regions,
+    )
     overrides, locked, t0, advance = ctx.overrides, ctx.locked, ctx.t0, ctx.advance
 
     now = datetime.now(timezone.utc).isoformat()
@@ -590,7 +661,8 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
             skip_reason = None
             trans_source = (
                 f"ollama:{getattr(config, 'OLLAMA_TRANSLATE_MODEL', '')}"
-                if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama" else "llm"
+                if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+                else "llm"
             )
         else:
             final_text, applied, conflict = "", [], False
@@ -644,9 +716,11 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
         "generated_at": now,
         "translator_backend": getattr(config, "TRANSLATOR_BACKEND", "manual"),
         "translator_model": getattr(config, "OLLAMA_TRANSLATE_MODEL", None)
-            if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama" else None,
+        if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+        else None,
         "translator_temperature": getattr(config, "OLLAMA_TEMPERATURE", None)
-            if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama" else None,
+        if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+        else None,
         "prompt_version": getattr(config, "OLLAMA_PROMPT_VERSION", "translation-v1"),
         "glossary_version": glossary_version,
         "results": results,
@@ -709,7 +783,9 @@ def build_translation_bundle(chapter_dir: str | Path, config) -> dict:
     overrides = load_overrides(ws, config)
 
     all_results = ocr_data.get("results", [])
-    _, usable, _ = _partition_regions_translation(all_results, overrides, config, log=False)
+    _, usable, _ = _partition_regions_translation(
+        all_results, overrides, config, log=False
+    )
 
     return _build_bundle(usable, locked)
 
@@ -737,7 +813,9 @@ def write_translation_response(
     overrides = load_overrides(ws, config)
 
     all_results = ocr_data.get("results", [])
-    _, usable, _ = _partition_regions_translation(all_results, overrides, config, log=False)
+    _, usable, _ = _partition_regions_translation(
+        all_results, overrides, config, log=False
+    )
 
     usable_ids = [r["region_id"] for r in usable]
     clean_map, warnings = _validate_response(mapping, usable_ids)

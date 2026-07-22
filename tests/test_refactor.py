@@ -1,7 +1,8 @@
 import json
 
-import config
 import pytest
+
+import config
 
 
 @pytest.fixture(autouse=True)
@@ -48,46 +49,44 @@ def test_two_chapters_isolated(tmp_path):
 
 
 def test_series_glossary_inherited(tmp_path):
+    import json
+
     import config
-    from manhua_pipeline.io.glossary_series import load_series_glossary, merge_glossary
+    from manhua_pipeline.io.glossary_series import (
+        load_series_glossary,
+        series_glossary_path,
+    )
 
     base = tmp_path / "SeriesA"
     base.mkdir()
-    merge_glossary(
-        base,
-        [
+    p = series_glossary_path(base, config)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(
             {
-                "term_id": "yu_lili",
-                "source_term": "于丽丽",
-                "target_term": "Yu Lili",
-                "category": "person_name",
-                "locked": True,
-                "auto_seeded": True,
-                "source_region": "P002_R002",
-                "notes": "",
+                "version": "v1",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "terms": [
+                    {
+                        "term_id": "yu_lili",
+                        "source_term": "于丽丽",
+                        "target_term": "Yu Lili",
+                    },
+                    {
+                        "term_id": "lin_yi",
+                        "source_term": "林逸",
+                        "target_term": "Lin Yi",
+                    },
+                ],
             }
-        ],
+        ),
+        encoding="utf-8",
     )
+
     g = load_series_glossary(base, config)
-    assert any(t["target_term"] == "Yu Lili" for t in g["terms"])
-    merge_glossary(
-        base,
-        [
-            {
-                "term_id": "lin_yi",
-                "source_term": "林逸",
-                "target_term": "Lin Yi",
-                "category": "person_name",
-                "locked": True,
-                "auto_seeded": True,
-                "source_region": "P005_R001",
-                "notes": "",
-            }
-        ],
-    )
-    g2 = load_series_glossary(base, config)
-    ids = {t["term_id"] for t in g2["terms"]}
+    ids = {t["term_id"] for t in g["terms"]}
     assert {"yu_lili", "lin_yi"} <= ids
+
 
 
 def test_fresh_clears_chapter_artifacts(tmp_path):
@@ -210,12 +209,8 @@ def test_run_all_stops_at_handoff(tmp_path, monkeypatch):
         "run_translation",
         lambda ws, cfg: calls.append("t") or None,
     )  # None => awaiting handoff
-    monkeypatch.setattr(
-        s4, "run_paraphrase", lambda ws, cfg: calls.append("p")
-    )
-    monkeypatch.setattr(
-        s5, "run_render", lambda ws, cfg: calls.append("r")
-    )
+    monkeypatch.setattr(s4, "run_paraphrase", lambda ws, cfg: calls.append("p"))
+    monkeypatch.setattr(s5, "run_render", lambda ws, cfg: calls.append("r"))
     pipeline._run_all_from(tmp_path, config, start="translate")
     assert calls == [
         "t"

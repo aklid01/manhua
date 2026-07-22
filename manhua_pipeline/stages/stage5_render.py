@@ -105,34 +105,6 @@ def _estimate_bg(
     )
 
 
-def _find_row_boundaries(
-    is_white: list[list[bool]], width: int, height: int
-) -> tuple[list[int], list[int]]:
-    first_w = [-1] * height
-    last_w = [-1] * height
-    for y in range(height):
-        for x in range(width):
-            if is_white[y][x]:
-                if first_w[y] == -1:
-                    first_w[y] = x
-                last_w[y] = x
-    return first_w, last_w
-
-
-def _find_col_boundaries(
-    is_white: list[list[bool]], width: int, height: int
-) -> tuple[list[int], list[int]]:
-    first_w = [-1] * width
-    last_w = [-1] * width
-    for x in range(width):
-        for y in range(height):
-            if is_white[y][x]:
-                if first_w[x] == -1:
-                    first_w[x] = y
-                last_w[x] = y
-    return first_w, last_w
-
-
 def _bfs(
     sx: int,
     sy: int,
@@ -189,23 +161,29 @@ def _get_bubble_mask(
 ) -> Image.Image:
     """Generate a binary mask identifying the white/near-white bubble area."""
     import numpy as np
+
     img = bbox_img.convert("RGB")
     width, height = img.size
     threshold = getattr(config, "BUBBLE_WHITE_THRESHOLD", 220)
 
     # 1. Create a binary grid of white pixels
     arr = np.asarray(img)
-    is_white = (arr[:, :, 0] > threshold) & (arr[:, :, 1] > threshold) & (arr[:, :, 2] > threshold)
+    is_white = (
+        (arr[:, :, 0] > threshold)
+        & (arr[:, :, 1] > threshold)
+        & (arr[:, :, 2] > threshold)
+    )
 
     # 2. Keep only the largest connected component of white pixels (noise filter)
     try:
         from scipy.ndimage import label
+
         labeled, num_features = label(is_white)
         if num_features > 0:
             counts = np.bincount(labeled.ravel())
             counts[0] = 0
             largest_label = counts.argmax()
-            is_white = (labeled == largest_label)
+            is_white = labeled == largest_label
         else:
             is_white = np.zeros_like(is_white)
     except ImportError:
@@ -238,9 +216,13 @@ def _get_bubble_mask(
 
     # 4. Fill enclosed holes
     y_coords, x_coords = np.indices((height, width))
-    has_left = touches_left | ((first_w_in_row[y_coords] != -1) & (first_w_in_row[y_coords] < x_coords))
+    has_left = touches_left | (
+        (first_w_in_row[y_coords] != -1) & (first_w_in_row[y_coords] < x_coords)
+    )
     has_right = touches_right | (last_w_in_row[y_coords] > x_coords)
-    has_top = touches_top | ((first_w_in_col[x_coords] != -1) & (first_w_in_col[x_coords] < y_coords))
+    has_top = touches_top | (
+        (first_w_in_col[x_coords] != -1) & (first_w_in_col[x_coords] < y_coords)
+    )
     has_bottom = touches_bottom | (last_w_in_col[x_coords] > y_coords)
 
     mask_arr = is_white | (has_left & has_right & has_top & has_bottom)
@@ -687,7 +669,9 @@ def _render_credits_page(render_dir: Path, config, page_size) -> "Path | None":
             im = im.resize(page_size, Image.Resampling.LANCZOS)
         W, H = im.size
         draw = ImageDraw.Draw(im)
-        font_path = str(root / getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Bold.ttf"))
+        font_path = str(
+            root / getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Bold.ttf")
+        )
         fill = getattr(config, "CREDITS_TEXT_FILL", (240, 236, 225))
 
         for field, cx, cy, align, max_pt, pw, ph in slots:
@@ -697,8 +681,9 @@ def _render_credits_page(render_dir: Path, config, page_size) -> "Path | None":
             pwx, phx = int(pw * W), int(ph * H)
             x0 = int(cx * W) - (pwx // 2 if align == "center" else int(0.005 * W))
             y0 = int(cy * H) - phx // 2
-            draw.rectangle([x0, y0, x0 + pwx, y0 + phx],
-                           fill=_sample_bg(im, cx, cy, W, H, align))
+            draw.rectangle(
+                [x0, y0, x0 + pwx, y0 + phx], fill=_sample_bg(im, cx, cy, W, H, align)
+            )
             f = _fit_font(draw, val, font_path, max_pt, pwx - 10)
             tw = draw.textlength(val, font=f)
             tx = int(cx * W) - tw / 2 if align == "center" else x0 + 6
@@ -712,6 +697,7 @@ def _render_credits_page(render_dir: Path, config, page_size) -> "Path | None":
     except Exception as exc:
         logger.warning("[%s] Credits page skipped (%s).", _STAGE_NAME, exc)
         return None
+
 
 def run_render(workspace: str, config) -> Path:
     """Run the Rendering stage."""
