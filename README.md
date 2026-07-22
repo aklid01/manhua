@@ -330,9 +330,9 @@ your-series/
 
 - **Detection** defaults to RT-DETR (`ogkalu/comic-text-and-bubble-detector`) with YOLOv8 as fallback, skipping text-free regions (SFX/watermark/credits) during downstream OCR.
 - **OCR** retries low-confidence regions with escalating image preprocessing, keeping the best result - deterministic OCR only improves when the _input_ changes.
-- **Translation / Paraphrase** each pick a backend independently (`manual`, `mcp`, `ollama`) and enforce a locked glossary, flagging conflicts rather than silently rewriting.
-- **Rendering** typesets each bubble with the `ComicNeue-Bold` font and appends a randomly chosen **credits page** (outside the QA/manifest page count).
-- **Split-bubble stitching** (detection sub-step) merges a bubble sliced across two pages into one, with a strict "text on both halves" guard so corrupt pages fall back safely.
+- **Translation / Paraphrase** each pick a backend independently (`manual`, `mcp`, `ollama`) and enforce a locked glossary, flagging conflicts rather than silently rewriting. Single-character CJK noise/SFX is filtered from blocking chapter completion and glossary auto-seeding.
+- **Rendering** typesets each bubble with adaptive WCAG text coloring (white text on dark background balloons, black text on light backgrounds) and appends a randomly chosen **credits page** (outside the QA/manifest page count).
+- **Split-bubble stitching** (detection sub-step) merges a bubble sliced across two pages into one using container bubble geometry (RT-DETR) and a relaxed text probe for cut-off edge regions.
 
 ---
 
@@ -426,13 +426,13 @@ All tunables live in `config.py`. Highlights:
 | Area                    | Keys                                                                      |
 | ----------------------- | ------------------------------------------------------------------------- |
 | **Backends**            | `TRANSLATOR_BACKEND`, `PARAPHRASE_BACKEND`                                |
-| **Ollama (translate)**  | `OLLAMA_*` - host, model, batch size, retries, completion gate            |
+| **Ollama (translate)**  | `OLLAMA_*` - host, model, batch size, retries, completion gate (`OLLAMA_MAX_MISSING`, `OLLAMA_TRIVIAL_CJK_CHARS`) |
 | **Ollama (paraphrase)** | `OLLAMA_PARA_*` - same knobs, tuned for natural phrasing                  |
 | **OCR**                 | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`, `OCR_RETRY_ENABLED`, `OCR_RETRY_MAX` |
 | **Detection**           | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `RTDETR_CONF`, `RTDETR_SKIP_TEXT_FREE`, `DETECTOR_USE_GPU` |
-| **Rendering**           | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                 |
+| **Rendering**           | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`, adaptive text fill on dark bubbles |
 | **Credits**             | `CREDITS_TEMPLATES`, `CREDITS_DIR` (+ `credits` block in `settings.json`) |
-| **Stitching**           | `STITCH_ENABLED`, `STITCH_EDGE_EPS`, `STITCH_MIN_X_OVERLAP`               |
+| **Stitching**           | `STITCH_ENABLED`, `STITCH_EDGE_EPS`, `STITCH_MIN_X_OVERLAP`, `STITCH_TEXT_MIN_CONF` |
 | **Packaging**           | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                             |
 | **QA**                  | `SUCCESS_MAX`, `REVIEW_MAX` warning thresholds                            |
 
