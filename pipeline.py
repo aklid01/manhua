@@ -23,6 +23,11 @@ import argparse
 import os
 import sys
 import time
+# comment these if you want to see HF and transformers requests warnings
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path

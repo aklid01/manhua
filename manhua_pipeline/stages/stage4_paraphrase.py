@@ -6,6 +6,7 @@ Classifies register (rude, label, neutral) using a local heuristic.
 """
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +23,21 @@ logger = get_logger(__name__)
 _STAGE_INDEX = 4
 _TOTAL_STAGES = 7
 _STAGE_NAME = "Paraphrase"
+
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(_CJK_RE.search(text or ""))
+
+
+def _cjk_ratio(text: str) -> float:
+    """Fraction of non-space chars that are Han ideographs."""
+    chars = [c for c in text if not c.isspace()]
+    if not chars:
+        return 0.0
+    return sum(1 for c in chars if _contains_cjk(c)) / len(chars)
+
 
 _PROMPT_INSTRUCTIONS = (
     "Rewrite each literal English line as natural, casual, SPOKEN US English for a "
@@ -253,6 +269,8 @@ class OllamaBackend:
             if not isinstance(v, str) or not v.strip():
                 continue
             val = v.strip()
+            if _cjk_ratio(val) > 0.30:
+                continue
             if literals.get(k, "").strip() and val == literals[k].strip():
                 logger.info(
                     "[%s] %s: paraphrase echoes literal (allowed).", _STAGE_NAME, k
@@ -382,7 +400,12 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
             warnings.append(f"Unexpected region_id in response (ignored): {rid!r}")
             continue
         if not isinstance(val, str) or not val.strip():
-            warnings.append(f"Empty/non-string value for {rid!r} — treated as missing.")
+            warnings.append(f"Empty/non-string value for {rid!r} - treated as missing.")
+            continue
+        if _cjk_ratio(val) > 0.30:
+            warnings.append(
+                f"Residual CJK in paraphrase for {rid!r} - treated as missing."
+            )
             continue
         clean[rid] = val.strip()
 

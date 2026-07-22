@@ -481,7 +481,7 @@ def test_residual_cjk_rejected_as_missing():
     parsed = {
         "P001_R001": "滚吧！",
         "P001_R002": "Get out!",
-        "P001_R003": "Get out 滚吧",
+        "P001_R003": "Get out 滚吧了",
     }
     accepted, missing, _ = OllamaBackend._validate_batch(
         parsed, {"P001_R001", "P001_R002", "P001_R003"}

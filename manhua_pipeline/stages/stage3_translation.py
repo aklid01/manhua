@@ -60,6 +60,14 @@ def _contains_cjk(text: str) -> bool:
     return bool(_CJK_RE.search(text or ""))
 
 
+def _cjk_ratio(text: str) -> float:
+    """Fraction of non-space chars that are Han ideographs."""
+    chars = [c for c in text if not c.isspace()]
+    if not chars:
+        return 0.0
+    return sum(1 for c in chars if _contains_cjk(c)) / len(chars)
+
+
 def _normalize_punct(text: str) -> str:
     """Replace full-width CJK punctuation with ASCII equivalents."""
     return "".join(_FULLWIDTH_MAP.get(c, c) for c in text)
@@ -262,7 +270,7 @@ class OllamaBackend:
                 continue
             if not isinstance(v, str) or not v.strip():
                 continue
-            if _contains_cjk(v):
+            if _cjk_ratio(v) > 0.30:
                 continue
             if k not in accepted:
                 accepted[k] = _normalize_punct(v.strip())
@@ -362,9 +370,9 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
         if not isinstance(val, str) or not val.strip():
             warnings.append(f"Empty/non-string value for {rid!r} — treated as missing.")
             continue
-        if _contains_cjk(val):
+        if _cjk_ratio(val) > 0.30:
             warnings.append(
-                f"Residual CJK in translation for {rid!r} — treated as "
+                f"Residual CJK in translation for {rid!r} - treated as "
                 f"needs_translation (not sent downstream)."
             )
             continue
@@ -685,6 +693,33 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
             skip_reason = None
             trans_source = None
             missing_count += 1
+            import re
+
+            from manhua_pipeline.io.glossary_series import append_glossary_term
+
+            cjk_bits = re.findall(r"[\u3400-\u9fff]+", region.get("original_text", ""))
+            snippet = cjk_bits[0] if cjk_bits else region["region_id"]
+            logger.warning(
+                "[%s] %s not translated. Checking glossary for %r ...",
+                _STAGE_NAME,
+                region["region_id"],
+                snippet,
+            )
+            glossary_terms = {t.get("source_term") for t in glossary.get("terms", [])}
+            if snippet in glossary_terms:
+                logger.info(
+                    "[%s]   Found %r in glossary - model should use it next run.",
+                    _STAGE_NAME,
+                    snippet,
+                )
+            else:
+                append_glossary_term(ws.parent, config, snippet)
+                logger.warning(
+                    "[%s]   %r not in glossary. Added a stub - please set its English translation in %s/glossary.json and re-run to fix this region.",
+                    _STAGE_NAME,
+                    snippet,
+                    ws.parent.name,
+                )
 
         if translated:
             translated_count += 1
