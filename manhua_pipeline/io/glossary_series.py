@@ -42,7 +42,7 @@ def load_series_glossary(base_dir: Path, config) -> dict:
 
 
 def append_glossary_term(
-    base_dir: Path, config, source_term: str, target_term: str = "", locked: bool = True
+    base_dir: Path, config, source_term: str, target_term: str = "", locked: bool = False
 ) -> None:
     """Add a term stub if the source_term isn't already present."""
     p = series_glossary_path(base_dir, config)
@@ -54,7 +54,7 @@ def append_glossary_term(
             "source_term": source_term,
             "target_term": target_term,
             "locked": locked,
-            "notes": "auto-added: needs manual target",
+            "notes": "auto-added HINT; set target + set locked:true only if a real recurring name",
         }
     )
     g["updated_at"] = datetime.now(timezone.utc).isoformat()

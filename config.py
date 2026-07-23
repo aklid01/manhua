@@ -55,7 +55,8 @@ WATERMARK_PATTERNS = [
     r"b\s*a\s*o?\s*z\s*[i1l]\s*m\s*h",
     r"tencent|腾讯",
     r"colamanga|cola\s*manga",
-    r"包\s*子\s*漫\s*[画畫]",
+    r"包?\s*子\s*漫\s*[画畫]",
+    r"漫\s*[画畫]\s*屋?",
     r"最新免[费費]漫[画畫]",
     r"免[费費]漫[画畫]",
 ]
