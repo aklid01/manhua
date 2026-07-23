@@ -186,8 +186,3 @@ STITCH_MIN_X_OVERLAP = 0.5  # min overlap as fraction of the narrower box's widt
 STITCH_MAX_CHAIN = 4  # Max pages a single bubble may span
 STITCH_TEXT_PROBE = True  # require usable text on both halves (guard #4)
 STITCH_TEXT_MIN_CONF = 0.15  # relaxed text confidence floor for split halves
-
-# ---- Promo/ad page skip ----
-PROMO_SKIP_ENABLED = True
-PROMO_MAX_BUBBLES = 1  # promo page has <= this many real (parented) speech bubbles
-PROMO_MIN_NARRATION = 4  # ...AND at least this many narration/SFX regions

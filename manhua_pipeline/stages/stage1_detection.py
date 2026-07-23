@@ -591,24 +591,6 @@ def _apply_stitching(
     return new_pages, new_regions
 
 
-def _is_promo_page(regions: list, config) -> tuple[bool, str]:
-    """Promo/ad page = overwhelmingly narration/SFX with ~no real dialogue bubbles.
-    Conservative: requires ZERO-to-one real parented dialogue bubbles."""
-    if not getattr(config, "PROMO_SKIP_ENABLED", False):
-        return False, ""
-    real_bubbles = [
-        r
-        for r in regions
-        if r.get("type") == config.TYPE_SPEECH and r.get("parent_bubble")
-    ]
-    narration = [r for r in regions if r.get("is_free_text")]
-    max_bub = getattr(config, "PROMO_MAX_BUBBLES", 1)
-    min_narr = getattr(config, "PROMO_MIN_NARRATION", 4)
-    if len(real_bubbles) <= max_bub and len(narration) >= min_narr:
-        return True, f"promo_page ({len(real_bubbles)} bubble(s), {len(narration)} narration/SFX)"
-    return False, ""
-
-
 def run_detection(workspace: str, config) -> Path:
     """Run bubble and narration detection over all usable pages."""
     t0 = time.monotonic()
@@ -693,7 +675,7 @@ def run_detection(workspace: str, config) -> Path:
             )
         except Exception as exc:
             logger.warning(
-                "[%s] Page %03d - failed detection: %s",
+                "[%s] Page %03d — failed detection: %s",
                 _STAGE_NAME,
                 page_num,
                 exc,
@@ -701,32 +683,10 @@ def run_detection(workspace: str, config) -> Path:
             per_page_regions[page_num] = []
             warnings += 1
 
-    # 3b. Stitching sub-step (Feature 4) - before writing detection.json
+    # 3b. Stitching sub-step (Feature 4) — before writing detection.json
     new_pages_meta, new_regions_by_page = _apply_stitching(
         ws, manifest, per_page_regions, model, config, overlays_dir
     )
-
-    # 3c. Promo/ad page skip (page-level)
-    if getattr(config, "PROMO_SKIP_ENABLED", False):
-        page_by_num = {p["page_number"]: p for p in new_pages_meta}
-        for pnum, regs in list(new_regions_by_page.items()):
-            is_promo, reason = _is_promo_page(regs, config)
-            if is_promo:
-                pg = page_by_num.get(pnum)
-                if pg is not None:
-                    pg["skip"] = True
-                    pg["skip_reason"] = "promo_page"
-                new_regions_by_page[pnum] = []
-                logger.warning(
-                    "[%s] Page %d flagged PROMO -> skipped (%s). "
-                    "If this is a real story page, lower PROMO thresholds or set "
-                    "PROMO_SKIP_ENABLED=False and re-run.",
-                    _STAGE_NAME,
-                    pnum,
-                    reason,
-                )
-
-    manifest["total_pages"] = len(new_pages_meta)
     manifest["pages"] = new_pages_meta
     regions = [r for pg in sorted(new_regions_by_page) for r in new_regions_by_page[pg]]
 
