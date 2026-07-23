@@ -215,6 +215,7 @@ python pipeline_gui.py
 ```
 
 - **Series & Input Pickers**: Set your series folder and choose a chapter input (folder or CBZ/ZIP archive).
+- **Skip Trailing Pages**: Set a spinner to skip promo, ad, or credit pages at the end of a chapter during import.
 - **Sequential Execution**: Stages unlock step-by-step as each preceding stage completes.
 - **Handoff & Resume Tracking**: If a `manual` or `mcp` backend requires external input, the stage button dynamically updates to **Resume ▶ <Stage>** and the log displays step-by-step handoff instructions.
 - **Idempotent Continuation**: Saving the response file and clicking **Resume ▶** ingests the response, advances the chapter manifest, and unlocks the next stage.
@@ -274,6 +275,7 @@ python pipeline.py package --chapter chapter_001 --package zip,cbz,tar,pdf
 | `--chapter`        | most stages               | Target an existing chapter by name.                                    |
 | `--workspace`      | most stages               | Target a chapter by workspace path (relative or absolute).             |
 | `--fresh`          | import / run-all          | Wipe prior stage outputs before importing.                             |
+| `--skip-last`      | import / run-all / batch  | Skip the last N pages (promo/ad/credits pages at chapter end).         |
 | `--from-stage`     | run-all                   | Resume from a given stage.                                             |
 | `--package`        | run-all / batch / package | Comma-separated formats: `zip,cbz,tar,pdf`.                            |
 | `--title-romanized`| import / run-all          | Set romanized series/chapter title metadata.                           |
