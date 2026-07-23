@@ -408,60 +408,60 @@ def _x_overlap_frac(a, b) -> float:
     return inter / narrower
 
 
-def _find_split_pairs(det_by_page: dict, pages_meta: list, config) -> list:
-    """Return confirmed-by-geometry split candidates as tuples
-    (page_num_a, page_num_b, box_a, box_b). Enforces pairwise-only via a `used` set."""
+def _pages_link(a, b, det_by_page, config) -> bool:
+    """True if page a's bottom speech bubble continues into page b's top speech bubble."""
     eps = getattr(config, "STITCH_EDGE_EPS", 6)
     min_ov = getattr(config, "STITCH_MIN_X_OVERLAP", 0.5)
-    order = [p for p in pages_meta if not p.get("skip") and p.get("filename")]
-    used, pairs = set(), []
-    for a, b in zip(order, order[1:]):
-        na, nb = a["page_number"], b["page_number"]
-        if na in used or nb in used:
-            continue
-        ha = a.get("height") or 0
-        bottom = [
-            x
-            for x in det_by_page.get(na, [])
-            if x.get("type") == config.TYPE_SPEECH
-            and _box_touches_bottom(_stitch_box(x), ha, eps)
-        ]
-        top = [
-            x
-            for x in det_by_page.get(nb, [])
-            if x.get("type") == config.TYPE_SPEECH
-            and _box_touches_top(_stitch_box(x), eps)
-        ]
-        if bottom or top:
+    ha = a.get("height") or 0
+    bottom = [
+        x
+        for x in det_by_page.get(a["page_number"], [])
+        if x.get("type") == config.TYPE_SPEECH and _box_touches_bottom(_stitch_box(x), ha, eps)
+    ]
+    top = [
+        x
+        for x in det_by_page.get(b["page_number"], [])
+        if x.get("type") == config.TYPE_SPEECH and _box_touches_top(_stitch_box(x), eps)
+    ]
+    for bx in bottom:
+        for tx in top:
+            ov = _x_overlap_frac(_stitch_box(bx), _stitch_box(tx))
             logger.info(
-                "[%s] Stitch check %d->%d: %d bottom-edge bubble(s), %d top-edge bubble(s)",
+                "[%s]   link %d->%d overlap=%.2f (need >=%.2f) %s",
                 _STAGE_NAME,
-                na,
-                nb,
-                len(bottom),
-                len(top),
+                a["page_number"],
+                b["page_number"],
+                ov,
+                min_ov,
+                "MATCH" if ov >= min_ov else "no",
             )
-        found = None
-        for bx in bottom:
-            for tx in top:
-                ov = _x_overlap_frac(_stitch_box(bx), _stitch_box(tx))
-                logger.info(
-                    "[%s]   candidate overlap=%.2f (need >= %.2f) %s",
-                    _STAGE_NAME,
-                    ov,
-                    min_ov,
-                    "MATCH" if ov >= min_ov else "below-threshold",
-                )
-                if ov >= min_ov:
-                    found = (na, nb, bx, tx)
-                    break
-            if found:
-                break
-        if found:
-            pairs.append(found)
-            used.add(na)
-            used.add(nb)
-    return pairs
+            if ov >= min_ov:
+                return True
+    return False
+
+
+def _find_split_chains(det_by_page, pages_meta, config) -> list[list[int]]:
+    """Greedy consecutive chains of page numbers to merge, e.g. [[5,6,7],[12,13]]. Cap = STITCH_MAX_CHAIN."""
+    max_chain = getattr(config, "STITCH_MAX_CHAIN", 4)
+    order = [p for p in pages_meta if not p.get("skip") and p.get("filename")]
+    chains, i = [], 0
+    while i < len(order) - 1:
+        chain = [order[i]["page_number"]]
+        j = i
+        while (
+            j + 1 < len(order)
+            and len(chain) < max_chain
+            and _pages_link(order[j], order[j + 1], det_by_page, config)
+        ):
+            chain.append(order[j + 1]["page_number"])
+            j += 1
+        if len(chain) > 1:
+            chains.append(chain)
+            logger.info("[%s] Split chain: %s", _STAGE_NAME, chain)
+            i = j + 1
+        else:
+            i += 1
+    return chains
 
 
 def _half_has_text(ws, page_meta, box, config, ocr_engine) -> bool:
@@ -478,17 +478,44 @@ def _half_has_text(ws, page_meta, box, config, ocr_engine) -> bool:
     return bool(text.strip()) and mean >= stitch_floor
 
 
-def _merge_page_images(ws, page_a, page_b, config) -> tuple:
-    """Vertically concat A over B into A's filename slot. Returns (new_w, new_h, seam_y)."""
+def _link_has_text(ws, page_a, page_b, det_by_page, config, ocr_engine) -> bool:
+    """True if bottom bubble of page_a and top bubble of page_b linked in split both have text."""
+    eps = getattr(config, "STITCH_EDGE_EPS", 6)
+    min_ov = getattr(config, "STITCH_MIN_X_OVERLAP", 0.5)
+    ha = page_a.get("height") or 0
+    bottom = [
+        x
+        for x in det_by_page.get(page_a["page_number"], [])
+        if x.get("type") == config.TYPE_SPEECH and _box_touches_bottom(_stitch_box(x), ha, eps)
+    ]
+    top = [
+        x
+        for x in det_by_page.get(page_b["page_number"], [])
+        if x.get("type") == config.TYPE_SPEECH and _box_touches_top(_stitch_box(x), eps)
+    ]
+    for bx in bottom:
+        for tx in top:
+            if _x_overlap_frac(_stitch_box(bx), _stitch_box(tx)) >= min_ov:
+                if _half_has_text(ws, page_a, bx, config, ocr_engine) and _half_has_text(
+                    ws, page_b, tx, config, ocr_engine
+                ):
+                    return True
+    return False
+
+
+def _merge_page_chain(ws, head_page, other_pages, config) -> tuple:
+    """Concat head + others vertically into head's filename slot. Returns (W, H, first_seam_y)."""
     pdir = ws / config.STAGE_FOLDERS["pages"]
-    ia = Image.open(pdir / page_a["filename"]).convert("RGB")
-    ib = Image.open(pdir / page_b["filename"]).convert("RGB")
-    W, seam, H = max(ia.width, ib.width), ia.height, ia.height + ib.height
+    imgs = [Image.open(pdir / head_page["filename"]).convert("RGB")]
+    imgs += [Image.open(pdir / p["filename"]).convert("RGB") for p in other_pages]
+    W, H = max(im.width for im in imgs), sum(im.height for im in imgs)
     merged = Image.new("RGB", (W, H), (255, 255, 255))
-    merged.paste(ia, (0, 0))
-    merged.paste(ib, (0, seam))
-    merged.save(pdir / page_a["filename"])
-    return W, H, seam
+    y = 0
+    for im in imgs:
+        merged.paste(im, (0, y))
+        y += im.height
+    merged.save(pdir / head_page["filename"])
+    return W, H, imgs[0].height
 
 
 def _apply_stitching(
@@ -501,34 +528,31 @@ def _apply_stitching(
     if not getattr(config, "STITCH_ENABLED", False):
         return pages_meta, per_page_regions
 
-    candidates = _find_split_pairs(per_page_regions, pages_meta, config)
+    chains = _find_split_chains(per_page_regions, pages_meta, config)
 
     confirmed = []
-    if candidates and getattr(config, "STITCH_TEXT_PROBE", True):
+    if chains and getattr(config, "STITCH_TEXT_PROBE", True):
         from manhua_pipeline.stages.stage2_ocr import _get_ocr
 
         ocr_engine = _get_ocr(config)
         by_num = {p["page_number"]: p for p in pages_meta}
-        for na, nb, bx, tx in candidates:
-            if _half_has_text(
-                ws, by_num[na], bx, config, ocr_engine
-            ) and _half_has_text(ws, by_num[nb], tx, config, ocr_engine):
-                confirmed.append((na, nb))
+        for chain in chains:
+            ok = all(
+                _link_has_text(ws, by_num[na], by_num[nb], per_page_regions, config, ocr_engine)
+                for na, nb in zip(chain, chain[1:])
+            )
+            if ok:
+                confirmed.append(chain)
             else:
-                logger.info(
-                    "[%s] Split candidate %d+%d rejected (text guard).",
-                    _STAGE_NAME,
-                    na,
-                    nb,
-                )
-    elif candidates:
-        confirmed = [(na, nb) for na, nb, _bx, _tx in candidates]
+                logger.info("[%s] Chain %s rejected (text guard).", _STAGE_NAME, chain)
+    else:
+        confirmed = chains
 
     if not confirmed:
         return pages_meta, per_page_regions
 
-    merged_away = {nb for _na, nb in confirmed}
-    merge_map = {na: nb for na, nb in confirmed}
+    merged_away = {n for ch in confirmed for n in ch[1:]}
+    head_of = {ch[0]: ch for ch in confirmed}
 
     new_pages, new_regions = [], {}
     seq = 0
@@ -537,10 +561,10 @@ def _apply_stitching(
         if n in merged_away:
             continue
         seq += 1
-        if n in merge_map:
-            nb = merge_map[n]
-            pb = next(x for x in pages_meta if x["page_number"] == nb)
-            W, H, seam = _merge_page_images(ws, p, pb, config)
+        if n in head_of:
+            chain = head_of[n]
+            others = [next(x for x in pages_meta if x["page_number"] == m) for m in chain[1:]]
+            W, H, seam = _merge_page_chain(ws, p, others, config)
             merged_page = dict(p)
             merged_page.update({"width": W, "height": H, "global_y_offset": seam})
             merged_page["page_number"] = seq
@@ -549,13 +573,7 @@ def _apply_stitching(
                 regions = _detect_page_regions_rtdetr(merged_page, config, ws, overlays_dir)
             else:
                 regions = _detect_page_regions(merged_page, model, config, ws, overlays_dir)
-            logger.info(
-                "[%s] Stitched pages %d+%d -> merged page (seam y=%d).",
-                _STAGE_NAME,
-                n,
-                nb,
-                seam,
-            )
+            logger.info("[%s] Stitched chain %s -> merged page.", _STAGE_NAME, chain)
         else:
             merged_page = dict(p)
             regions = per_page_regions.get(n, [])

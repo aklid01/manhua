@@ -182,6 +182,6 @@ CREDITS_TEMPLATES = {
 STITCH_ENABLED = True
 STITCH_EDGE_EPS = 6  # px tolerance for "flush to edge"
 STITCH_MIN_X_OVERLAP = 0.5  # min overlap as fraction of the narrower box's width
-STITCH_MAX_CHAIN = 2  # pairwise only; a page can join at most ONE merge
+STITCH_MAX_CHAIN = 4  # Max pages a single bubble may span
 STITCH_TEXT_PROBE = True  # require usable text on both halves (guard #4)
 STITCH_TEXT_MIN_CONF = 0.15  # relaxed text confidence floor for split halves
