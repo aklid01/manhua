@@ -479,7 +479,7 @@ def _half_has_text(ws, page_meta, box, config, ocr_engine) -> bool:
 
 
 def _link_has_text(ws, page_a, page_b, det_by_page, config, ocr_engine) -> bool:
-    """True if bottom bubble of page_a and top bubble of page_b linked in split both have text."""
+    """True if bottom bubble of page_a OR top bubble of page_b linked in split has text."""
     eps = getattr(config, "STITCH_EDGE_EPS", 6)
     min_ov = getattr(config, "STITCH_MIN_X_OVERLAP", 0.5)
     ha = page_a.get("height") or 0
@@ -496,7 +496,7 @@ def _link_has_text(ws, page_a, page_b, det_by_page, config, ocr_engine) -> bool:
     for bx in bottom:
         for tx in top:
             if _x_overlap_frac(_stitch_box(bx), _stitch_box(tx)) >= min_ov:
-                if _half_has_text(ws, page_a, bx, config, ocr_engine) and _half_has_text(
+                if _half_has_text(ws, page_a, bx, config, ocr_engine) or _half_has_text(
                     ws, page_b, tx, config, ocr_engine
                 ):
                     return True
