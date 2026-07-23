@@ -33,6 +33,11 @@ _PROMPT_INSTRUCTIONS = (
     "When a line is ambiguous, translate conservatively rather than inventing context. "
     "Translate every supplied region exactly once; do NOT merge adjacent regions. "
     "Apply the provided glossary terms exactly as given. "
+    "If an entry is a site watermark, scanlator credit, logo, or source tag "
+    "(e.g. 'baozimh', 'tencent', '腾讯', 'colamanga', 'www.', '.com', '包子漫画'), "
+    "return an EMPTY string for it - do NOT translate or transliterate watermarks. "
+    "Treat any URL, domain, or site-name-like text as a watermark. "
+    "If a line MIXES real dialogue with a watermark, return only the dialogue and drop the watermark part. "
     'Return a JSON object mapping region_id -> english string, e.g. {"P001_R001": "..."}'
 )
 

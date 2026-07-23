@@ -50,10 +50,12 @@ OCR_RETRY_MAX = 2  # extra attempts after the base pass (up to 3 total reads)
 OCR_RETRY_FLOOR = 0.30  # below this, don't retry (probably not text)
 
 WATERMARK_PATTERNS = [
-    r"www\.",
-    r"baozimh",
-    r"\.com",
-    r"包子漫[画畫]",
+    r"w\s*w\s*w\s*\.",
+    r"\.\s*c\s*o\s*m",
+    r"b\s*a\s*o?\s*z\s*[i1l]\s*m\s*h",
+    r"tencent|腾讯",
+    r"colamanga|cola\s*manga",
+    r"包\s*子\s*漫\s*[画畫]",
     r"最新免[费費]漫[画畫]",
     r"免[费費]漫[画畫]",
 ]

@@ -42,11 +42,14 @@ def _cjk_ratio(text: str) -> float:
 _PROMPT_INSTRUCTIONS = (
     "Rewrite each literal English line as natural, casual, SPOKEN US English for a "
     "comic speech bubble. Preserve meaning and emotional register (including crude/rude "
-    "tone — do NOT sanitize). Rewrite AGGRESSIVELY: prefer idiomatic phrasing, "
+    "tone - do NOT sanitize). Rewrite AGGRESSIVELY: prefer idiomatic phrasing, "
     "contractions, and varied sentence structure over line-by-line literal wording. "
     "NEVER soften, censor, or euphemize profanity or insults; keep the same intensity. "
     "Do NOT copy the source line verbatim UNLESS it is a proper noun, brand/watermark, "
-    "or fixed label. Keep names and glossary terms exactly. Prefer SHORT, punchy lines.\n"
+    "or fixed label. Keep names and glossary terms exactly. Prefer SHORT, punchy lines. "
+    "If a line is a watermark / site tag / logo (baozimh, tencent, colamanga, www., .com, etc.), "
+    "return an empty string - never rewrite or keep watermark text. "
+    "If a line mixes dialogue with a watermark, keep only the dialogue.\n"
     'Return a JSON object mapping region_id -> final english string, e.g. {"P001_R001": "..."}'
 )
 
