@@ -422,16 +422,15 @@ def _render_region(
             bubble_w = bbox["w"]
             bubble_h = bbox["h"]
 
-        interior = _estimate_bg(page_img, mx, my, mw, mh)
-        is_dark_bubble = (
-            0.299 * interior[0] + 0.587 * interior[1] + 0.114 * interior[2]
-        ) < 128
-
-        if use_mask and not is_dark_bubble:
+        if use_mask:
+            # Mask found a coherent white/near-white bubble -> paste white over the OVAL
+            # shape only (art preserved in box corners). The mask IS the proof it's light.
             white_img = Image.new("RGB", (mw, mh), (255, 255, 255))
             page_img.paste(white_img, (mx, my), mask=mask)
             text_bg = (255, 255, 255)
         else:
+            # No white bubble found: genuinely dark/stylized bubble or text-on-art.
+            interior = _estimate_bg(page_img, mx, my, mw, mh)
             draw.rectangle([mx, my, mx + mw, my + mh], fill=interior)
             text_bg = interior
 
