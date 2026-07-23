@@ -105,7 +105,7 @@ OLLAMA_TEMPERATURE = 0.2
 OLLAMA_MAX_RETRIES = 3
 OLLAMA_RETRY_BACKOFF = 1.0
 OLLAMA_MIN_COMPLETION_RATIO = 0.95
-OLLAMA_MAX_MISSING = 0
+OLLAMA_MAX_MISSING = 2
 OLLAMA_TRIVIAL_CJK_CHARS = 1
 OLLAMA_NUM_CTX = 2048
 OLLAMA_KEEP_ALIVE = "0"
@@ -186,3 +186,8 @@ STITCH_MIN_X_OVERLAP = 0.5  # min overlap as fraction of the narrower box's widt
 STITCH_MAX_CHAIN = 4  # Max pages a single bubble may span
 STITCH_TEXT_PROBE = True  # require usable text on both halves (guard #4)
 STITCH_TEXT_MIN_CONF = 0.15  # relaxed text confidence floor for split halves
+
+# ---- Promo/ad page skip ----
+PROMO_SKIP_ENABLED = True
+PROMO_MAX_BUBBLES = 1  # promo page has <= this many real (parented) speech bubbles
+PROMO_MIN_NARRATION = 4  # ...AND at least this many narration/SFX regions
