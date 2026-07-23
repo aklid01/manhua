@@ -40,6 +40,7 @@ def run_import(
     title_english: str | None = None,
     source: str | None = None,
     fresh: bool = False,
+    skip_last: int = 0,
 ) -> Path:
     """Normalize input into ordered pages and write manifest.json."""
     t0 = time.monotonic()
@@ -81,7 +82,7 @@ def run_import(
     pages_dir = ws / config.STAGE_FOLDERS["pages"]
 
     log_stage(
-        logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, f"starting — source: {src}"
+        logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, f"starting - source: {src}"
     )
 
     if not src.exists():
@@ -100,11 +101,23 @@ def run_import(
         manifest = _import_folder(src, ws, pages_dir, config, t0, src.name, meta)
     elif src.suffix.lower() == ".pdf":
         logger.warning(
-            "[%s] PDF input detected — extraction deferred (TODO)", _STAGE_NAME
+            "[%s] PDF input detected - extraction deferred (TODO)", _STAGE_NAME
         )
         raise NotImplementedError("PDF import is deferred past v0")
     else:
         raise ValueError(f"Unsupported input: {src}")
+
+    if skip_last and skip_last > 0:
+        usable = [p for p in manifest.get("pages", []) if not p.get("skip") and p.get("filename")]
+        for p in usable[-skip_last:]:
+            p["skip"] = True
+            p["skip_reason"] = "trailing_skip"
+        logger.warning(
+            "[%s] Skipping last %d page(s) per user (--skip-last): %s",
+            _STAGE_NAME,
+            skip_last,
+            [p["page_number"] for p in usable[-skip_last:]],
+        )
 
     out = ws / config.MANIFEST_NAME
     save_manifest(workspace, config, manifest)

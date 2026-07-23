@@ -129,6 +129,7 @@ def run_batch(
     base_dir: Path,
     config,
     fresh: bool = False,
+    skip_last: int = 0,
     resume: bool = True,
     clear_delay: int = 10,
     meta: dict | None = None,
@@ -155,7 +156,7 @@ def run_batch(
     summary = {"done": [], "pending": [], "skipped": [], "failed": []}
     total = len(cbz_files)
     logger.info("[batch] Found %d chapter file(s) in %s", total, folder)
-    _append_batch_log(batch_log, f"BATCH START — {total} file(s) from {folder}")
+    _append_batch_log(batch_log, f"BATCH START - {total} file(s) from {folder}")
 
     for idx, src in enumerate(cbz_files, start=1):
         chapter = src.stem
@@ -192,6 +193,7 @@ def run_batch(
                     "source": meta.get("source"),
                 },
                 fresh=fresh,
+                skip_last=skip_last,
                 formats=formats or [],
             )
             m = load_manifest(str(chapter_dir), config)
@@ -276,6 +278,13 @@ def build_parser() -> argparse.ArgumentParser:
     import_sp.add_argument(
         "--fresh", action="store_true", help="Wipe prior stage outputs and prompts"
     )
+    import_sp.add_argument(
+        "--skip-last",
+        type=int,
+        default=0,
+        dest="skip_last",
+        help="Skip the last N pages (promo/ad/credits pages)",
+    )
 
     for name in [n for n in STAGE_REGISTRY if n != "import"]:
         sp = sub.add_parser(name, help=f"Run the {name} stage")
@@ -302,6 +311,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wipe prior stage outputs and prompts when starting from import",
     )
     runall.add_argument(
+        "--skip-last",
+        type=int,
+        default=0,
+        dest="skip_last",
+        help="Skip the last N pages (promo/ad/credits pages)",
+    )
+    runall.add_argument(
         "--package",
         default=None,
         help="Comma-separated formats to package after completion (zip,cbz,tar,pdf)",
@@ -318,6 +334,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--fresh",
         action="store_true",
         help="Wipe prior stage outputs per chapter before importing",
+    )
+    batch_sp.add_argument(
+        "--skip-last",
+        type=int,
+        default=0,
+        dest="skip_last",
+        help="Skip the last N pages (promo/ad/credits pages)",
     )
     batch_sp.add_argument(
         "--no-resume",
@@ -404,6 +427,7 @@ def main(argv=None) -> int:
 
     base_dir = resolve_base_dir(args, config)
     is_fresh = getattr(args, "fresh", False)
+    skip_last_val = getattr(args, "skip_last", 0)
 
     if args.command == "batch":
         return run_batch(
@@ -411,6 +435,7 @@ def main(argv=None) -> int:
             base_dir,
             config,
             fresh=is_fresh,
+            skip_last=skip_last_val,
             resume=not getattr(args, "no_resume", False),
             clear_delay=getattr(args, "clear_delay", 10),
             meta={
@@ -437,6 +462,7 @@ def main(argv=None) -> int:
             input_path=getattr(args, "input", None),
             meta=meta,
             fresh=is_fresh,
+            skip_last=skip_last_val,
             formats=_parse_formats(getattr(args, "package", None)),
         )
 
@@ -453,6 +479,7 @@ def main(argv=None) -> int:
             title_english=getattr(args, "title_en", None),
             source=getattr(args, "source", None),
             fresh=is_fresh,
+            skip_last=skip_last_val,
         )
         return 0
 
@@ -505,7 +532,7 @@ def _parse_formats(raw: str | None) -> list[str]:
 
 
 def _run_stage_subprocess(
-    stage, chapter_dir, *, input_path=None, meta=None, fresh=False
+    stage, chapter_dir, *, input_path=None, meta=None, fresh=False, skip_last=0
 ) -> int:
     import subprocess
 
@@ -530,6 +557,8 @@ def _run_stage_subprocess(
                 cmd += [flag, meta[key]]
         if fresh:
             cmd += ["--fresh"]
+        if skip_last > 0:
+            cmd += ["--skip-last", str(skip_last)]
     return subprocess.run(cmd).returncode
 
 
@@ -540,6 +569,7 @@ def _run_all_from(
     input_path: str | None = None,
     meta: dict | None = None,
     fresh: bool = False,
+    skip_last: int = 0,
     formats: list[str] | None = None,
 ) -> int:
     order = config.STAGE_ORDER
@@ -570,7 +600,7 @@ def _run_all_from(
         logger.info("=" * 60)
         if getattr(config, "BATCH_SUBPROCESS", False):
             rc = _run_stage_subprocess(
-                name, workspace, input_path=input_path, meta=meta, fresh=fresh
+                name, workspace, input_path=input_path, meta=meta, fresh=fresh, skip_last=skip_last
             )
             if rc != 0:
                 logger.error(
@@ -601,6 +631,7 @@ def _run_all_from(
                     title_english=meta.get("title_en"),
                     source=meta.get("source"),
                     fresh=fresh,
+                    skip_last=skip_last,
                 )
             else:
                 res = _load_stage(name)(workspace, config)

@@ -118,6 +118,13 @@ class PipelineGUI:
         ttk.Checkbutton(inp, text="Fresh  (⚠ wipes prior outputs for this chapter)",
                         variable=self.fresh_var).pack(anchor="w", padx=6, pady=(0, 6))
 
+        self.skip_last_var = tk.IntVar(value=0)
+        row2 = ttk.Frame(inp)
+        row2.pack(anchor="w", padx=6, pady=(0, 6))
+        ttk.Label(row2, text="Skip last").pack(side="left")
+        ttk.Spinbox(row2, from_=0, to=20, width=4, textvariable=self.skip_last_var).pack(side="left", padx=4)
+        ttk.Label(row2, text="pages (promo/credits at chapter end)").pack(side="left")
+
         # Stages
         st = ttk.LabelFrame(self.root, text="Stages (unlock in order)")
         st.pack(fill="x", **pad)
@@ -181,6 +188,7 @@ class PipelineGUI:
         self.input_lbl.config(text=f"{Path(path).name}   →   chapter '{self.chapter}'", foreground="#ddd")
 
         # RESET everything for the new chapter
+        self.skip_last_var.set(0)
         self.stage_done = {s: False for s in STAGES}
         for n, b in self.stage_btns.items():
             b.state(["disabled"])
@@ -203,6 +211,8 @@ class PipelineGUI:
             cmd += ["import", "--input", self.input_path]
             if self.fresh_var.get():
                 cmd += ["--fresh"]
+            if self.skip_last_var.get() > 0:
+                cmd += ["--skip-last", str(self.skip_last_var.get())]
         else:
             cmd += [name, "--chapter", self.chapter]
         self._run_cmd(cmd, on_done=lambda rc: self._stage_finished(name, rc))
