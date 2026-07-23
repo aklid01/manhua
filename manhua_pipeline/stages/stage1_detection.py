@@ -53,6 +53,7 @@ def _get_rtdetr(config):
 def _mk_region(config, page_num, idx, rec, *, type_, parent_bubble, is_free_text) -> dict:
     """Build a region dict matching the schema downstream expects."""
     x, y, w, h = rec["x"], rec["y"], rec["w"], rec["h"]
+    eb = parent_bubble if parent_bubble else {"x": x, "y": y, "w": w, "h": h}
     style_hint = "narration" if type_ == config.TYPE_NARRATION else "round"
     
     return {
@@ -66,7 +67,7 @@ def _mk_region(config, page_num, idx, rec, *, type_, parent_bubble, is_free_text
         "read_region": {"x": x, "y": y, "w": w, "h": h},
         "erase_mask": {
             "type": "rect",
-            "coords": [x, y, w, h],
+            "coords": [eb["x"], eb["y"], eb["w"], eb["h"]],
         },
         "render": not is_free_text,
         "is_free_text": is_free_text,
