@@ -54,10 +54,18 @@ def run_import(
             _STAGE_NAME,
             ws,
         )
+        logs_folder_name = config.STAGE_FOLDERS.get("logs", "logs")
         for folder_name in config.STAGE_FOLDERS.values():
             folder_path = ws / folder_name
             if folder_path.exists():
-                shutil.rmtree(folder_path, ignore_errors=True)
+                if folder_name == logs_folder_name:
+                    for log_file in folder_path.glob("*.log"):
+                        try:
+                            log_file.unlink()
+                        except Exception:
+                            pass
+                else:
+                    shutil.rmtree(folder_path, ignore_errors=True)
         ov_path = ws / getattr(config, "OVERRIDES_NAME", "overrides.json")
         ov_path.unlink(missing_ok=True)
 
