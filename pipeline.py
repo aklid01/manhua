@@ -413,6 +413,8 @@ def main(argv=None) -> int:
 
     if args.command == "run-all":
         chapter_dir = _resolve_run_all_chapter_dir(args, base_dir)
+        logs_dir = chapter_dir / config.STAGE_FOLDERS.get("logs", "logs")
+        setup_logging(stream="stdout", log_dir=logs_dir)
         meta = {
             "title_romanized": getattr(args, "title_romanized", None),
             "title_en": getattr(args, "title_en", None),
@@ -430,6 +432,8 @@ def main(argv=None) -> int:
 
     if args.command == "import":
         chapter_dir = _resolve_import_chapter_dir(args, base_dir)
+        logs_dir = chapter_dir / config.STAGE_FOLDERS.get("logs", "logs")
+        setup_logging(stream="stdout", log_dir=logs_dir)
         logger.info("Running stage: import")
         _load_stage("import")(
             args.input,
@@ -446,6 +450,8 @@ def main(argv=None) -> int:
         from manhua_pipeline.stages import stage7_package
 
         chapter_dir = base_dir / args.chapter
+        logs_dir = chapter_dir / config.STAGE_FOLDERS.get("logs", "logs")
+        setup_logging(stream="stdout", log_dir=logs_dir)
         stage7_package.run_package(
             str(chapter_dir), config, _parse_formats(args.package)
         )
@@ -459,6 +465,9 @@ def main(argv=None) -> int:
         chapter_dir = Path(args.workspace)
     else:
         chapter_dir = base_dir / args.workspace
+
+    logs_dir = chapter_dir / config.STAGE_FOLDERS.get("logs", "logs")
+    setup_logging(stream="stdout", log_dir=logs_dir)
 
     if not (chapter_dir / config.MANIFEST_NAME).exists():
         available = []

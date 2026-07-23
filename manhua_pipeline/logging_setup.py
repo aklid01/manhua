@@ -13,7 +13,9 @@ _DATEFMT = "%H:%M:%S"
 _CONFIGURED = False
 
 
-def setup_logging(stream: str = "stdout", level: int = logging.INFO) -> None:
+def setup_logging(
+    stream: str = "stdout", level: int = logging.INFO, log_dir=None
+) -> None:
     """Configure the root logger once. stream is 'stdout' or 'stderr'."""
     global _CONFIGURED
     target = sys.stdout if stream == "stdout" else sys.stderr
@@ -27,6 +29,18 @@ def setup_logging(stream: str = "stdout", level: int = logging.INFO) -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
+
+    # NEW: also persist to a timestamped file so diagnostics survive the console
+    if log_dir:
+        from datetime import datetime
+        from pathlib import Path
+
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        fname = Path(log_dir) / f"run_{datetime.now():%Y%m%d_%H%M%S}.log"
+        fh = logging.FileHandler(fname, encoding="utf-8")
+        fh.setFormatter(logging.Formatter(_FORMAT, datefmt=_DATEFMT))
+        root.addHandler(fh)
+
     root.setLevel(level)
     _CONFIGURED = True
 
