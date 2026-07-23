@@ -746,46 +746,49 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
 
             original = region.get("original_text", "")
             cjk_bits = re.findall(r"[\u3400-\u9fff]+", original)
-            snippet = cjk_bits[0] if cjk_bits else region["region_id"]
 
-            if _is_trivial_region(original, config):
+            if not cjk_bits:
+                # No Chinese in this region (watermark / latin / empty OCR) - nothing to
+                # seed. The region_id is NOT a translatable term.
                 logger.info(
-                    "[%s] %s left untranslated (trivial: %r) - leaving original, not seeding glossary.",
+                    "[%s] %s untranslated but has no CJK (%r) - not seeding glossary.",
+                    _STAGE_NAME,
+                    region["region_id"],
+                    original[:40],
+                )
+            elif _is_trivial_region(original, config):
+                logger.info(
+                    "[%s] %s left untranslated (trivial: %r) - not seeding glossary.",
                     _STAGE_NAME,
                     region["region_id"],
                     original,
                 )
-            elif len(snippet) <= 1:
-                logger.info(
-                    "[%s] %s: %r is a single char - not a name, not seeding glossary.",
-                    _STAGE_NAME,
-                    region["region_id"],
-                    snippet,
-                )
             else:
-                logger.warning(
-                    "[%s] %s not translated. Checking glossary for %r ...",
-                    _STAGE_NAME,
-                    region["region_id"],
-                    snippet,
-                )
-                glossary_terms = {
-                    t.get("source_term") for t in glossary.get("terms", [])
-                }
-                if snippet in glossary_terms:
+                snippet = cjk_bits[0]
+                if len(snippet) <= 1:
                     logger.info(
-                        "[%s]   Found %r in glossary - model should use it next run.",
+                        "[%s] %s: %r is a single char - not seeding glossary.",
                         _STAGE_NAME,
+                        region["region_id"],
                         snippet,
                     )
                 else:
-                    append_glossary_term(ws.parent, config, snippet)
-                    logger.warning(
-                        "[%s]   %r not in glossary. Added a stub - set its English translation in %s/glossary.json and re-run.",
-                        _STAGE_NAME,
-                        snippet,
-                        ws.parent.name,
-                    )
+                    glossary_terms = {
+                        t.get("source_term") for t in glossary.get("terms", [])
+                    }
+                    if snippet in glossary_terms:
+                        logger.info(
+                            "[%s]   Found %r in glossary.", _STAGE_NAME, snippet
+                        )
+                    else:
+                        append_glossary_term(ws.parent, config, snippet)
+                        logger.warning(
+                            "[%s]   %r not in glossary. Added a stub - set its English "
+                            "translation in %s/glossary.json and re-run.",
+                            _STAGE_NAME,
+                            snippet,
+                            ws.parent.name,
+                        )
 
         if translated:
             translated_count += 1
