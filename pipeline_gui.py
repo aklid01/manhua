@@ -187,12 +187,12 @@ class PipelineGUI:
         self.chapter = _chapter_name(path)
         self.input_lbl.config(text=f"{Path(path).name}   →   chapter '{self.chapter}'", foreground="#ddd")
 
-        # RESET everything for the new chapter
-        self.skip_last_var.set(0)
+        # RESET stage buttons for the new chapter
         self.stage_done = {s: False for s in STAGES}
         for n, b in self.stage_btns.items():
             b.state(["disabled"])
             b.configure(text=STAGE_LABELS[n])
+        self.stage_btns["import"].state(["!disabled"])
         self.pkg_btn.state(["disabled"])
         self._clear_log()
 
@@ -251,6 +251,7 @@ class PipelineGUI:
         self.stage_done[name] = True
         self.stage_btns[name].configure(text=STAGE_LABELS[name])   # clear any "Resume" label
         self._sys(f"{STAGE_LABELS.get(name, name)} complete.", "ok")
+        self.stage_btns["import"].state(["!disabled"])
 
         if name == "render":
             self.stage_btns["qa"].state(["!disabled"])
