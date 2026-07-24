@@ -79,10 +79,11 @@ def _cjk_char_count(text: str) -> int:
 
 
 def _is_trivial_region(original_text: str, config) -> bool:
-    """True for very short CJK regions (SFX/counters/noise) that shouldn't block a chapter."""
+    """Trivial = a region with no translatable CJK content (SFX / counters / OCR noise /
+    empty). These must never block a chapter."""
     thresh = getattr(config, "OLLAMA_TRIVIAL_CJK_CHARS", 1)
     n = _cjk_char_count(original_text)
-    return 0 < n <= thresh
+    return n <= thresh
 
 
 
@@ -600,16 +601,20 @@ def run_translation(workspace: str, config) -> Path | None:
                 sorted(trivial_missing),
             )
 
-        if ratio < min_ratio or len(substantial_missing) > max_missing:
+        ratio_fail = ratio < min_ratio
+        count_fail = len(substantial_missing) > max_missing
+        if ratio_fail or count_fail:
+            trigger = "ratio" if ratio_fail else "count"
             logger.error(
-                "[%d/%d %s] Completion %.0f%% (%d substantial missing > %d allowed) - writing artifacts "
-                "but NOT advancing manifest. Re-run after investigating.",
+                "[%d/%d %s] Completion %.0f%% (%d substantial missing, %d allowed; trigger=%s) - "
+                "NOT advancing. Re-run after investigating.",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
                 ratio * 100,
                 len(substantial_missing),
                 max_missing,
+                trigger,
             )
             _write_output(
                 TranslationWriteContext(
