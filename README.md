@@ -443,6 +443,15 @@ the series **glossary** (`glossary.json`) locks names/terms across every chapter
 
 ---
 
+## Known Issues & Open Work
+
+- **Standalone Character Names (`qwen2.5:3b-instruct`)**:
+  - *Issue*: Small local models occasionally return empty string `""` for isolated 2-3 character CJK names (e.g. `季青临`).
+  - *Impact*: Critical - dropped names remove character identity context that cannot be inferred downstream.
+  - *Workaround*: Pre-seed character names in `glossary.json` or use `mcp` / larger model backends.
+
+---
+
 ## Troubleshooting
 
 > [!WARNING]
