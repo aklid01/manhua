@@ -25,3 +25,4 @@ All notable changes to the Manhua Pipeline project will be documented in this fi
 
 ### Fixed
 - Fixed encoding handling for file logging and pipeline JSON outputs on Windows environments.
+- **Guided GUI Runner (`pipeline_gui.py`)**: Preserved the `Skip last` spinner value when choosing chapter inputs and kept the `0 · Import` stage button enabled for direct re-imports with `--fresh` or updated `--skip-last N` parameters.
