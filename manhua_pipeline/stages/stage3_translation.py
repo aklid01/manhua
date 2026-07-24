@@ -231,10 +231,11 @@ class OllamaBackend:
                 accepted.update(acc_n)
             if missing:
                 logger.warning(
-                    "[%s] Giving up on %d region(s) after recovery: %s",
+                    "[%s] Giving up on %d region(s) after recovery: %s | last raw output: %r",
                     _STAGE_NAME,
                     len(missing),
                     sorted(missing),
+                    raw[:300],
                 )
             return accepted
 
