@@ -133,7 +133,7 @@ def test_translation_glossary_locked_term(tmp_path):
         "terms": [
             {
                 "term_id": "jingli",
-                "source_term": "经理",
+                "source_term": "\u7ecf\u7406",
                 "target_term": "Manager",
                 "category": "title",
                 "locked": True,
@@ -143,18 +143,20 @@ def test_translation_glossary_locked_term(tmp_path):
             }
         ],
     }
-    _setup(ws, [_ocr_entry("P001_R001", "经理")], glossary=glossary)
-    run_translation(str(ws), config)
-    (ws / "stage3_translation" / "translation_response.json").write_text(
-        json.dumps({"P001_R001": "Boss"}), encoding="utf-8"
-    )
-    run_translation(str(ws), config)
+    _setup(ws, [_ocr_entry("P001_R001", "\u7ecf\u7406")], glossary=glossary)
+    # Locked glossary pre-resolution: the region is resolved before the backend is called.
+    # The response file with a conflicting value is never applied.
+    out = run_translation(str(ws), config)
+    # With manual backend and a locked exact match, the region goes to usable_for_backend=[]
+    # so the backend isn't called and translation completes directly from the locked entry.
+    assert out is not None
     tr = json.loads(
         (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
     )
     r = tr["results"][0]
-    assert r["glossary_conflict"] is True
-    assert "jingli" in r["glossary_terms_applied"]
+    assert r["translated"] is True
+    assert r["literal_translation"] == "Manager"
+    assert r["translation_source"] == "locked_glossary"
 
 
 def test_translation_all_unusable_completes(tmp_path):
@@ -182,7 +184,7 @@ def test_translation_glossary_conflict_does_not_mutate(tmp_path):
         "terms": [
             {
                 "term_id": "jingli",
-                "source_term": "经理",
+                "source_term": "\u7ecf\u7406",
                 "target_term": "Manager",
                 "category": "title",
                 "locked": True,
@@ -192,18 +194,18 @@ def test_translation_glossary_conflict_does_not_mutate(tmp_path):
             }
         ],
     }
-    _setup(ws, [_ocr_entry("P001_R001", "经理")], glossary=glossary)
-    run_translation(str(ws), config)
-    (ws / "stage3_translation" / "translation_response.json").write_text(
-        json.dumps({"P001_R001": "Boss"}), encoding="utf-8"
-    )
-    run_translation(str(ws), config)
+    _setup(ws, [_ocr_entry("P001_R001", "\u7ecf\u7406")], glossary=glossary)
+    out = run_translation(str(ws), config)
+    # Locked glossary pre-resolution: "Manager" is applied directly.
+    # The locked value wins - no conflict can arise and no backend is consulted.
+    assert out is not None
     tr = json.loads(
         (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
     )
     r = tr["results"][0]
-    assert r["glossary_conflict"] is True
-    assert r["literal_translation"] == "Boss"  # text NOT defaced
+    assert r["translated"] is True
+    assert r["literal_translation"] == "Manager"  # locked value, NOT defaced
+    assert r["glossary_conflict"] is False  # no conflict: backend was never consulted
 
 
 def test_translation_glossary_version_from_glossary(tmp_path):

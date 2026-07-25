@@ -1,0 +1,413 @@
+"""Boundary B tests: translation validation, locked glossary, contextual retry, override dispatch.
+
+All tests are offline. No network, no filesystem side-effects outside tmp_path.
+"""
+
+import json
+
+import pytest
+
+import config
+
+from manhua_pipeline.interaction import InteractionMode, RuntimePolicy
+from manhua_pipeline.translation_validation import (
+    TranslationIssue,
+    is_meaningful_region,
+    normalize_newlines,
+    normalize_punct,
+    validate_expected_regions,
+)
+
+
+# ---------------------------------------------------------------------------
+# validate_expected_regions
+# ---------------------------------------------------------------------------
+
+
+def test_accepted_normalizes_text():
+    parsed = {"P001_R001": "Hello\\nWorld"}
+    issues = validate_expected_regions(parsed, {"P001_R001"})
+    issue = issues["P001_R001"]
+    assert issue.status == "accepted"
+    assert issue.accepted_text == "Hello\nWorld"
+
+
+def test_missing_key_reason():
+    issues = validate_expected_regions({}, {"P001_R001"})
+    assert issues["P001_R001"].status == "missing"
+    assert issues["P001_R001"].reason == "missing_key"
+
+
+def test_empty_string_reason():
+    issues = validate_expected_regions({"P001_R001": ""}, {"P001_R001"})
+    assert issues["P001_R001"].status == "rejected"
+    assert issues["P001_R001"].reason == "empty_string"
+
+
+def test_whitespace_only_reason():
+    issues = validate_expected_regions({"P001_R001": "   "}, {"P001_R001"})
+    assert issues["P001_R001"].status == "rejected"
+    assert issues["P001_R001"].reason == "whitespace_only"
+
+
+def test_non_string_reason():
+    issues = validate_expected_regions({"P001_R001": 42}, {"P001_R001"})
+    assert issues["P001_R001"].status == "rejected"
+    assert issues["P001_R001"].reason == "non_string_value"
+    assert issues["P001_R001"].raw_value_type == "int"
+
+
+def test_cjk_ratio_exceeded_reason():
+    # Pure Chinese is >30% CJK
+    issues = validate_expected_regions({"P001_R001": "你好世界"}, {"P001_R001"})
+    assert issues["P001_R001"].status == "rejected"
+    assert issues["P001_R001"].reason == "cjk_ratio_exceeded"
+
+
+def test_mixed_cjk_below_threshold_accepted():
+    # <30% CJK should be accepted
+    issues = validate_expected_regions({"P001_R001": "Hello 世"}, {"P001_R001"})
+    assert issues["P001_R001"].status == "accepted"
+
+
+def test_attempt_tracked():
+    parsed = {"P001_R001": "Good"}
+    issues = validate_expected_regions(parsed, {"P001_R001"}, attempt=2)
+    assert issues["P001_R001"].attempt == 2
+
+
+def test_multiple_regions_independent():
+    parsed = {
+        "P001_R001": "Good",
+        "P001_R002": "",
+        "P001_R003": "你好",
+    }
+    issues = validate_expected_regions(parsed, {"P001_R001", "P001_R002", "P001_R003", "P001_R004"})
+    assert issues["P001_R001"].status == "accepted"
+    assert issues["P001_R002"].reason == "empty_string"
+    assert issues["P001_R003"].reason == "cjk_ratio_exceeded"
+    assert issues["P001_R004"].reason == "missing_key"
+
+
+def test_unexpected_keys_not_in_result():
+    parsed = {"P001_R001": "Good", "SPURIOUS": "extra"}
+    issues = validate_expected_regions(parsed, {"P001_R001"})
+    assert "SPURIOUS" not in issues
+    assert issues["P001_R001"].status == "accepted"
+
+
+def test_translation_issue_is_frozen():
+    issue = TranslationIssue(region_id="r", status="accepted")
+    with pytest.raises((AttributeError, TypeError)):
+        issue.status = "rejected"
+
+
+# ---------------------------------------------------------------------------
+# is_meaningful_region
+# ---------------------------------------------------------------------------
+
+
+def test_meaningful_region_with_cjk():
+    assert is_meaningful_region("你好", config) is True
+
+
+def test_trivial_region_single_cjk():
+    assert is_meaningful_region("一", config) is False
+
+
+def test_trivial_region_empty():
+    assert is_meaningful_region("", config) is False
+
+
+def test_trivial_region_only_ascii():
+    # No CJK -> not meaningful
+    assert is_meaningful_region("ABC 123", config) is False
+
+
+# ---------------------------------------------------------------------------
+# normalize_newlines / normalize_punct
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_newlines_escaped():
+    assert normalize_newlines("Hello\\nWorld") == "Hello\nWorld"
+    assert normalize_newlines("A\\r\\nB") == "A\nB"
+    assert normalize_newlines("A\\rB") == "A\nB"
+
+
+def test_normalize_punct_fullwidth():
+    assert normalize_punct("\uff01") == "!"
+    assert normalize_punct("\u3002") == "."
+    assert normalize_punct("Hello\uff01") == "Hello!"
+
+
+# ---------------------------------------------------------------------------
+# RuntimePolicy
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_policy_non_interactive():
+    policy = RuntimePolicy(mode=InteractionMode.NON_INTERACTIVE)
+    assert policy.can_prompt is False
+
+
+def test_runtime_policy_batch_disables_prompt():
+    policy = RuntimePolicy(mode=InteractionMode.INTERACTIVE, batch=True)
+    assert policy.can_prompt is False
+
+
+def test_runtime_policy_mcp_disables_prompt():
+    policy = RuntimePolicy(mode=InteractionMode.MCP)
+    assert policy.can_prompt is False
+
+
+# ---------------------------------------------------------------------------
+# Locked glossary pre-resolution via run_translation
+# ---------------------------------------------------------------------------
+
+
+def _make_ws(tmp_path, ocr_results, glossary=None):
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "chapter_id": "t",
+        "total_pages": 1,
+        "pages": [{"page_number": 1, "filename": "001.png", "skip": False}],
+        "current_stage": "translate",
+        "completed_stages": ["import", "detect", "ocr"],
+        "warning_count": 0,
+        "status": "in_progress",
+    }
+    (ws / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
+    ocr = {
+        "chapter_id": "t",
+        "stage": "ocr",
+        "generated_at": "now",
+        "ocr_engine": "PaddleOCR",
+        "results": ocr_results,
+    }
+    (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr, ensure_ascii=False), encoding="utf-8")
+    if glossary is not None:
+        (ws.parent / "glossary.json").write_text(json.dumps(glossary, ensure_ascii=False), encoding="utf-8")
+    return ws
+
+
+def _ocr(rid, text, usable=True):
+    return {
+        "region_id": rid,
+        "page_number": 1,
+        "type": "speech_bubble",
+        "original_text": text,
+        "text_direction": "horizontal",
+        "ocr_confidence": 0.9,
+        "ocr_confidence_min": 0.9,
+        "has_usable_text": usable,
+        "do_not_render": False,
+        "needs_correction": not usable,
+        "edge_touching": False,
+        "edge": "none",
+        "note": None,
+        "watermark_filtered": False,
+    }
+
+
+@pytest.fixture(autouse=True)
+def _force_manual_backend(monkeypatch):
+    monkeypatch.setattr(config, "TRANSLATOR_BACKEND", "manual", raising=False)
+
+
+def test_locked_glossary_exact_match_bypasses_backend(tmp_path):
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    glossary = {
+        "version": "v1",
+        "updated_at": "now",
+        "terms": [
+            {
+                "source_term": "经理",
+                "target_term": "Manager",
+                "locked": True,
+            }
+        ],
+    }
+    ws = _make_ws(tmp_path, [_ocr("P001_R001", "经理")], glossary=glossary)
+    out = run_translation(str(ws), config)
+    assert out is not None
+    tr = json.loads((ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8"))
+    r = tr["results"][0]
+    assert r["translated"] is True
+    assert r["literal_translation"] == "Manager"
+    assert r["translation_source"] == "locked_glossary"
+    assert r["glossary_conflict"] is False
+
+
+def test_locked_glossary_partial_match_does_not_bypass(tmp_path):
+    """Locked glossary match is exact (full original_text). A substring match does NOT bypass."""
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    glossary = {
+        "version": "v1",
+        "updated_at": "now",
+        "terms": [
+            {
+                "source_term": "经理",
+                "target_term": "Manager",
+                "locked": True,
+            }
+        ],
+    }
+    # original_text has extra characters around the locked term
+    ws = _make_ws(tmp_path, [_ocr("P001_R001", "你好经理！")], glossary=glossary)
+    run_translation(str(ws), config)
+    # The region has extra CJK so no exact match -> goes to backend (manual) -> no response file -> returns None
+    assert not (ws / "stage3_translation" / "translation.json").exists()
+
+
+def test_locked_glossary_empty_target_does_not_bypass(tmp_path):
+    """A locked term with an empty target_term does not bypass the backend."""
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    glossary = {
+        "version": "v1",
+        "updated_at": "now",
+        "terms": [
+            {
+                "source_term": "经理",
+                "target_term": "",  # no target yet
+                "locked": True,
+            }
+        ],
+    }
+    ws = _make_ws(tmp_path, [_ocr("P001_R001", "经理")], glossary=glossary)
+    run_translation(str(ws), config)
+    # Empty target means no bypass, goes to backend, no response -> None returned
+    assert not (ws / "stage3_translation" / "translation.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# validate_batch wires through validate_expected_regions
+# ---------------------------------------------------------------------------
+
+
+def test_validate_batch_returns_accepted_dict():
+    from manhua_pipeline.stages.stage3_translation import OllamaBackend
+
+    parsed = {"P001_R001": "Hello", "P001_R002": "World"}
+    accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, {"P001_R001", "P001_R002"})
+    assert accepted == {"P001_R001": "Hello", "P001_R002": "World"}
+    assert missing == []
+    assert unexpected == []
+
+
+def test_validate_batch_empty_string_goes_to_missing():
+    from manhua_pipeline.stages.stage3_translation import OllamaBackend
+
+    parsed = {"P001_R001": ""}
+    accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, {"P001_R001"})
+    assert "P001_R001" not in accepted
+    assert "P001_R001" in missing
+
+
+def test_validate_batch_whitespace_only_goes_to_missing():
+    from manhua_pipeline.stages.stage3_translation import OllamaBackend
+
+    parsed = {"P001_R001": "   "}
+    accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, {"P001_R001"})
+    assert "P001_R001" not in accepted
+    assert "P001_R001" in missing
+
+
+def test_validate_batch_non_string_goes_to_missing():
+    from manhua_pipeline.stages.stage3_translation import OllamaBackend
+
+    parsed = {"P001_R001": 42}
+    accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, {"P001_R001"})
+    assert "P001_R001" not in accepted
+    assert "P001_R001" in missing
+
+
+def test_validate_batch_unexpected_region_reported():
+    from manhua_pipeline.stages.stage3_translation import OllamaBackend
+
+    parsed = {"P001_R001": "Hi", "SPURIOUS": "extra"}
+    accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, {"P001_R001"})
+    assert "SPURIOUS" in unexpected
+    assert accepted == {"P001_R001": "Hi"}
+
+
+# ---------------------------------------------------------------------------
+# OverrideRequestStore (JSONL queue)
+# ---------------------------------------------------------------------------
+
+
+def test_override_request_store_appends(tmp_path):
+    from manhua_pipeline.manual_overrides import (
+        OverrideRequestStore,
+        make_override_request,
+    )
+
+    store = OverrideRequestStore(tmp_path)
+    request = make_override_request(
+        run_id="run-1",
+        chapter="ch01",
+        region={"region_id": "P001_R001", "original_text": "你好", "page_number": 1},
+        initial_reason="missing_after_batch",
+        final_reason="blank_after_contextual_retry",
+        backend="ollama",
+        model="qwen2.5:3b",
+        attempts=2,
+    )
+    store.append_pending(request)
+    pending = store.list_pending()
+    assert len(pending) == 1
+    assert pending[0]["region_id"] == "P001_R001"
+    assert pending[0]["status"] == "pending"
+
+
+def test_override_request_store_idempotent_list(tmp_path):
+    from manhua_pipeline.manual_overrides import (
+        OverrideRequestStore,
+        make_override_request,
+    )
+
+    store = OverrideRequestStore(tmp_path)
+    for _ in range(3):
+        store.append_pending(
+            make_override_request(
+                run_id="run-1",
+                chapter="ch01",
+                region={"region_id": "P001_R001", "original_text": "你好", "page_number": 1},
+                initial_reason="x",
+                final_reason="y",
+                backend="ollama",
+                model=None,
+                attempts=1,
+            )
+        )
+    # All 3 appended (duplicates allowed in JSONL - consumer deduplicates by request_id)
+    assert len(store.list_pending()) == 3
+
+
+# ---------------------------------------------------------------------------
+# _build_contextual_retry_prompt
+# ---------------------------------------------------------------------------
+
+
+def test_contextual_retry_prompt_contains_region_id():
+    from manhua_pipeline.stages.stage3_translation import _build_contextual_retry_prompt
+
+    region = {"region_id": "P001_R001", "original_text": "你好"}
+    prompt = _build_contextual_retry_prompt(region, [])
+    assert "P001_R001" in prompt
+    assert "你好" in prompt
+
+
+def test_contextual_retry_prompt_includes_glossary():
+    from manhua_pipeline.stages.stage3_translation import _build_contextual_retry_prompt
+
+    region = {"region_id": "P001_R001", "original_text": "经理"}
+    locked = [{"source_term": "经理", "target_term": "Manager"}]
+    prompt = _build_contextual_retry_prompt(region, locked)
+    assert "Manager" in prompt
+    assert "经理" in prompt

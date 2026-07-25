@@ -13,10 +13,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from manhua_pipeline.interaction import InteractionMode, RuntimePolicy, default_runtime_policy
 from manhua_pipeline.io.glossary_series import load_series_glossary
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_stage
+from manhua_pipeline.manual_overrides import (
+    ManualOverrideDecision,
+    OverrideRequestStore,
+    make_override_request,
+    prompt_for_override,
+    save_locked_glossary_entry,
+    save_region_override,
+)
 from manhua_pipeline.stages import _backends as be
+from manhua_pipeline.translation_validation import (
+    TranslationIssue,
+    is_meaningful_region,
+    normalize_newlines,
+    normalize_punct,
+    validate_expected_regions,
+)
 
 logger = get_logger(__name__)
 
@@ -61,35 +77,26 @@ _FULLWIDTH_MAP = {
 
 
 def _contains_cjk(text: str) -> bool:
-    """True if the string still contains Han ideographs (i.e. not fully translated)."""
     return bool(_CJK_RE.search(text or ""))
 
 
+def _cjk_char_count(text: str) -> int:
+    return sum(1 for c in (text or "") if _contains_cjk(c))
+
+
 def _cjk_ratio(text: str) -> float:
-    """Fraction of non-space chars that are Han ideographs."""
     chars = [c for c in text if not c.isspace()]
     if not chars:
         return 0.0
     return sum(1 for c in chars if _contains_cjk(c)) / len(chars)
 
 
-def _cjk_char_count(text: str) -> int:
-    """Count Han ideographs in a string."""
-    return sum(1 for c in (text or "") if _contains_cjk(c))
+def _normalize_punct(text: str) -> str:
+    return normalize_punct(text)
 
 
 def _is_trivial_region(original_text: str, config) -> bool:
-    """Trivial = a region with no translatable CJK content (SFX / counters / OCR noise /
-    empty). These must never block a chapter."""
-    thresh = getattr(config, "OLLAMA_TRIVIAL_CJK_CHARS", 1)
-    n = _cjk_char_count(original_text)
-    return n <= thresh
-
-
-
-def _normalize_punct(text: str) -> str:
-    """Replace full-width CJK punctuation with ASCII equivalents."""
-    return "".join(_FULLWIDTH_MAP.get(c, c) for c in text)
+    return not is_meaningful_region(original_text, config)
 
 
 # ---------------------------------------------------------------------------
@@ -283,24 +290,35 @@ class OllamaBackend:
 
     @staticmethod
     def _validate_batch(parsed: dict, expected_ids: set) -> tuple[dict, list, list]:
-        accepted, unexpected = {}, []
-        for k, v in parsed.items():
-            if k not in expected_ids:
-                unexpected.append(k)
-                continue
-            if not isinstance(v, str) or not v.strip():
-                continue
-            val = (
-                v.strip()
-                .replace("\\r\\n", "\n")
-                .replace("\\n", "\n")
-                .replace("\\r", "\n")
-            )
-            if _cjk_ratio(val) > 0.30:
-                continue
-            if k not in accepted:
-                accepted[k] = _normalize_punct(val)
-        missing = [i for i in expected_ids if i not in accepted]
+        """Validate parsed response using structured TranslationIssue outcomes.
+
+        Rejection reasons are logged but the batch recovery flow only needs
+        the accepted/missing/unexpected split that callers already expect.
+        """
+        unexpected = [k for k in parsed if k not in expected_ids]
+        if unexpected:
+            for k in unexpected:
+                logger.debug(
+                    "[%s] Unexpected region_id in response (ignored): %r",
+                    _STAGE_NAME, k,
+                )
+
+        issues = validate_expected_regions(
+            {k: v for k, v in parsed.items() if k in expected_ids},
+            expected_ids,
+        )
+        accepted = {
+            rid: issue.accepted_text
+            for rid, issue in issues.items()
+            if issue.status == "accepted"
+        }
+        for rid, issue in issues.items():
+            if issue.status != "accepted":
+                logger.debug(
+                    "[%s] Region %r rejected: reason=%s",
+                    _STAGE_NAME, rid, issue.reason,
+                )
+        missing = [rid for rid, issue in issues.items() if issue.status != "accepted"]
         return accepted, missing, unexpected
 
     @staticmethod
@@ -328,6 +346,43 @@ def _get_backend(config) -> TranslatorBackend:
 
 def _locked_terms(glossary: dict) -> list[dict]:
     return [t for t in glossary.get("terms", []) if t.get("locked")]
+
+
+def _build_locked_index(locked: list[dict]) -> dict[str, str]:
+    """Build {source_term: target_term} for locked entries with non-empty targets."""
+    return {
+        t["source_term"]: t["target_term"]
+        for t in locked
+        if t.get("source_term") and t.get("target_term", "").strip()
+    }
+
+
+def _resolve_locked_glossary(
+    regions: list[dict], locked_index: dict[str, str]
+) -> tuple[dict[str, str], list[dict]]:
+    """Resolve regions whose original_text exactly matches a locked glossary entry.
+
+    Returns:
+        resolved: {region_id: translation} for deterministically resolved regions
+        remaining: regions that still need backend translation
+    """
+    resolved: dict[str, str] = {}
+    remaining: list[dict] = []
+    for region in regions:
+        original = region.get("original_text", "")
+        locked_value = locked_index.get(original)
+        if locked_value and locked_value.strip():
+            resolved[region["region_id"]] = locked_value
+            logger.info(
+                "[%d/%d %s] %s -> locked glossary match (%r)",
+                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
+                region["region_id"], locked_value,
+            )
+        else:
+            remaining.append(region)
+    return resolved, remaining
+
+
 
 
 def _enforce_glossary(
@@ -411,6 +466,29 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
             )
 
     return clean, warnings
+
+
+def _build_contextual_retry_prompt(region: dict, locked: list[dict]) -> str:
+    """Build a focused single-region retry prompt with glossary context."""
+    rid = region["region_id"]
+    original = region.get("original_text", "")
+    gloss_lines = [
+        f"{t['source_term']} = {t['target_term']}"
+        for t in locked
+        if t.get("source_term") and t.get("target_term", "").strip()
+    ]
+    gloss_txt = "\n".join(gloss_lines)
+    lines = [
+        "Translate the supplied Chinese region into faithful US English.",
+        f'Return a JSON object with exactly one key: {{"{rid}": "<translation>"}}.',
+        "The value must be a non-empty English string.",
+        "Do not explain. Do not include the original Chinese in the value.",
+    ]
+    if gloss_txt:
+        lines.append(f"Glossary (apply exactly):\n{gloss_txt}")
+    lines.append(f'region_id: {rid}')
+    lines.append(f'source: {original}')
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -548,17 +626,28 @@ def run_translation(workspace: str, config) -> Path | None:
             )
         )
 
-    bundle = _build_bundle(usable, locked)
+    # Locked glossary pre-resolution: exact source_term match bypasses backend entirely.
+    # Precedence: locked glossary > region override > backend translation.
+    locked_index = _build_locked_index(locked)
+    glossary_resolved, usable_for_backend = _resolve_locked_glossary(usable, locked_index)
+    if glossary_resolved:
+        logger.info(
+            "[%d/%d %s] %d region(s) resolved via locked glossary (no backend call needed)",
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, len(glossary_resolved),
+        )
+
+    bundle = _build_bundle(usable_for_backend, locked)
     backend = _get_backend(config)
-    raw_response = backend.request(bundle, ws, config)
+    raw_response = backend.request(bundle, ws, config) if usable_for_backend else {}
+
 
     if raw_response is None:
         return None
 
-    # Validate
-    usable_ids = [r["region_id"] for r in usable]
+    # Validate backend response (only for regions that went to the backend)
+    backend_ids = [r["region_id"] for r in usable_for_backend]
     try:
-        translation_map, val_warnings = _validate_response(raw_response, usable_ids)
+        translation_map, val_warnings = _validate_response(raw_response, backend_ids)
     except ValueError as exc:
         raise ValueError(
             f"translation_response.json is malformed: {exc}. "
@@ -567,6 +656,12 @@ def run_translation(workspace: str, config) -> Path | None:
 
     for w in val_warnings:
         logger.warning("[%s] %s", _STAGE_NAME, w)
+
+    # Merge locked glossary resolutions - these are authoritative and win over backend output
+    translation_map.update(glossary_resolved)
+
+    usable_ids = [r["region_id"] for r in usable]
+
 
     backend_name = getattr(config, "TRANSLATOR_BACKEND", "manual")
     if backend_name == "ollama" and usable_ids:
@@ -602,8 +697,116 @@ def run_translation(workspace: str, config) -> Path | None:
                 sorted(trivial_missing),
             )
 
+        # Contextual isolated retry for meaningful unresolved regions
+        if substantial_missing and getattr(config, "OLLAMA_CONTEXTUAL_RETRY_ENABLED", True):
+            region_by_id = {r["region_id"]: r for r in usable}
+            backend_inst = backend if isinstance(backend, OllamaBackend) else None
+            for rid in list(substantial_missing):
+                region = region_by_id.get(rid)
+                if not region or not backend_inst:
+                    continue
+                original = orig_by_id.get(rid, "")
+                logger.info(
+                    "[%d/%d %s] Contextual retry for %s (%r)",
+                    _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, rid, original,
+                )
+                retry_prompt = _build_contextual_retry_prompt(region, locked)
+                try:
+                    retry_raw = backend_inst._call_ollama(retry_prompt)
+                    retry_parsed = be.parse_json(retry_raw)
+                    retry_issues = validate_expected_regions(
+                        retry_parsed, {rid}, attempt=2
+                    )
+                    issue = retry_issues.get(rid)
+                    if issue and issue.status == "accepted":
+                        translation_map[rid] = issue.accepted_text
+                        substantial_missing.remove(rid)
+                        logger.info(
+                            "[%s] Contextual retry succeeded for %s: %r",
+                            _STAGE_NAME, rid, issue.accepted_text,
+                        )
+                    else:
+                        reason = issue.reason if issue else "unknown"
+                        logger.warning(
+                            "[%s] Contextual retry failed for %s: reason=%s",
+                            _STAGE_NAME, rid, reason,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] Contextual retry error for %s: %s", _STAGE_NAME, rid, exc
+                    )
+
+        # Manual override dispatch for remaining meaningful unresolved regions
+        if substantial_missing:
+            runtime = default_runtime_policy(
+                batch=getattr(config, "BATCH_SUBPROCESS", False)
+            )
+            request_store = OverrideRequestStore(ws)
+            chapter = ws.name
+            run_id = getattr(config, "_run_id", "unknown")
+            backend_name_str = getattr(config, "TRANSLATOR_BACKEND", "ollama")
+            model_str = getattr(config, "OLLAMA_TRANSLATE_MODEL", None)
+            region_by_id = {r["region_id"]: r for r in usable}
+
+            for rid in list(substantial_missing):
+                region = region_by_id.get(rid, {"region_id": rid})
+                original = orig_by_id.get(rid, "")
+                request = make_override_request(
+                    run_id=run_id,
+                    chapter=chapter,
+                    region=region,
+                    initial_reason="missing_after_batch",
+                    final_reason="blank_after_contextual_retry",
+                    backend=backend_name_str,
+                    model=model_str,
+                    attempts=2,
+                )
+
+                if runtime.can_prompt:
+                    decision = prompt_for_override(request)
+                else:
+                    request_store.append_pending(request)
+                    logger.warning(
+                        "[%s] MANUAL_OVERRIDE_DEFERRED: %s queued (non-interactive runtime)",
+                        _STAGE_NAME, rid,
+                    )
+                    decision = ManualOverrideDecision("defer")
+
+                if decision.action == "apply_region" and decision.translation:
+                    translation_map[rid] = decision.translation
+                    substantial_missing.remove(rid)
+                    logger.info(
+                        "[%s] Manual override applied (region): %s -> %r",
+                        _STAGE_NAME, rid, decision.translation,
+                    )
+                elif decision.action == "apply_glossary" and decision.translation:
+                    translation_map[rid] = decision.translation
+                    substantial_missing.remove(rid)
+                    glossary_terms = glossary.get("terms", [])
+                    glossary_path = ws.parent / getattr(config, "GLOSSARY_NAME", "glossary.json")
+                    try:
+                        save_locked_glossary_entry(
+                            glossary_terms, request, decision.translation, glossary_path
+                        )
+                        logger.info(
+                            "[%s] Manual override saved to locked glossary: %r -> %r",
+                            _STAGE_NAME, original, decision.translation,
+                        )
+                    except Exception as exc:
+                        logger.warning("[%s] Could not save locked glossary: %s", _STAGE_NAME, exc)
+                elif decision.action == "abort":
+                    raise RuntimeError(
+                        f"Translation aborted by user at region {rid}."
+                    )
+
+        # Recalculate ratio after retries + manual overrides
+        still_missing = [rid for rid in usable_ids if rid not in translation_map
+                         and not _is_trivial_region(orig_by_id.get(rid, ""), config)]
+        new_substantial_total = max(1, len(usable_ids) - len(trivial_missing))
+        ratio = (new_substantial_total - len(still_missing)) / new_substantial_total
+
         ratio_fail = ratio < min_ratio
-        count_fail = len(substantial_missing) > max_missing
+        count_fail = len(still_missing) > max_missing
         if ratio_fail or count_fail:
             trigger = "ratio" if ratio_fail else "count"
             logger.error(
@@ -613,7 +816,7 @@ def run_translation(workspace: str, config) -> Path | None:
                 _TOTAL_STAGES,
                 _STAGE_NAME,
                 ratio * 100,
-                len(substantial_missing),
+                len(still_missing),
                 max_missing,
                 trigger,
             )
@@ -632,6 +835,7 @@ def run_translation(workspace: str, config) -> Path | None:
                     locked=locked,
                     t0=t0,
                     advance=False,
+                    glossary_resolved_ids=frozenset(glossary_resolved.keys()),
                 )
             )
             return None
@@ -658,8 +862,10 @@ def run_translation(workspace: str, config) -> Path | None:
             overrides=overrides,
             locked=locked,
             t0=t0,
+            glossary_resolved_ids=frozenset(glossary_resolved.keys()),
         )
     )
+
 
 
 @dataclass
@@ -677,6 +883,7 @@ class TranslationWriteContext:
     locked: list[dict]
     t0: float
     advance: bool = True
+    glossary_resolved_ids: frozenset = frozenset()
 
 
 def _write_output(ctx: TranslationWriteContext) -> Path:
@@ -726,6 +933,7 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
         applied_total.update(applied)
 
     # Usable regions
+    glossary_resolved_ids = ctx.glossary_resolved_ids
     for region in usable:
         rid = region["region_id"]
         raw_text = translation_map.get(rid, "")
@@ -735,11 +943,12 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
             )
             translated = True
             skip_reason = None
-            trans_source = (
-                f"ollama:{getattr(config, 'OLLAMA_TRANSLATE_MODEL', '')}"
-                if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
-                else "llm"
-            )
+            if rid in glossary_resolved_ids:
+                trans_source = "locked_glossary"
+            elif getattr(config, "TRANSLATOR_BACKEND", "") == "ollama":
+                trans_source = f"ollama:{getattr(config, 'OLLAMA_TRANSLATE_MODEL', '')}"
+            else:
+                trans_source = "llm"
         else:
             final_text, applied, conflict = "", [], False
             translated = False
