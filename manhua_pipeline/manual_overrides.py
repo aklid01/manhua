@@ -312,4 +312,9 @@ def save_locked_glossary_entry(
                 "request_id": request.request_id,
             }
         )
-    atomic_write_json(path, glossary)
+    payload = {
+        "version": "v1",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "terms": glossary,
+    }
+    atomic_write_json(path, payload)

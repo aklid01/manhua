@@ -211,3 +211,71 @@ def test_resolve_overrides_writes_region_override(monkeypatch, temp_workspace):
     assert all_rows[0]["status"] == "resolved"
     assert all_rows[0]["resolved_scope"] == "region"
     assert all_rows[0]["resolved_translation"] == "And."
+
+
+def test_save_locked_glossary_entry_writes_dict(temp_workspace):
+    from manhua_pipeline.manual_overrides import (
+        save_locked_glossary_entry,
+    )
+
+    glossary_path = temp_workspace / "glossary.json"
+    region = {"region_id": "P010_R001", "original_text": "以及·", "page_number": 10}
+    req = make_override_request(
+        run_id="test",
+        chapter=temp_workspace.name,
+        region=region,
+        initial_reason="missing_after_batch",
+        final_reason="blank_after_contextual_retry",
+        backend="ollama",
+        model="qwen",
+        attempts=2,
+    )
+
+    save_locked_glossary_entry([], req, "and..", glossary_path)
+
+    assert glossary_path.exists()
+    glossary_data = json.loads(glossary_path.read_text(encoding="utf-8"))
+    assert isinstance(glossary_data, dict)
+    assert glossary_data["version"] == "v1"
+    assert len(glossary_data["terms"]) == 1
+    assert glossary_data["terms"][0]["source_term"] == "以及·"
+    assert glossary_data["terms"][0]["target_term"] == "and.."
+    assert glossary_data["terms"][0]["locked"] is True
+
+
+def test_resolve_overrides_writes_glossary_override(monkeypatch, temp_workspace):
+    monkeypatch.setattr(
+        "manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: True
+    )
+
+    store = OverrideRequestStore(temp_workspace)
+    region = {"region_id": "P010_R001", "original_text": "以及·", "page_number": 10}
+    req = make_override_request(
+        run_id="test",
+        chapter=temp_workspace.name,
+        region=region,
+        initial_reason="missing_after_batch",
+        final_reason="blank_after_contextual_retry",
+        backend="ollama",
+        model="qwen",
+        attempts=2,
+    )
+    store.upsert_pending(req)
+
+    # Mock prompt_for_override to return glossary decision
+    from manhua_pipeline.manual_overrides import ManualOverrideDecision
+
+    mock_decision = ManualOverrideDecision(action="apply_glossary", translation="and..")
+    monkeypatch.setattr(
+        "manhua_pipeline.manual_overrides.prompt_for_override", lambda r: mock_decision
+    )
+
+    rc = resolve_overrides(temp_workspace, config)
+    assert rc == 0
+
+    # Verify glossary.json contains the resolved entry as a dict
+    glossary_file = temp_workspace.parent / "glossary.json"
+    assert glossary_file.exists()
+    glossary_data = json.loads(glossary_file.read_text(encoding="utf-8"))
+    assert isinstance(glossary_data, dict)
+    assert glossary_data["terms"][0]["target_term"] == "and.."
