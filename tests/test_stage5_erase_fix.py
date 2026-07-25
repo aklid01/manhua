@@ -91,25 +91,37 @@ def test_safe_rectangle_erases_dark_source_glyphs():
         config=config,
     )
 
-    assert result["erase_strategy"] == "padded_text_rectangle"
+    assert result["erase_strategy"] == "text_mask_clipped_to_bubble"
 
     crop = image.crop(erase_box.as_xyxy())
     assert all(pixel == (255, 255, 255) for pixel in crop.getdata())
 
 
 def test_white_mask_holes_do_not_preserve_source_text():
-    image = Image.new("RGB", (300, 200), "white")
+    from manhua_pipeline.stages.stage5_render import _get_bubble_mask
+
+    image = Image.new("RGB", (300, 200), (50, 50, 50))
     draw = ImageDraw.Draw(image)
+    draw.rectangle((60, 40, 240, 140), fill=(255, 255, 255))
     draw.rectangle((120, 90, 180, 120), fill="black")
 
-    bubble_mask = Image.new("L", (240, 140), 255)
-    mask_draw = ImageDraw.Draw(bubble_mask)
-    # Simulate holes caused by dark glyph pixels
-    mask_draw.rectangle((70, 50, 130, 80), fill=0)
-
     text_box = Box(120, 90, 60, 30)
-    bubble_box = Box(60, 40, 240, 140)
+    bubble_box = Box(60, 40, 180, 100)
     erase_box = Box(108, 78, 84, 54)
+
+    local_text_box = Box(x=text_box.x - bubble_box.x, y=text_box.y - bubble_box.y, w=text_box.w, h=text_box.h)
+    bubble_crop = image.crop(bubble_box.as_xyxy())
+    bubble_mask = _get_bubble_mask(
+        bubble_crop,
+        bubble_box.x,
+        bubble_box.y,
+        bubble_box.w,
+        bubble_box.h,
+        image.width,
+        image.height,
+        config,
+        seed_box=local_text_box,
+    )
 
     erase_original_text(
         page_img=image,
@@ -121,7 +133,7 @@ def test_white_mask_holes_do_not_preserve_source_text():
         config=config,
     )
 
-    assert image.getpixel((140, 100)) != (0, 0, 0)
+    assert image.getpixel((140, 100)) == (255, 255, 255)
 
 
 def test_placement_stays_inside_layout_box():
@@ -205,7 +217,7 @@ def test_render_json_records_erase_and_layout_geometry(tmp_path):
     res = report["results"][0]
 
     assert res["rendered"] is True
-    assert res["erase_strategy"] == "padded_text_rectangle"
+    assert res["erase_strategy"] == "text_mask_clipped_to_bubble"
     assert res["text_box"] == {"x": 566, "y": 874, "w": 334, "h": 99}
     assert res["bubble_box"] == {"x": 310, "y": 600, "w": 779, "h": 487}
     assert res["layout_box"] != res["bubble_box"]
@@ -272,5 +284,111 @@ def test_render_events_receive_entrypoint_run_id(tmp_path):
         assert event["run_id"] == target_run_id
 
     region_ev = next(e for e in events if e["event"] == RENDER_REGION_COMPLETED)
-    assert region_ev["metadata"]["erase_strategy"] == "padded_text_rectangle"
+    assert region_ev["metadata"]["erase_strategy"] == "text_mask_clipped_to_bubble"
     assert region_ev["metadata"]["text_box"] == {"x": 100, "y": 100, "w": 200, "h": 50}
+
+
+def test_erase_is_clipped_to_round_bubble():
+    page = Image.new("RGB", (400, 300), (180, 180, 180))
+    draw = ImageDraw.Draw(page)
+
+    bubble_box = Box(50, 30, 300, 220)
+
+    bubble_mask = Image.new("L", (300, 220), 0)
+    mask_draw = ImageDraw.Draw(bubble_mask)
+    mask_draw.ellipse((0, 0, 299, 219), fill=255)
+
+    bubble_fill = Image.new("RGB", (300, 220), "white")
+    page.paste(bubble_fill, (bubble_box.x, bubble_box.y), bubble_mask)
+
+    text_box = Box(90, 100, 220, 50)
+    erase_box = Box(70, 80, 260, 90)
+
+    draw.rectangle((130, 115, 270, 145), fill="black")
+
+    outside_before = page.getpixel((60, 80))
+
+    result = erase_original_text(
+        page_img=page,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=bubble_mask,
+        config=config,
+    )
+
+    assert page.getpixel((180, 125)) == (255, 255, 255)
+    assert page.getpixel((60, 80)) == outside_before
+    assert result["erase_strategy"] == "text_mask_clipped_to_bubble"
+
+
+def test_clipped_mask_removes_rectangular_corners():
+    page = Image.new("RGB", (200, 200), (100, 100, 100))
+    draw = ImageDraw.Draw(page)
+
+    bubble_box = Box(20, 20, 160, 160)
+
+    bubble_mask = Image.new("L", (160, 160), 0)
+    mask_draw = ImageDraw.Draw(bubble_mask)
+    mask_draw.ellipse((0, 0, 159, 159), fill=255)
+
+    text_box = Box(30, 30, 140, 140)
+    erase_box = Box(20, 20, 160, 160)
+
+    erase_original_text(
+        page_img=page,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=bubble_mask,
+        config=config,
+    )
+
+    assert page.getpixel((22, 22)) == (100, 100, 100)
+
+
+def test_low_overlap_never_falls_back_to_unclipped_rectangle():
+    page = Image.new("RGB", (300, 300), (50, 50, 50))
+    draw = ImageDraw.Draw(page)
+
+    bubble_box = Box(50, 50, 200, 200)
+
+    bubble_mask = Image.new("L", (200, 200), 0)
+    mask_draw = ImageDraw.Draw(bubble_mask)
+    mask_draw.rectangle((10, 10, 30, 30), fill=255)
+
+    text_box = Box(60, 60, 180, 180)
+    erase_box = Box(50, 50, 200, 200)
+
+    result = erase_original_text(
+        page_img=page,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=bubble_mask,
+        config=config,
+    )
+
+    assert result["low_overlap"] is True
+    assert page.getpixel((150, 150)) == (50, 50, 50)
+
+
+def test_component_near_text_wins_over_larger_background_component():
+    from PIL import Image
+    from manhua_pipeline.stages.stage5_render import _get_bubble_mask
+
+    img = Image.new("RGB", (200, 200), (50, 50, 50))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((0, 0, 80, 120), fill=(255, 255, 255))
+    draw.rectangle((100, 50, 150, 100), fill=(255, 255, 255))
+
+    local_text_box = Box(105, 55, 40, 40)
+    mask = _get_bubble_mask(
+        img, 0, 0, 200, 200, 200, 200, config, seed_box=local_text_box
+    )
+
+    assert mask.getpixel((120, 75)) == 255
+    assert mask.getpixel((40, 60)) == 0

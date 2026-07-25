@@ -182,46 +182,9 @@ def estimate_text_background(
     return tuple(int(median(channel)) for channel in zip(*points))
 
 
-def erase_with_text_mask(
-    *,
-    page_img: Image.Image,
-    bubble_box: Box,
-    erase_box: Box,
-    bubble_mask: Image.Image,
-    fill: tuple[int, int, int],
-    config,
-) -> dict:
-    local = Box(
-        x=erase_box.x - bubble_box.x,
-        y=erase_box.y - bubble_box.y,
-        w=erase_box.w,
-        h=erase_box.h,
-    )
-
-    text_mask = Image.new("L", (bubble_box.w, bubble_box.h), 0)
-    mask_draw = ImageDraw.Draw(text_mask)
-    mask_draw.rectangle(local.as_xyxy(), fill=255)
-
-    dilation = int(getattr(config, "TEXT_ERASE_DILATION_PX", 5))
-    if dilation > 1:
-        if dilation % 2 == 0:
-            dilation += 1
-        text_mask = text_mask.filter(ImageFilter.MaxFilter(dilation))
-
-    erase_mask = text_mask
-
-    fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
-    page_img.paste(
-        fill_image,
-        (bubble_box.x, bubble_box.y),
-        mask=erase_mask,
-    )
-
-    return {
-        "erase_strategy": "text_mask_fallback",
-        "erase_fill": list(fill),
-        "dilation_px": dilation,
-    }
+def _count_mask_pixels(mask: Image.Image) -> int:
+    histogram = mask.histogram()
+    return histogram[255] if len(histogram) > 255 else 0
 
 
 def erase_original_text(
@@ -234,32 +197,61 @@ def erase_original_text(
     bubble_mask: Image.Image,
     config,
 ) -> dict:
+    fill = estimate_text_background(
+        page_img,
+        text_box,
+        bubble_box,
+    )
+
+    local_erase = Box(
+        x=erase_box.x - bubble_box.x,
+        y=erase_box.y - bubble_box.y,
+        w=erase_box.w,
+        h=erase_box.h,
+    )
+
+    text_mask = Image.new("L", (bubble_box.w, bubble_box.h), 0)
+    mask_draw = ImageDraw.Draw(text_mask)
+    mask_draw.rectangle(local_erase.as_xyxy(), fill=255)
+
+    dilation = int(getattr(config, "TEXT_ERASE_DILATION_PX", 5))
+    if dilation > 1:
+        if dilation % 2 == 0:
+            dilation += 1
+        text_mask = text_mask.filter(ImageFilter.MaxFilter(dilation))
+
+    # bubble_mask is the filled interior mask.
+    # Multiply clips rectangular corners outside curved balloons.
+    erase_mask = ImageChops.multiply(text_mask, bubble_mask)
+
+    fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
+    page_img.paste(
+        fill_image,
+        (bubble_box.x, bubble_box.y),
+        mask=erase_mask,
+    )
+
+    text_pixels = _count_mask_pixels(text_mask)
+    erase_pixels = _count_mask_pixels(erase_mask)
+    retention = (erase_pixels / text_pixels) if text_pixels else 0.0
+    min_retention = float(getattr(config, "TEXT_ERASE_MIN_RETENTION", 0.65))
+    low_overlap = retention < min_retention
+
     margin = int(getattr(config, "TEXT_ERASE_PARENT_MARGIN_PX", 8))
-    allow_rect = bool(getattr(config, "TEXT_ERASE_USE_RECT_WHEN_SAFE", True))
-    safe_rect = allow_rect and (
-        bubble_box == text_box or box_inside(text_box, bubble_box, margin=margin)
-    )
+    geometrically_inside = box_inside(text_box, bubble_box, margin=margin)
 
-    fill = estimate_text_background(page_img, text_box, bubble_box)
-
-    if safe_rect:
-        draw.rectangle(erase_box.as_xyxy(), fill=fill)
-        return {
-            "erase_strategy": "padded_text_rectangle",
-            "erase_fill": list(fill),
-            "safe_rect": True,
-        }
-
-    result = erase_with_text_mask(
-        page_img=page_img,
-        bubble_box=bubble_box,
-        erase_box=erase_box,
-        bubble_mask=bubble_mask,
-        fill=fill,
-        config=config,
-    )
-    result["safe_rect"] = False
-    return result
+    return {
+        "erase_strategy": "text_mask_clipped_to_bubble",
+        "erase_fill": list(fill),
+        "dilation_px": dilation,
+        "text_mask_pixels": text_pixels,
+        "erase_mask_pixels": erase_pixels,
+        "clip_retention_ratio": retention,
+        "low_overlap": low_overlap,
+        "safe_rect": geometrically_inside,
+        "text_mask": text_mask,
+        "erase_mask": erase_mask,
+    }
 
 
 def fit_and_place_text(
@@ -450,21 +442,48 @@ def _bfs(
 
 
 def _keep_largest_component(
-    is_white: list[list[bool]], width: int, height: int
+    is_white: list[list[bool]],
+    width: int,
+    height: int,
+    seed_box: Box | None = None,
 ) -> list[list[bool]]:
-    """Keep only the largest connected component of True values (the main bubble)."""
+    """Keep component with highest seed_box overlap or largest area."""
     visited = [[False] * width for _ in range(height)]
-    largest_comp = []
+    components = []
 
     for y in range(height):
         for x in range(width):
             if is_white[y][x] and not visited[y][x]:
                 comp = _bfs(x, y, is_white, visited, width, height)
-                if len(comp) > len(largest_comp):
-                    largest_comp = comp
+                components.append(comp)
+
+    if not components:
+        return [[False] * width for _ in range(height)]
+
+    if seed_box is not None:
+        margin = 8
+        sx0 = max(0, seed_box.x - margin)
+        sy0 = max(0, seed_box.y - margin)
+        sx1 = min(width, seed_box.x2 + margin)
+        sy1 = min(height, seed_box.y2 + margin)
+
+        best_comp = None
+        best_score = -1
+        for comp in components:
+            score = sum(1 for cx, cy in comp if sx0 <= cx < sx1 and sy0 <= cy < sy1)
+            if score > best_score:
+                best_score = score
+                best_comp = comp
+
+        if best_score > 0 and best_comp is not None:
+            chosen = best_comp
+        else:
+            chosen = max(components, key=len)
+    else:
+        chosen = max(components, key=len)
 
     new_grid = [[False] * width for _ in range(height)]
-    for cx, cy in largest_comp:
+    for cx, cy in chosen:
         new_grid[cy][cx] = True
     return new_grid
 
@@ -478,6 +497,7 @@ def _get_bubble_mask(
     page_w: int,
     page_h: int,
     config,
+    seed_box: Box | None = None,
 ) -> Image.Image:
     """Generate a binary mask identifying the white/near-white bubble area."""
     import numpy as np
@@ -494,21 +514,47 @@ def _get_bubble_mask(
         & (arr[:, :, 2] > threshold)
     )
 
-    # 2. Keep only the largest connected component of white pixels (noise filter)
+    # 2. Select component using seed_box overlap if available, else max area
     try:
         from scipy.ndimage import label
 
         labeled, num_features = label(is_white)
         if num_features > 0:
-            counts = np.bincount(labeled.ravel())
-            counts[0] = 0
-            largest_label = counts.argmax()
-            is_white = labeled == largest_label
+            if seed_box is not None:
+                margin = 8
+                sx0 = max(0, seed_box.x - margin)
+                sy0 = max(0, seed_box.y - margin)
+                sx1 = min(width, seed_box.x2 + margin)
+                sy1 = min(height, seed_box.y2 + margin)
+
+                best_label = 0
+                best_score = -1
+                for lab in range(1, num_features + 1):
+                    comp = labeled == lab
+                    score = int(comp[sy0:sy1, sx0:sx1].sum())
+                    if score > best_score:
+                        best_score = score
+                        best_label = lab
+
+                if best_score > 0:
+                    selected_label = best_label
+                else:
+                    counts = np.bincount(labeled.ravel())
+                    counts[0] = 0
+                    selected_label = counts.argmax()
+            else:
+                counts = np.bincount(labeled.ravel())
+                counts[0] = 0
+                selected_label = counts.argmax()
+
+            is_white = labeled == selected_label
         else:
             is_white = np.zeros_like(is_white)
     except ImportError:
         is_white_list = is_white.tolist()
-        is_white_list = _keep_largest_component(is_white_list, width, height)
+        is_white_list = _keep_largest_component(
+            is_white_list, width, height, seed_box=seed_box
+        )
         is_white = np.array(is_white_list, dtype=bool)
 
     # 3. Find boundaries for enclosed-hole fill logic using numpy
@@ -729,7 +775,13 @@ def _render_region(
         region, page_img.size, config
     )
 
-    # 2. Bubble Mask for context / diagnostics
+    # 2. Bubble Mask for context / diagnostics (using local_text_box seed)
+    local_text_box = Box(
+        x=text_box.x - bubble_box.x,
+        y=text_box.y - bubble_box.y,
+        w=text_box.w,
+        h=text_box.h,
+    )
     bubble_crop = page_img.crop(bubble_box.as_xyxy())
     bubble_mask = _get_bubble_mask(
         bubble_crop,
@@ -740,6 +792,7 @@ def _render_region(
         page_img.width,
         page_img.height,
         config,
+        seed_box=local_text_box,
     )
 
     debug_dir = (render_dir / "debug") if render_dir else None
@@ -783,7 +836,55 @@ def _render_region(
         config=config,
     )
 
+    if erase_meta.get("low_overlap"):
+        min_retention = float(getattr(config, "TEXT_ERASE_MIN_RETENTION", 0.65))
+        logger.warning(
+            "[%d/%d %s] Page %d %s -> Low erase mask retention ratio (%.2f < %.2f)",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            page_num,
+            rid,
+            erase_meta["clip_retention_ratio"],
+            min_retention,
+        )
+        from manhua_pipeline.events import PipelineEvent, RENDER_ERASE_MASK_LOW_OVERLAP
+        from manhua_pipeline.io.event_emitter import get_event_emitter
+
+        em = emitter or (get_event_emitter(render_dir.parent, config, logger=logger) if render_dir else None)
+        if em:
+            em.emit(
+                PipelineEvent(
+                    event=RENDER_ERASE_MASK_LOW_OVERLAP,
+                    run_id=run_id,
+                    stage=_STAGE_NAME.lower(),
+                    chapter=chapter,
+                    region_id=rid,
+                    page=page_num,
+                    metadata={
+                        "retention": erase_meta["clip_retention_ratio"],
+                        "min_retention": min_retention,
+                    },
+                )
+            )
+
     if do_debug:
+        debug_paths["text_mask"] = str(
+            save_render_debug_image(
+                erase_meta["text_mask"],
+                debug_dir=debug_dir,
+                region_id=rid,
+                suffix="text_mask",
+            )
+        )
+        debug_paths["erase_mask_clipped"] = str(
+            save_render_debug_image(
+                erase_meta["erase_mask"],
+                debug_dir=debug_dir,
+                region_id=rid,
+                suffix="erase_mask_clipped",
+            )
+        )
         debug_paths["after_erase"] = str(
             save_render_debug_image(
                 page_img.crop(erase_box.as_xyxy()),
