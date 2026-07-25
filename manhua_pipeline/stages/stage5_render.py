@@ -4,13 +4,15 @@ Erases original Chinese text from bounding box areas and draws the paraphrased
 US English text in its place. Utilizes Pillow to wrap, size, and style.
 """
 
+from dataclasses import dataclass
 import json
 import random
+from statistics import median
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from manhua_pipeline.io.settings import get_credits
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
@@ -23,6 +25,316 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Render"
 
 _font_cache = {}
+
+
+@dataclass(frozen=True)
+class Box:
+    x: int
+    y: int
+    w: int
+    h: int
+
+    @property
+    def x2(self) -> int:
+        return self.x + self.w
+
+    @property
+    def y2(self) -> int:
+        return self.y + self.h
+
+    def as_xyxy(self) -> tuple[int, int, int, int]:
+        return self.x, self.y, self.x2, self.y2
+
+    def as_dict(self) -> dict[str, int]:
+        return {"x": self.x, "y": self.y, "w": self.w, "h": self.h}
+
+
+def box_from_dict(value: dict) -> Box:
+    return Box(
+        x=int(value["x"]),
+        y=int(value["y"]),
+        w=max(0, int(value["w"])),
+        h=max(0, int(value["h"])),
+    )
+
+
+def box_from_coords(coords: list | tuple) -> Box:
+    x, y, w, h = coords
+    return Box(int(x), int(y), max(0, int(w)), max(0, int(h)))
+
+
+def clip_box(box: Box, image_size: tuple[int, int]) -> Box:
+    image_w, image_h = image_size
+    x0 = max(0, min(image_w, box.x))
+    y0 = max(0, min(image_h, box.y))
+    x1 = max(x0, min(image_w, box.x2))
+    y1 = max(y0, min(image_h, box.y2))
+    return Box(x0, y0, x1 - x0, y1 - y0)
+
+
+def expand_box(box: Box, padding: int, image_size: tuple[int, int]) -> Box:
+    return clip_box(
+        Box(
+            x=box.x - padding,
+            y=box.y - padding,
+            w=box.w + 2 * padding,
+            h=box.h + 2 * padding,
+        ),
+        image_size,
+    )
+
+
+def box_inside(inner: Box, outer: Box, *, margin: int = 0) -> bool:
+    return (
+        inner.x >= outer.x + margin
+        and inner.y >= outer.y + margin
+        and inner.x2 <= outer.x2 - margin
+        and inner.y2 <= outer.y2 - margin
+    )
+
+
+def intersect_boxes(a: Box, b: Box) -> Box | None:
+    x0 = max(a.x, b.x)
+    y0 = max(a.y, b.y)
+    x1 = min(a.x2, b.x2)
+    y1 = min(a.y2, b.y2)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return Box(x0, y0, x1 - x0, y1 - y0)
+
+
+def select_render_geometry(
+    region: dict,
+    image_size: tuple[int, int],
+    config,
+) -> tuple[Box, Box, Box, Box]:
+    text_value = region.get("read_region") or region.get("bbox")
+    if not text_value:
+        raise ValueError(
+            f"Region {region.get('region_id')} has no read_region or bbox"
+        )
+
+    text_box = clip_box(box_from_dict(text_value), image_size)
+
+    parent_value = region.get("parent_bubble")
+    if parent_value:
+        bubble_box = clip_box(box_from_dict(parent_value), image_size)
+    else:
+        erase_coords = region.get("erase_mask", {}).get("coords")
+        bubble_box = (
+            clip_box(box_from_coords(erase_coords), image_size)
+            if erase_coords
+            else text_box
+        )
+
+    erase_box = expand_box(
+        text_box,
+        int(getattr(config, "TEXT_ERASE_PADDING_PX", 12)),
+        image_size,
+    )
+
+    erase_box = intersect_boxes(erase_box, bubble_box) or text_box
+
+    layout_padding = int(getattr(config, "TEXT_LAYOUT_PADDING_PX", 8))
+    layout_box = Box(
+        x=text_box.x + layout_padding,
+        y=text_box.y + layout_padding,
+        w=max(5, text_box.w - 2 * layout_padding),
+        h=max(5, text_box.h - 2 * layout_padding),
+    )
+
+    return text_box, bubble_box, erase_box, layout_box
+
+
+def estimate_text_background(
+    image: Image.Image,
+    text_box: Box,
+    bubble_box: Box,
+) -> tuple[int, int, int]:
+    pad = max(6, min(text_box.w, text_box.h) // 10)
+    expanded = Box(
+        text_box.x - pad,
+        text_box.y - pad,
+        text_box.w + 2 * pad,
+        text_box.h + 2 * pad,
+    )
+    ring_box = intersect_boxes(
+        clip_box(expanded, image.size),
+        bubble_box,
+    ) or text_box
+
+    points: list[tuple[int, int, int]] = []
+    step_x = max(1, ring_box.w // 24)
+    step_y = max(1, ring_box.h // 24)
+
+    for y in range(ring_box.y, ring_box.y2, step_y):
+        for x in range(ring_box.x, ring_box.x2, step_x):
+            if text_box.x <= x < text_box.x2 and text_box.y <= y < text_box.y2:
+                continue
+            pixel = image.getpixel((x, y))
+            if isinstance(pixel, int):
+                pixel = (pixel, pixel, pixel)
+            points.append(tuple(pixel[:3]))
+
+    if not points:
+        return (255, 255, 255)
+
+    return tuple(int(median(channel)) for channel in zip(*points))
+
+
+def erase_with_text_mask(
+    *,
+    page_img: Image.Image,
+    bubble_box: Box,
+    erase_box: Box,
+    bubble_mask: Image.Image,
+    fill: tuple[int, int, int],
+    config,
+) -> dict:
+    local = Box(
+        x=erase_box.x - bubble_box.x,
+        y=erase_box.y - bubble_box.y,
+        w=erase_box.w,
+        h=erase_box.h,
+    )
+
+    text_mask = Image.new("L", (bubble_box.w, bubble_box.h), 0)
+    mask_draw = ImageDraw.Draw(text_mask)
+    mask_draw.rectangle(local.as_xyxy(), fill=255)
+
+    dilation = int(getattr(config, "TEXT_ERASE_DILATION_PX", 5))
+    if dilation > 1:
+        if dilation % 2 == 0:
+            dilation += 1
+        text_mask = text_mask.filter(ImageFilter.MaxFilter(dilation))
+
+    erase_mask = text_mask
+
+    fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
+    page_img.paste(
+        fill_image,
+        (bubble_box.x, bubble_box.y),
+        mask=erase_mask,
+    )
+
+    return {
+        "erase_strategy": "text_mask_fallback",
+        "erase_fill": list(fill),
+        "dilation_px": dilation,
+    }
+
+
+def erase_original_text(
+    *,
+    page_img: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    text_box: Box,
+    bubble_box: Box,
+    erase_box: Box,
+    bubble_mask: Image.Image,
+    config,
+) -> dict:
+    margin = int(getattr(config, "TEXT_ERASE_PARENT_MARGIN_PX", 8))
+    allow_rect = bool(getattr(config, "TEXT_ERASE_USE_RECT_WHEN_SAFE", True))
+    safe_rect = allow_rect and (
+        bubble_box == text_box or box_inside(text_box, bubble_box, margin=margin)
+    )
+
+    fill = estimate_text_background(page_img, text_box, bubble_box)
+
+    if safe_rect:
+        draw.rectangle(erase_box.as_xyxy(), fill=fill)
+        return {
+            "erase_strategy": "padded_text_rectangle",
+            "erase_fill": list(fill),
+            "safe_rect": True,
+        }
+
+    result = erase_with_text_mask(
+        page_img=page_img,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=bubble_mask,
+        fill=fill,
+        config=config,
+    )
+    result["safe_rect"] = False
+    return result
+
+
+def fit_and_place_text(
+    *,
+    draw: ImageDraw.ImageDraw,
+    final_text: str,
+    font_path: str,
+    layout_box: Box,
+    config,
+) -> tuple[ImageFont.ImageFont, list[str], int, bool, list[dict]]:
+    max_pt = getattr(config, "FONT_MAX_PT", 21)
+    min_pt = getattr(config, "FONT_MIN_PT", 9)
+    step_pt = getattr(config, "FONT_STEP_PT", 1)
+    line_spacing = getattr(config, "LINE_SPACING", 1.15)
+
+    font, lines, font_size, overflow = _fit_text(
+        text=final_text,
+        bbox_w=layout_box.w,
+        bbox_h=layout_box.h,
+        font_path=font_path,
+        max_pt=max_pt,
+        min_pt=min_pt,
+        step_pt=step_pt,
+        line_spacing=line_spacing,
+        config=config,
+        use_padding=False,
+    )
+
+    line_heights = []
+    line_widths = []
+    for line in lines:
+        left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
+        line_widths.append(right - left)
+        line_heights.append(bottom - top)
+
+    spacing_px = max(1, int(font_size * (line_spacing - 1.0)))
+    block_height = sum(line_heights)
+    if len(lines) > 1:
+        block_height += spacing_px * (len(lines) - 1)
+
+    cursor_y = layout_box.y + max(0, (layout_box.h - block_height) // 2)
+    placements = []
+
+    for line, width, height in zip(lines, line_widths, line_heights):
+        cursor_x = layout_box.x + max(0, (layout_box.w - width) // 2)
+        placements.append({
+            "text": line,
+            "x": cursor_x,
+            "y": cursor_y,
+            "w": width,
+            "h": height,
+        })
+        cursor_y += height + spacing_px
+
+    return font, lines, font_size, overflow, placements
+
+
+def should_debug_region(region_id: str, config) -> bool:
+    if not getattr(config, "RENDER_DEBUG_ARTIFACTS", False):
+        return False
+    selected = set(getattr(config, "RENDER_DEBUG_REGION_IDS", []) or [])
+    return not selected or region_id in selected
+
+
+def save_render_debug_image(
+    image: Image.Image,
+    *,
+    debug_dir: Path,
+    region_id: str,
+    suffix: str,
+) -> Path:
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    path = debug_dir / f"{region_id}_{suffix}.png"
+    image.save(path)
+    return path
 
 
 def _load_font(
@@ -292,9 +604,10 @@ def _fit_text(
     step_pt: int,
     line_spacing: float,
     config,
+    use_padding: bool = True,
 ) -> tuple[ImageFont.ImageFont, list[str], int, bool]:
     """Fits text using the overflow ladder sizing step-down technique with ratio wrapping search."""
-    padding = getattr(config, "TEXT_PADDING_PX", 8)
+    padding = getattr(config, "TEXT_PADDING_PX", 8) if use_padding else 0
     target_w = max(5, bbox_w - 2 * padding)
     target_h = max(5, bbox_h - 2 * padding)
 
@@ -332,33 +645,38 @@ def _render_region(
     draw: ImageDraw.ImageDraw,
     page_num: int,
     config,
+    *,
+    emitter=None,
+    run_id: str = "unknown",
+    chapter: str = "unknown",
+    render_dir: Path | None = None,
 ) -> tuple[dict, int, int, int]:
-    """Render a single region and return (result_dict, page_drawn, page_left, total_overflow)."""
+    """Render a single region using explicit geometry roles and deterministic erasure."""
     rid = region["region_id"]
-    bbox = region["bbox"]
-    render_flag = region["render"]
-    has_usable = region["has_usable_text"]
-    final_text = region["final_text"]
-    style_hint = region["style_hint"]
-    register = region["register"]
-    glossary_conflict = region["glossary_conflict"]
+    render_flag = region.get("render", True)
+    has_usable = region.get("has_usable_text", False)
+    final_text = region.get("final_text", "")
+    style_hint = region.get("style_hint", "round")
+    register = region.get("register", "neutral")
+    glossary_conflict = region.get("glossary_conflict", False)
 
-    font_size = None
-    lines_count = 0
-    overflow = False
-    page_drawn = 0
-    page_left = 0
-    total_overflow = 0
-
-    # Text-Gated Erase verification
     if not render_flag:
-        action = "left_original_not_render_type"
-        rendered = False
-        page_left = 1
-    elif not has_usable:
-        action = "left_original_no_text"
-        rendered = False
-        page_left = 1
+        result_dict = {
+            "region_id": rid,
+            "page_number": page_num,
+            "rendered": False,
+            "action": "left_original_not_render_type",
+            "font_size_pt": None,
+            "lines": 0,
+            "overflow": False,
+            "overflow_ask_llm": False,
+            "register": register,
+            "style_hint": style_hint,
+            "glossary_conflict": glossary_conflict,
+        }
+        return result_dict, 0, 1, 0
+
+    if not has_usable:
         logger.info(
             "[%d/%d %s] Page %d %s -> left original (no usable text)",
             _STAGE_INDEX,
@@ -367,10 +685,22 @@ def _render_region(
             page_num,
             rid,
         )
-    elif not final_text:
-        action = "missing_text"
-        rendered = False
-        page_left = 1
+        result_dict = {
+            "region_id": rid,
+            "page_number": page_num,
+            "rendered": False,
+            "action": "left_original_no_text",
+            "font_size_pt": None,
+            "lines": 0,
+            "overflow": False,
+            "overflow_ask_llm": False,
+            "register": register,
+            "style_hint": style_hint,
+            "glossary_conflict": glossary_conflict,
+        }
+        return result_dict, 0, 1, 0
+
+    if not final_text:
         logger.warning(
             "[%d/%d %s] Page %d %s -> left original (missing final_text)",
             _STAGE_INDEX,
@@ -379,140 +709,189 @@ def _render_region(
             page_num,
             rid,
         )
+        result_dict = {
+            "region_id": rid,
+            "page_number": page_num,
+            "rendered": False,
+            "action": "missing_text",
+            "font_size_pt": None,
+            "lines": 0,
+            "overflow": False,
+            "overflow_ask_llm": False,
+            "register": register,
+            "style_hint": style_hint,
+            "glossary_conflict": glossary_conflict,
+        }
+        return result_dict, 0, 1, 0
+
+    # 1. Geometry Selection
+    text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+        region, page_img.size, config
+    )
+
+    # 2. Bubble Mask for context / diagnostics
+    bubble_crop = page_img.crop(bubble_box.as_xyxy())
+    bubble_mask = _get_bubble_mask(
+        bubble_crop,
+        bubble_box.x,
+        bubble_box.y,
+        bubble_box.w,
+        bubble_box.h,
+        page_img.width,
+        page_img.height,
+        config,
+    )
+
+    debug_dir = (render_dir / "debug") if render_dir else None
+    do_debug = debug_dir and should_debug_region(rid, config)
+    debug_paths = {}
+
+    if do_debug:
+        debug_paths["before"] = str(
+            save_render_debug_image(
+                page_img.crop(erase_box.as_xyxy()),
+                debug_dir=debug_dir,
+                region_id=rid,
+                suffix="before",
+            )
+        )
+        debug_paths["bubble_crop"] = str(
+            save_render_debug_image(
+                bubble_crop,
+                debug_dir=debug_dir,
+                region_id=rid,
+                suffix="bubble_crop",
+            )
+        )
+        debug_paths["bubble_mask"] = str(
+            save_render_debug_image(
+                bubble_mask,
+                debug_dir=debug_dir,
+                region_id=rid,
+                suffix="bubble_mask",
+            )
+        )
+
+    # 3. Erase Source Text
+    erase_meta = erase_original_text(
+        page_img=page_img,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=bubble_mask,
+        config=config,
+    )
+
+    if do_debug:
+        debug_paths["after_erase"] = str(
+            save_render_debug_image(
+                page_img.crop(erase_box.as_xyxy()),
+                debug_dir=debug_dir,
+                region_id=rid,
+                suffix="after_erase",
+            )
+        )
+
+    # 4. Text Background & Fill
+    text_bg = estimate_text_background(page_img, text_box, bubble_box)
+    text_fill = _text_color_for_bg(text_bg)
+
+    # Apply spiky/rude style emphasis
+    text_to_draw = final_text
+    if (register == "rude" or style_hint == "spiky") and getattr(
+        config, "EMPHASIS_UPPERCASE", True
+    ):
+        text_to_draw = final_text.upper()
+
+    font_path = getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Regular.ttf")
+
+    # 5. Fit & Place English inside layout_box
+    font, lines, font_size, overflow, placements = fit_and_place_text(
+        draw=draw,
+        final_text=text_to_draw,
+        font_path=font_path,
+        layout_box=layout_box,
+        config=config,
+    )
+
+    for placement in placements:
+        draw.text(
+            (placement["x"], placement["y"]),
+            placement["text"],
+            fill=text_fill,
+            font=font,
+        )
+
+    if do_debug:
+        debug_paths["final"] = str(
+            save_render_debug_image(
+                page_img.crop(erase_box.as_xyxy()),
+                debug_dir=debug_dir,
+                region_id=rid,
+                suffix="final",
+            )
+        )
+
+    total_overflow = 1 if overflow else 0
+    if overflow:
+        logger.warning(
+            "[%d/%d %s] Page %d %s -> OVERFLOW at %dpt, rendered clipped (overflow)",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            page_num,
+            rid,
+            font_size,
+        )
     else:
-        action = "drew"
-        rendered = True
-        page_drawn = 1
-
-        # 1. Erase original text area
-        mask_coords = region["erase_mask"]["coords"]
-        mx = max(0, mask_coords[0])
-        my = max(0, mask_coords[1])
-        mw = min(page_img.width - mx, mask_coords[2])
-        mh = min(page_img.height - my, mask_coords[3])
-
-        bbox_img = page_img.crop((mx, my, mx + mw, my + mh))
-        mask = _get_bubble_mask(
-            bbox_img, mx, my, mw, mh, page_img.width, page_img.height, config
+        logger.info(
+            "[%d/%d %s] Page %d %s -> drew (%dpt, %d lines, erase=%s)",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            page_num,
+            rid,
+            font_size,
+            len(lines),
+            erase_meta["erase_strategy"],
         )
 
-        mask_bbox = mask.getbbox()
-        mask_pixels = 0
-        if mask_bbox is not None:
-            hist = mask.histogram()
-            mask_pixels = hist[255] if len(hist) > 255 else 0
-
-        crop_area = mw * mh
-        # If mask is valid and covers at least 10% of the crop, use it. Otherwise fallback to full box.
-        if (
-            mask_bbox is not None
-            and crop_area > 0
-            and (mask_pixels / crop_area) >= 0.10
-        ):
-            use_mask = True
-            c_left, c_top, c_right, c_bottom = mask_bbox
-            bubble_x = mx + c_left
-            bubble_y = my + c_top
-            bubble_w = max(5, c_right - c_left)
-            bubble_h = max(5, c_bottom - c_top)
-        else:
-            use_mask = False
-            bubble_x = bbox["x"]
-            bubble_y = bbox["y"]
-            bubble_w = bbox["w"]
-            bubble_h = bbox["h"]
-
-        if use_mask:
-            # Mask found a coherent white/near-white bubble -> paste white over the OVAL
-            # shape only (art preserved in box corners). The mask IS the proof it's light.
-            white_img = Image.new("RGB", (mw, mh), (255, 255, 255))
-            page_img.paste(white_img, (mx, my), mask=mask)
-            text_bg = (255, 255, 255)
-        else:
-            # No white bubble found: genuinely dark/stylized bubble or text-on-art.
-            interior = _estimate_bg(page_img, mx, my, mw, mh)
-            draw.rectangle([mx, my, mx + mw, my + mh], fill=interior)
-            text_bg = interior
-
-        text_fill = _text_color_for_bg(text_bg)
-
-        # 3. Draw English final text
-        # Apply spiky/rude style emphasis
-        text_to_draw = final_text
-        if (register == "rude" or style_hint == "spiky") and getattr(
-            config, "EMPHASIS_UPPERCASE", True
-        ):
-            text_to_draw = final_text.upper()
-
-        max_pt = getattr(config, "FONT_MAX_PT", 18)
-        min_pt = getattr(config, "FONT_MIN_PT", 9)
-        step_pt = getattr(config, "FONT_STEP_PT", 1)
-        line_spacing = getattr(config, "LINE_SPACING", 1.15)
-        font_path = getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Regular.ttf")
-
-        font, lines, font_size, overflow = _fit_text(
-            text_to_draw,
-            bubble_w,
-            bubble_h,
-            font_path,
-            max_pt,
-            min_pt,
-            step_pt,
-            line_spacing,
-            config,
-        )
-
-        if overflow:
-            total_overflow = 1
-            logger.warning(
-                "[%d/%d %s] Page %d %s -> OVERFLOW at %dpt, rendered clipped (overflow)",
-                _STAGE_INDEX,
-                _TOTAL_STAGES,
-                _STAGE_NAME,
-                page_num,
-                rid,
-                font_size,
-            )
-        else:
-            logger.info(
-                "[%d/%d %s] Page %d %s -> drew (%dpt, %d lines)",
-                _STAGE_INDEX,
-                _TOTAL_STAGES,
-                _STAGE_NAME,
-                page_num,
-                rid,
-                font_size,
-                len(lines),
-            )
-
-        block_h = _block_height(lines, font, line_spacing)
-        start_y = bubble_y + (bubble_h - block_h) // 2
-
-        metrics_bbox = font.getbbox("Hg")
-        line_h = metrics_bbox[3] - metrics_bbox[1] if metrics_bbox else 10
-
-        for line in lines:
-            line_w = font.getlength(line)
-            start_x = bubble_x + (bubble_w - line_w) // 2
-            draw.text((start_x, start_y), line, font=font, fill=text_fill)
-            start_y += int(line_h * line_spacing)
-
-        lines_count = len(lines)
+    mask_bbox = bubble_mask.getbbox()
+    mask_hist = bubble_mask.histogram()
+    mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
+    mask_area = bubble_box.w * bubble_box.h
+    mask_coverage = (mask_pixels / mask_area) if mask_area else 0.0
 
     result_dict = {
         "region_id": rid,
         "page_number": page_num,
-        "rendered": rendered,
-        "action": action,
+        "rendered": True,
+        "action": "drew",
         "font_size_pt": font_size,
-        "lines": lines_count,
+        "lines": len(lines),
         "overflow": overflow,
-        "overflow_ask_llm": False,
+        "overflow_ask_llm": overflow,
         "register": register,
         "style_hint": style_hint,
         "glossary_conflict": glossary_conflict,
+        "erase_strategy": erase_meta["erase_strategy"],
+        "text_box": text_box.as_dict(),
+        "bubble_box": bubble_box.as_dict(),
+        "erase_box": erase_box.as_dict(),
+        "layout_box": layout_box.as_dict(),
+        "text_fill": list(text_fill),
+        "text_background": list(text_bg),
+        "placements": placements,
+        "bubble_mask_bbox": list(mask_bbox) if mask_bbox else None,
+        "bubble_mask_pixels": mask_pixels,
+        "bubble_mask_area": mask_area,
+        "bubble_mask_coverage": mask_coverage,
     }
-    return result_dict, page_drawn, page_left, total_overflow
+    if debug_paths:
+        result_dict["debug_paths"] = debug_paths
+
+    return result_dict, 1, 0, total_overflow
 
 
 def _load_and_merge_regions(
@@ -533,6 +912,8 @@ def _load_and_merge_regions(
             "region_id": rid,
             "page_number": page_num,
             "bbox": region["bbox"],
+            "read_region": region.get("read_region"),
+            "parent_bubble": region.get("parent_bubble"),
             "erase_mask": region.get("erase_mask")
             or {
                 "type": "rect",
@@ -560,6 +941,7 @@ def _render_single_page(
     regions_by_page: dict,
     render_dir: Path,
     config,
+    run_id: str = "unknown",
 ) -> tuple[list[dict], dict | None, int, int, int]:
     """Render regions on a single page, save output image, and return report components."""
     page_num = page["page_number"]
@@ -610,7 +992,14 @@ def _render_single_page(
 
     for region in page_regions:
         res_dict, drawn, left, ovf = _render_region(
-            region, page_img, draw, page_num, config
+            region,
+            page_img,
+            draw,
+            page_num,
+            config,
+            render_dir=render_dir,
+            run_id=run_id,
+            chapter=ws.name,
         )
         page_results.append(res_dict)
         page_drawn += drawn
@@ -715,10 +1104,11 @@ def _render_credits_page(render_dir: Path, config, page_size) -> "Path | None":
         return None
 
 
-def run_render(workspace: str, config) -> Path:
+def run_render(workspace: str, config, run_id: str | None = None) -> Path:
     """Run the Rendering stage."""
     t0 = time.monotonic()
     ws = Path(workspace)
+    resolved_run_id = run_id or getattr(config, "_run_id", "unknown")
     logger.info(
         "[%d/%d %s] Series: %s | Chapter: %s",
         _STAGE_INDEX,
@@ -731,7 +1121,14 @@ def run_render(workspace: str, config) -> Path:
     from manhua_pipeline.events import RENDER_REGION_COMPLETED, STAGE_COMPLETED, STAGE_STARTED
     from manhua_pipeline.io.event_emitter import emit_stage_event
 
-    emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
+    emit_stage_event(
+        ws,
+        config,
+        _STAGE_NAME.lower(),
+        STAGE_STARTED,
+        logger=logger,
+        run_id=resolved_run_id,
+    )
 
     manifest = load_manifest(workspace, config)
     if not manifest:
@@ -780,7 +1177,7 @@ def run_render(workspace: str, config) -> Path:
 
     for page in manifest.get("pages", []):
         results, report, drawn, left, ovf = _render_single_page(
-            page, ws, regions_by_page, render_dir, config
+            page, ws, regions_by_page, render_dir, config, run_id=resolved_run_id
         )
         if report:
             render_results.extend(results)
@@ -830,11 +1227,27 @@ def run_render(workspace: str, config) -> Path:
             get_event_emitter(ws, config, logger=logger).emit(
                 PipelineEvent(
                     event=RENDER_REGION_COMPLETED,
-                    run_id=getattr(config, "_run_id", "unknown"),
+                    run_id=resolved_run_id,
                     stage=_STAGE_NAME.lower(),
                     chapter=ws.name,
                     region_id=r["region_id"],
                     page=r.get("page_number"),
+                    metadata={
+                        "action": r.get("action"),
+                        "text_box": r.get("text_box"),
+                        "bubble_box": r.get("bubble_box"),
+                        "erase_box": r.get("erase_box"),
+                        "layout_box": r.get("layout_box"),
+                        "erase_strategy": r.get("erase_strategy"),
+                        "font_size_pt": r.get("font_size_pt"),
+                        "lines": r.get("lines"),
+                        "overflow": r.get("overflow"),
+                        "placements": r.get("placements"),
+                        "bubble_mask_bbox": r.get("bubble_mask_bbox"),
+                        "bubble_mask_pixels": r.get("bubble_mask_pixels"),
+                        "bubble_mask_area": r.get("bubble_mask_area"),
+                        "bubble_mask_coverage": r.get("bubble_mask_coverage"),
+                    },
                 )
             )
 
@@ -853,6 +1266,7 @@ def run_render(workspace: str, config) -> Path:
         _STAGE_NAME.lower(),
         STAGE_COMPLETED,
         logger=logger,
+        run_id=resolved_run_id,
         metadata={"total_drawn": total_drawn, "total_left": total_left},
     )
     return report_path
