@@ -74,11 +74,7 @@ def make_override_request(
 ) -> ManualOverrideRequest:
     region_id = region["region_id"]
     request_id = build_request_id(run_id, chapter, "translation", region_id)
-    suggested: OverrideScope = (
-        "series_glossary"
-        if classification == "name_candidate"
-        else "region"
-    )
+    suggested: OverrideScope = "region"
     return ManualOverrideRequest(
         request_id=request_id,
         run_id=run_id,

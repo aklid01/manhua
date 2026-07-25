@@ -152,6 +152,8 @@ class OllamaBackend:
         if not regions:
             return {}
 
+        self.ws = ws
+        self.config = config
         self.host = s.host
         self.model = s.model
         self.timeout = s.timeout
@@ -321,9 +323,45 @@ class OllamaBackend:
         missing = [rid for rid, issue in issues.items() if issue.status != "accepted"]
         return accepted, missing, unexpected
 
-    @staticmethod
-    def _parse_json(text: str) -> dict:
-        return be.parse_json(text)
+    def _parse_json(self, text: str) -> dict:
+        from manhua_pipeline.events import (
+            BACKEND_JSON_INVALID,
+            BACKEND_JSON_NON_OBJECT,
+            BACKEND_RESPONSE_BLANK,
+            PipelineEvent,
+        )
+        from manhua_pipeline.io.parse_result import parse_json_result
+
+        result = parse_json_result(text)
+        if result.status == "success":
+            return result.value
+
+        event_by_status = {
+            "blank": BACKEND_RESPONSE_BLANK,
+            "invalid_json": BACKEND_JSON_INVALID,
+            "non_object": BACKEND_JSON_NON_OBJECT,
+        }
+        event_name = event_by_status.get(result.status)
+        ws = getattr(self, "ws", None)
+        cfg = getattr(self, "config", None)
+        if event_name and ws and cfg:
+            from manhua_pipeline.io.event_emitter import get_event_emitter
+
+            run_id = getattr(cfg, "_run_id", "unknown")
+            chapter = ws.name if isinstance(ws, Path) else "unknown"
+            get_event_emitter(ws, cfg, logger=logger).emit(
+                PipelineEvent(
+                    event=event_name,
+                    run_id=run_id,
+                    stage=_STAGE_NAME.lower(),
+                    chapter=chapter,
+                    reason=result.error or result.status,
+                    backend="ollama",
+                    model=getattr(self, "model", None),
+                    metadata={"raw_length": result.raw_length},
+                )
+            )
+        return {}
 
 
 def _get_backend(config) -> TranslatorBackend:

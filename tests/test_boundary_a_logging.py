@@ -285,3 +285,24 @@ def test_blank_parse_result_is_frozen():
     result = parse_json_result("")
     with pytest.raises((AttributeError, TypeError)):
         result.status = "success"  # type: ignore[misc]
+
+
+def test_cli_stage_events_never_use_unknown_run_id(tmp_path):
+    import json
+    import config
+    import pipeline
+    from PIL import Image
+
+    ws = (tmp_path / "workspace").resolve()
+    ws.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (100, 100), "white").save(ws / "001.png")
+
+    ctx = pipeline.create_run_context()
+    config._run_id = ctx.run_id
+    pipeline._run_all_from(str(ws), config, start="import", input_path=str(ws), run_id=ctx.run_id)
+
+    event_file = ws / "logs" / "events.jsonl"
+    assert event_file.exists()
+    events = [json.loads(line) for line in event_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert events
+    assert all(e["run_id"] == ctx.run_id for e in events)

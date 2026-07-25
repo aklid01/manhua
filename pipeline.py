@@ -135,10 +135,14 @@ def run_batch(
     clear_delay: int = 10,
     meta: dict | None = None,
     formats: list[str] | None = None,
+    run_id: str | None = None,
 ) -> int:
     """Process every CBZ in a folder. Continue-on-error; skip completed;
     resume pending; slim batch log + per-error logs; clean console per chapter."""
     from manhua_pipeline.io.workspace import load_manifest
+
+    resolved_run_id = run_id or getattr(config, "_run_id", "unknown")
+    config._run_id = resolved_run_id
 
     folder = Path(input_folder)
     if not folder.is_dir():
@@ -183,7 +187,7 @@ def run_batch(
         from manhua_pipeline.events import CHAPTER_COMPLETED, CHAPTER_FAILED, CHAPTER_STARTED
         from manhua_pipeline.io.event_emitter import emit_stage_event
 
-        emit_stage_event(chapter_dir, config, "batch", CHAPTER_STARTED, logger=logger, chapter=chapter)
+        emit_stage_event(chapter_dir, config, "batch", CHAPTER_STARTED, logger=logger, chapter=chapter, run_id=resolved_run_id)
 
         # Run (fresh import OR manifest-driven resume, handled by _run_all_from)
         stage_after = None
@@ -201,6 +205,7 @@ def run_batch(
                 fresh=fresh,
                 skip_last=skip_last,
                 formats=formats or [],
+                run_id=resolved_run_id,
             )
             m = load_manifest(str(chapter_dir), config)
             stage_after = m.get("current_stage") if m else None
@@ -209,11 +214,11 @@ def run_batch(
                 summary["failed"].append(chapter)
                 _append_batch_log(batch_log, f"FAIL rc=2       | {chapter}")
                 logger.error("[batch] %s failed (rc=2). Continuing.", chapter)
-                emit_stage_event(chapter_dir, config, "batch", CHAPTER_FAILED, logger=logger, chapter=chapter, reason="rc=2", level="ERROR")
+                emit_stage_event(chapter_dir, config, "batch", CHAPTER_FAILED, logger=logger, chapter=chapter, reason="rc=2", level="ERROR", run_id=resolved_run_id)
             elif stage_after == "complete":
                 summary["done"].append(chapter)
                 _append_batch_log(batch_log, f"DONE            | {chapter}")
-                emit_stage_event(chapter_dir, config, "batch", CHAPTER_COMPLETED, logger=logger, chapter=chapter)
+                emit_stage_event(chapter_dir, config, "batch", CHAPTER_COMPLETED, logger=logger, chapter=chapter, run_id=resolved_run_id)
             else:
                 summary["pending"].append((chapter, stage_after))
                 _append_batch_log(batch_log, f"PENDING @{stage_after} | {chapter}")
@@ -226,7 +231,7 @@ def run_batch(
             logger.error(
                 "[batch] %s crashed: %s (log: %s). Continuing.", chapter, exc, err_path
             )
-            emit_stage_event(chapter_dir, config, "batch", CHAPTER_FAILED, logger=logger, chapter=chapter, reason=str(exc), level="ERROR")
+            emit_stage_event(chapter_dir, config, "batch", CHAPTER_FAILED, logger=logger, chapter=chapter, reason=str(exc), level="ERROR", run_id=resolved_run_id)
             continue
 
         # Console clear ONLY on genuine completion (ignore handoff)
@@ -418,7 +423,9 @@ def _prepare_logs_dir(chapter_dir: Path, config, fresh: bool = False) -> Path:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    _run_ctx = create_run_context()
+    env_run_id = os.environ.get("PIPELINE_RUN_ID")
+    _run_ctx = create_run_context(run_id=env_run_id) if env_run_id else create_run_context()
+    config._run_id = _run_ctx.run_id
     setup_logging(stream="stdout")  # CLI logs to stdout; MCP adapter will use stderr
 
     # Handle --set-output-dir persisting base directory
@@ -454,6 +461,7 @@ def main(argv=None) -> int:
                 "source": getattr(args, "source", None),
             },
             formats=_parse_formats(getattr(args, "package", None)),
+            run_id=_run_ctx.run_id,
         )
 
     if args.command == "run-all":
@@ -474,6 +482,7 @@ def main(argv=None) -> int:
             fresh=is_fresh,
             skip_last=skip_last_val,
             formats=_parse_formats(getattr(args, "package", None)),
+            run_id=_run_ctx.run_id,
         )
 
     if args.command == "import":
@@ -542,7 +551,7 @@ def _parse_formats(raw: str | None) -> list[str]:
 
 
 def _run_stage_subprocess(
-    stage, chapter_dir, *, input_path=None, meta=None, fresh=False, skip_last=0
+    stage, chapter_dir, *, input_path=None, meta=None, fresh=False, skip_last=0, run_id=None
 ) -> int:
     import subprocess
 
@@ -569,7 +578,10 @@ def _run_stage_subprocess(
             cmd += ["--fresh"]
         if skip_last > 0:
             cmd += ["--skip-last", str(skip_last)]
-    return subprocess.run(cmd).returncode
+    env = os.environ.copy()
+    if run_id:
+        env["PIPELINE_RUN_ID"] = run_id
+    return subprocess.run(cmd, env=env).returncode
 
 
 def _run_all_from(
@@ -581,7 +593,10 @@ def _run_all_from(
     fresh: bool = False,
     skip_last: int = 0,
     formats: list[str] | None = None,
+    run_id: str | None = None,
 ) -> int:
+    resolved_run_id = run_id or getattr(config, "_run_id", "unknown")
+    config._run_id = resolved_run_id
     order = config.STAGE_ORDER
     if start not in order:
         logger.error("Unknown start stage %r (expected one of %s)", start, order)
@@ -610,7 +625,7 @@ def _run_all_from(
         logger.info("=" * 60)
         if getattr(config, "BATCH_SUBPROCESS", False):
             rc = _run_stage_subprocess(
-                name, workspace, input_path=input_path, meta=meta, fresh=fresh, skip_last=skip_last
+                name, workspace, input_path=input_path, meta=meta, fresh=fresh, skip_last=skip_last, run_id=resolved_run_id
             )
             if rc != 0:
                 logger.error(
@@ -643,6 +658,8 @@ def _run_all_from(
                     fresh=fresh,
                     skip_last=skip_last,
                 )
+            elif name == "render":
+                res = _load_stage("render")(workspace, config, run_id=resolved_run_id)
             else:
                 res = _load_stage(name)(workspace, config)
 

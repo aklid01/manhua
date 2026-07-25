@@ -411,3 +411,34 @@ def test_contextual_retry_prompt_includes_glossary():
     prompt = _build_contextual_retry_prompt(region, locked)
     assert "Manager" in prompt
     assert "经理" in prompt
+
+
+def test_load_overrides_accepts_legacy_string(tmp_path):
+    from manhua_pipeline.io.overrides import load_overrides
+
+    (tmp_path / "overrides.json").write_text(
+        json.dumps({"P001_R001": "Hello", "_comment": "skip"}),
+        encoding="utf-8",
+    )
+    result = load_overrides(tmp_path, config)
+    assert result == {"P001_R001": "Hello"}
+
+
+def test_load_overrides_accepts_manual_record(tmp_path):
+    from manhua_pipeline.io.overrides import load_overrides
+    from manhua_pipeline.manual_overrides import make_override_request, save_region_override
+
+    req = make_override_request(
+        run_id="run-1",
+        chapter="ch1",
+        region={"region_id": "P003_R012", "original_text": "季青临"},
+        initial_reason="test",
+        final_reason="test",
+        backend="ollama",
+        model=None,
+        attempts=1,
+    )
+    save_region_override({}, req, "Ji Qinglin", tmp_path / "overrides.json")
+
+    result = load_overrides(tmp_path, config)
+    assert result == {"P003_R012": "Ji Qinglin"}

@@ -9,8 +9,10 @@ class RunContext:
     started_at: str
 
 
-def create_run_context() -> RunContext:
+def create_run_context(run_id: str | None = None) -> RunContext:
     now = datetime.now(timezone.utc)
+    if run_id:
+        return RunContext(run_id=run_id, started_at=now.isoformat())
     token = secrets.token_hex(3)
     return RunContext(
         run_id=f"{now:%Y%m%dT%H%M%S.%fZ}-{token}",
