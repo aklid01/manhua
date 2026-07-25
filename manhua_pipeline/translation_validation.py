@@ -44,8 +44,13 @@ def _cjk_ratio(text: str) -> float:
     return sum(1 for c in chars if _contains_cjk(c)) / len(chars)
 
 
+_ESCAPED_NEWLINE_RE = re.compile(r"\\(?:r\\n|n|r)", re.IGNORECASE)
+
+
 def normalize_newlines(text: str) -> str:
-    return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+    if not text:
+        return text
+    return _ESCAPED_NEWLINE_RE.sub("\n", text)
 
 
 def normalize_punct(text: str) -> str:

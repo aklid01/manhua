@@ -155,6 +155,10 @@ EMPHASIS_UPPERCASE = True
 BG_FILL_DEFAULT = (255, 255, 255)
 FONT_MISSING_HARD_ERROR = True
 BUBBLE_WHITE_THRESHOLD = 220
+# --- Colored / non-white panel erasing ---
+BUBBLE_FILL_MODE = "dominant"      # "white" (legacy) | "dominant"
+BUBBLE_FILL_TOLERANCE = 42         # max per-channel-ish RGB distance to the fill color
+BUBBLE_FILL_MIN_COVERAGE = 0.15    # if dominant mask covers < this frac of crop, fall back
 TEXT_ERASE_PADDING_PX = 12
 TEXT_LAYOUT_PADDING_PX = 8
 TEXT_ERASE_DILATION_PX = 5

@@ -6,7 +6,9 @@ US English text in its place. Utilizes Pillow to wrap, size, and style.
 
 import json
 import random
+import re
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -305,12 +307,16 @@ def erase_original_text(
     erase_box: Box,
     bubble_mask: Image.Image,
     config,
+    fill_color: tuple[int, int, int] | None = None,
 ) -> dict:
-    fill = estimate_text_background(
-        page_img,
-        text_box,
-        bubble_box,
-    )
+    if fill_color is not None:
+        fill = fill_color
+    else:
+        fill = estimate_text_background(
+            page_img,
+            text_box,
+            bubble_box,
+        )
 
     local_erase = Box(
         x=erase_box.x - bubble_box.x,
@@ -612,6 +618,77 @@ def _keep_largest_component(
     for cx, cy in chosen:
         new_grid[cy][cx] = True
     return new_grid
+def _dominant_fill_color(
+    bubble_crop: Image.Image,
+    local_text_box: Box | None,
+    config,
+) -> tuple[int, int, int]:
+    """Estimate the panel's flat background color.
+
+    Samples a coarse grid over the crop, EXCLUDES the text-glyph area, and
+    returns the most common quantized color. Works for white bubbles (returns
+    ~white) and colored panels (returns the panel color).
+    """
+    img = bubble_crop.convert("RGB")
+    w, h = img.size
+    if w == 0 or h == 0:
+        return (255, 255, 255)
+
+    step_x = max(1, w // 40)
+    step_y = max(1, h // 40)
+
+    tx0 = tx1 = ty0 = ty1 = -1
+    if local_text_box is not None:
+        tx0, ty0 = local_text_box.x, local_text_box.y
+        tx1, ty1 = local_text_box.x2, local_text_box.y2
+
+    def _in_text(px: int, py: int) -> bool:
+        return tx0 <= px < tx1 and ty0 <= py < ty1
+
+    counter: Counter = Counter()
+    for py in range(0, h, step_y):
+        for px in range(0, w, step_x):
+            if _in_text(px, py):
+                continue
+            r, g, b = img.getpixel((px, py))[:3]
+            # Quantize to 16-level buckets to group near-identical fills.
+            counter[(r // 16, g // 16, b // 16)] += 1
+
+    if not counter:
+        return (255, 255, 255)
+
+    (qr, qg, qb), _ = counter.most_common(1)[0]
+    # De-quantize to bucket center.
+    return (qr * 16 + 8, qg * 16 + 8, qb * 16 + 8)
+
+
+def _color_close_mask(arr, fill_color: tuple[int, int, int], tol: int):
+    """Boolean array: pixels within `tol` RGB (Chebyshev) distance of fill_color."""
+    import numpy as np
+    r, g, b = fill_color
+    dr = np.abs(arr[:, :, 0].astype(int) - r)
+    dg = np.abs(arr[:, :, 1].astype(int) - g)
+    db = np.abs(arr[:, :, 2].astype(int) - b)
+    return (dr <= tol) & (dg <= tol) & (db <= tol)
+
+
+def _solid_rect_mask(bubble_box: Box, erase_box: Box) -> Image.Image:
+    """A mask that is fully ON across the padded text box (bubble-local coords).
+
+    Last-resort erase target when fill detection fails; guarantees the source
+    text is covered even on colored/textured panels.
+    """
+    from PIL import ImageDraw
+    mask = Image.new("L", (bubble_box.w, bubble_box.h), 0)
+    draw = ImageDraw.Draw(mask)
+    local = (
+        erase_box.x - bubble_box.x,
+        erase_box.y - bubble_box.y,
+        erase_box.x2 - bubble_box.x,
+        erase_box.y2 - bubble_box.y,
+    )
+    draw.rectangle(local, fill=255)
+    return mask
 
 
 def _get_bubble_mask(
@@ -624,21 +701,32 @@ def _get_bubble_mask(
     page_h: int,
     config,
     seed_box: Box | None = None,
+    fill_color: tuple[int, int, int] | None = None,
 ) -> Image.Image:
-    """Generate a binary mask identifying the white/near-white bubble area."""
+    """Generate a binary mask identifying the bubble area.
+
+    Supports white background (legacy) and dominant fill color masking.
+    """
     import numpy as np
 
     img = bbox_img.convert("RGB")
     width, height = img.size
-    threshold = getattr(config, "BUBBLE_WHITE_THRESHOLD", 220)
+    
+    mode = getattr(config, "BUBBLE_FILL_MODE", "white")
 
-    # 1. Create a binary grid of white pixels
-    arr = np.asarray(img)
-    is_white = (
-        (arr[:, :, 0] > threshold)
-        & (arr[:, :, 1] > threshold)
-        & (arr[:, :, 2] > threshold)
-    )
+    if mode == "dominant" and fill_color is not None:
+        tol = int(getattr(config, "BUBBLE_FILL_TOLERANCE", 42))
+        is_fill = _color_close_mask(np.asarray(img), fill_color, tol)
+    else:
+        threshold = getattr(config, "BUBBLE_WHITE_THRESHOLD", 220)
+        arr = np.asarray(img)
+        is_fill = (
+            (arr[:, :, 0] > threshold)
+            & (arr[:, :, 1] > threshold)
+            & (arr[:, :, 2] > threshold)
+        )
+
+    is_white = is_fill
 
     # 2. Select component using seed_box overlap if available, else max area
     try:
@@ -721,9 +809,22 @@ def _get_bubble_mask(
     return Image.fromarray((mask_arr * 255).astype(np.uint8), mode="L")
 
 
+_ESCAPED_NEWLINE_RE = re.compile(r"\\(?:r\\n|n|r)", re.IGNORECASE)
+
+
+def normalize_escaped_newlines(text: str) -> str:
+    """Convert literal backslash-escaped newlines (any case) to real newlines.
+
+    Handles: \\r\\n, \\n, \\r, and their uppercase forms \\N, \\R, \\R\\N.
+    """
+    if not text:
+        return text
+    return _ESCAPED_NEWLINE_RE.sub("\n", text)
+
+
 def _wrap_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
     """Word wraps lines to stay within max_width."""
-    text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+    text = normalize_escaped_newlines(text)
     paragraphs = text.split("\n")
     all_lines = []
 
@@ -908,6 +1009,11 @@ def _render_region(
         h=text_box.h,
     )
     bubble_crop = page_img.crop(bubble_box.as_xyxy())
+    if getattr(config, "BUBBLE_FILL_MODE", "white") == "dominant":
+        fill_color = _dominant_fill_color(bubble_crop, local_text_box, config)
+    else:
+        fill_color = None
+
     bubble_mask = _get_bubble_mask(
         bubble_crop,
         bubble_box.x,
@@ -918,6 +1024,7 @@ def _render_region(
         page_img.height,
         config,
         seed_box=local_text_box,
+        fill_color=fill_color,
     )
 
     # Re-evaluate layout_box and erase_box now that we have the bubble mask
@@ -928,6 +1035,24 @@ def _render_region(
         bubble_mask=bubble_mask,
         bubble_box=bubble_box,
     )
+
+    # Coverage guard: if dominant fill mask covers too little of the crop, fall back
+    min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.15))
+    mask_hist = bubble_mask.histogram()
+    mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
+    crop_area = max(1, bubble_box.w * bubble_box.h)
+    if (mask_pixels / crop_area) < min_cov:
+        logger.warning(
+            "[%d/%d %s] Page %d %s -> low fill-mask coverage (%.3f); "
+            "falling back to padded text-box erase.",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            page_num,
+            rid,
+            mask_pixels / crop_area,
+        )
+        bubble_mask = _solid_rect_mask(bubble_box, erase_box)
 
     debug_dir = (render_dir / "debug") if render_dir else None
     do_debug = debug_dir and should_debug_region(rid, config)
@@ -968,6 +1093,7 @@ def _render_region(
         erase_box=erase_box,
         bubble_mask=bubble_mask,
         config=config,
+        fill_color=fill_color,
     )
 
     if erase_meta.get("low_overlap"):
@@ -1033,7 +1159,7 @@ def _render_region(
         )
 
     # 4. Text Background & Fill
-    text_bg = estimate_text_background(page_img, text_box, bubble_box)
+    text_bg = fill_color or estimate_text_background(page_img, text_box, bubble_box)
     text_fill = _text_color_for_bg(text_bg)
 
     # Apply spiky/rude style emphasis

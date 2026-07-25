@@ -133,6 +133,8 @@ def test_normalize_newlines_escaped():
     assert normalize_newlines("Hello\\nWorld") == "Hello\nWorld"
     assert normalize_newlines("A\\r\\nB") == "A\nB"
     assert normalize_newlines("A\\rB") == "A\nB"
+    assert normalize_newlines("Hello\\NWorld") == "Hello\nWorld"
+    assert normalize_newlines("A\\R\\NB") == "A\nB"
 
 
 def test_normalize_punct_fullwidth():
