@@ -4,13 +4,13 @@ Erases original Chinese text from bounding box areas and draws the paraphrased
 US English text in its place. Utilizes Pillow to wrap, size, and style.
 """
 
-from dataclasses import dataclass
 import json
 import random
-from statistics import median
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from statistics import median
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
@@ -103,10 +103,115 @@ def intersect_boxes(a: Box, b: Box) -> Box | None:
     return Box(x0, y0, x1 - x0, y1 - y0)
 
 
+def bubble_interior_box(
+    bubble_mask: Image.Image,
+    bubble_box: Box,
+    erode_px: int,
+) -> Box | None:
+    """Return an eroded interior bbox of the bubble mask, in page coords.
+
+    Erosion pulls the usable region away from the curved rim and the
+    speech tail so expanded English text stays visually centered in the
+    body of the balloon.
+    """
+    mask = bubble_mask
+    if erode_px and erode_px > 0:
+        k = erode_px * 2 + 1  # odd kernel for MinFilter erosion
+        mask = mask.filter(ImageFilter.MinFilter(k))
+
+    box = mask.getbbox()
+    if box is None:
+        return None
+
+    x0, y0, x1, y1 = box
+    return Box(
+        x=bubble_box.x + x0,
+        y=bubble_box.y + y0,
+        w=max(1, x1 - x0),
+        h=max(1, y1 - y0),
+    )
+
+
+def grow_layout_box(
+    text_box: Box,
+    interior_box: Box | None,
+    image_size: tuple[int, int],
+    config,
+) -> Box:
+    """Expand the tight text box toward the eroded bubble interior,
+    bounded by a growth cap and clipped to the interior and image.
+    """
+    layout_padding = int(getattr(config, "TEXT_LAYOUT_PADDING_PX", 8))
+
+    base = Box(
+        x=text_box.x + layout_padding,
+        y=text_box.y + layout_padding,
+        w=max(5, text_box.w - 2 * layout_padding),
+        h=max(5, text_box.h - 2 * layout_padding),
+    )
+
+    if not getattr(config, "LAYOUT_EXPAND_ENABLED", True):
+        return base
+    if interior_box is None:
+        return base
+
+    # Candidate = union of base and interior, then clip to interior.
+    union = Box(
+        x=min(base.x, interior_box.x),
+        y=min(base.y, interior_box.y),
+        w=max(base.x2, interior_box.x2) - min(base.x, interior_box.x),
+        h=max(base.y2, interior_box.y2) - min(base.y, interior_box.y),
+    )
+    candidate = intersect_boxes(union, interior_box) or base
+
+    # Enforce growth cap vs. the original text area.
+    max_factor = float(getattr(config, "LAYOUT_MAX_GROWTH_FACTOR", 3.0))
+    text_area = max(1, text_box.w * text_box.h)
+    if (candidate.w * candidate.h) > max_factor * text_area:
+        candidate = _shrink_box_around_center(
+            candidate,
+            target_area=int(max_factor * text_area),
+            anchor=text_box,
+        )
+
+    # Ensure the expanded box still overlaps the original text region.
+    min_overlap = float(getattr(config, "LAYOUT_MIN_ANCHOR_OVERLAP", 0.5))
+    overlap = intersect_boxes(candidate, text_box)
+    overlap_ratio = (
+        (overlap.w * overlap.h) / max(1, text_box.w * text_box.h)
+        if overlap else 0.0
+    )
+    if overlap_ratio < min_overlap:
+        return base  # anchor safety: do not drift off the source text
+
+    return clip_box(candidate, image_size)
+
+
+def _shrink_box_around_center(box: Box, target_area: int, anchor: Box) -> Box:
+    """Shrink a box toward the anchor center to respect an area cap."""
+    if box.w * box.h <= target_area:
+        return box
+    import math
+    scale = math.sqrt(target_area / float(box.w * box.h))
+    new_w = max(5, int(box.w * scale))
+    new_h = max(5, int(box.h * scale))
+    cx = anchor.x + anchor.w // 2
+    cy = anchor.y + anchor.h // 2
+    return Box(
+        x=cx - new_w // 2,
+        y=cy - new_h // 2,
+        w=new_w,
+        h=new_h,
+    )
+
+
 def select_render_geometry(
     region: dict,
     image_size: tuple[int, int],
     config,
+    *,
+    bubble_mask=None,
+    bubble_box: Box | None = None,
 ) -> tuple[Box, Box, Box, Box]:
     text_value = region.get("read_region") or region.get("bbox")
     if not text_value:
@@ -117,31 +222,34 @@ def select_render_geometry(
     text_box = clip_box(box_from_dict(text_value), image_size)
 
     parent_value = region.get("parent_bubble")
-    if parent_value:
-        bubble_box = clip_box(box_from_dict(parent_value), image_size)
-    else:
-        erase_coords = region.get("erase_mask", {}).get("coords")
-        bubble_box = (
-            clip_box(box_from_coords(erase_coords), image_size)
-            if erase_coords
-            else text_box
-        )
+    if bubble_box is None:
+        if parent_value:
+            bubble_box = clip_box(box_from_dict(parent_value), image_size)
+        else:
+            erase_coords = region.get("erase_mask", {}).get("coords")
+            bubble_box = (
+                clip_box(box_from_coords(erase_coords), image_size)
+                if erase_coords
+                else text_box
+            )
 
     erase_box = expand_box(
         text_box,
         int(getattr(config, "TEXT_ERASE_PADDING_PX", 12)),
         image_size,
     )
+    if parent_value:
+        erase_box = intersect_boxes(erase_box, bubble_box) or text_box
 
-    erase_box = intersect_boxes(erase_box, bubble_box) or text_box
+    interior_box = None
+    if bubble_mask is not None:
+        interior_box = bubble_interior_box(
+            bubble_mask,
+            bubble_box,
+            int(getattr(config, "LAYOUT_INTERIOR_ERODE_PX", 10)),
+        )
 
-    layout_padding = int(getattr(config, "TEXT_LAYOUT_PADDING_PX", 8))
-    layout_box = Box(
-        x=text_box.x + layout_padding,
-        y=text_box.y + layout_padding,
-        w=max(5, text_box.w - 2 * layout_padding),
-        h=max(5, text_box.h - 2 * layout_padding),
-    )
+    layout_box = grow_layout_box(text_box, interior_box, image_size, config)
 
     return text_box, bubble_box, erase_box, layout_box
 
@@ -640,6 +748,10 @@ def _block_height(
     return total_h
 
 
+def _any_line_overflows(lines: list[str], font: ImageFont.ImageFont, target_w: int) -> bool:
+    return any(font.getlength(line) > target_w for line in lines)
+
+
 def _fit_text(
     text: str,
     bbox_w: int,
@@ -657,9 +769,11 @@ def _fit_text(
     target_w = max(5, bbox_w - 2 * padding)
     target_h = max(5, bbox_h - 2 * padding)
 
-    # Try fitting text from max_pt down to absolute minimum floor (5pt) to completely avoid clipping
-    abs_min = 5
-    for pt in range(max_pt, abs_min - 1, -step_pt):
+    abs_min = int(getattr(config, "FONT_ABS_MIN_PT", 9))
+    readable_min = int(getattr(config, "FONT_MIN_PT", 12))
+    hard_floor = max(1, min(abs_min, readable_min))
+
+    for pt in range(max_pt, hard_floor - 1, -step_pt):
         font = _load_font(font_path, pt, config)
 
         # Try multiple layout widths to encourage more lines and better aspect ratio
@@ -667,22 +781,15 @@ def _fit_text(
             w_limit = max(5, int(target_w * ratio))
             lines = _wrap_text(text, font, w_limit)
             h = _block_height(lines, font, line_spacing)
-            if h <= target_h:
-                # Ensure no single line overflows the absolute target width
-                word_overflow = False
-                for line in lines:
-                    if font.getlength(line) > target_w:
-                        word_overflow = True
-                        break
-                if not word_overflow:
-                    # Mark as overflow only if we had to scale below config's FONT_MIN_PT
-                    overflow_flag = pt < min_pt
-                    return font, lines, pt, overflow_flag
+            if h <= target_h and not _any_line_overflows(lines, font, target_w):
+                # overflow means "below the readable target", not "below hard floor"
+                overflow_flag = pt < readable_min
+                return font, lines, pt, overflow_flag
 
-    # Fallback to min_pt and full target_w, and flag overflow
-    font = _load_font(font_path, min_pt, config)
+    # Fallback to hard_floor and full target_w, and flag overflow
+    font = _load_font(font_path, hard_floor, config)
     lines = _wrap_text(text, font, target_w)
-    return font, lines, min_pt, True
+    return font, lines, hard_floor, True
 
 
 def _render_region(
@@ -770,8 +877,8 @@ def _render_region(
         }
         return result_dict, 0, 1, 0
 
-    # 1. Geometry Selection
-    text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+    # 1. Geometry Selection (Initial parse to get text_box and bubble_box)
+    text_box, bubble_box, _, _ = select_render_geometry(
         region, page_img.size, config
     )
 
@@ -793,6 +900,15 @@ def _render_region(
         page_img.height,
         config,
         seed_box=local_text_box,
+    )
+
+    # Re-evaluate layout_box and erase_box now that we have the bubble mask
+    text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+        region,
+        page_img.size,
+        config,
+        bubble_mask=bubble_mask,
+        bubble_box=bubble_box,
     )
 
     debug_dir = (render_dir / "debug") if render_dir else None
@@ -848,7 +964,7 @@ def _render_region(
             erase_meta["clip_retention_ratio"],
             min_retention,
         )
-        from manhua_pipeline.events import PipelineEvent, RENDER_ERASE_MASK_LOW_OVERLAP
+        from manhua_pipeline.events import RENDER_ERASE_MASK_LOW_OVERLAP, PipelineEvent
         from manhua_pipeline.io.event_emitter import get_event_emitter
 
         em = emitter or (get_event_emitter(render_dir.parent, config, logger=logger) if render_dir else None)
@@ -934,17 +1050,50 @@ def _render_region(
             )
         )
 
+    readable_min = int(getattr(config, "FONT_MIN_PT", 12))
     total_overflow = 1 if overflow else 0
-    if overflow:
+
+    if font_size < readable_min or overflow:
         logger.warning(
-            "[%d/%d %s] Page %d %s -> OVERFLOW at %dpt, rendered clipped (overflow)",
+            "[%d/%d %s] Page %d %s -> text below readable floor "
+            "(pt=%d, min=%d, overflow=%s)",
             _STAGE_INDEX,
             _TOTAL_STAGES,
             _STAGE_NAME,
             page_num,
             rid,
             font_size,
+            readable_min,
+            overflow,
         )
+        from manhua_pipeline.events import RENDER_TEXT_TOO_SMALL, PipelineEvent
+        from manhua_pipeline.io.event_emitter import get_event_emitter
+
+        em = emitter or (
+            get_event_emitter(render_dir.parent, config, logger=logger)
+            if render_dir
+            else None
+        )
+        if em:
+            em.emit(
+                PipelineEvent(
+                    event=RENDER_TEXT_TOO_SMALL,
+                    run_id=run_id,
+                    stage=_STAGE_NAME.lower(),
+                    chapter=chapter,
+                    region_id=rid,
+                    page=page_num,
+                    level="WARNING",
+                    metadata={
+                        "font_size_pt": font_size,
+                        "readable_min_pt": readable_min,
+                        "abs_min_pt": int(getattr(config, "FONT_ABS_MIN_PT", 9)),
+                        "overflow": overflow,
+                        "layout_box": layout_box.as_dict(),
+                        "text_box": text_box.as_dict(),
+                    },
+                )
+            )
     else:
         logger.info(
             "[%d/%d %s] Page %d %s -> drew (%dpt, %d lines, erase=%s)",
@@ -957,6 +1106,14 @@ def _render_region(
             len(lines),
             erase_meta["erase_strategy"],
         )
+
+    layout_padding = int(getattr(config, "TEXT_LAYOUT_PADDING_PX", 8))
+    base_w = max(5, text_box.w - 2 * layout_padding)
+    base_h = max(5, text_box.h - 2 * layout_padding)
+    base_area = base_w * base_h
+    layout_area = layout_box.w * layout_box.h
+    layout_expanded = layout_area > base_area
+    layout_growth_factor = round(layout_area / max(1, base_area), 2)
 
     mask_bbox = bubble_mask.getbbox()
     mask_hist = bubble_mask.histogram()
@@ -971,6 +1128,8 @@ def _render_region(
         "action": "drew",
         "font_size_pt": font_size,
         "lines": len(lines),
+        "readable_min_pt": readable_min,
+        "abs_min_pt": int(getattr(config, "FONT_ABS_MIN_PT", 9)),
         "overflow": overflow,
         "overflow_ask_llm": overflow,
         "register": register,
@@ -981,6 +1140,8 @@ def _render_region(
         "bubble_box": bubble_box.as_dict(),
         "erase_box": erase_box.as_dict(),
         "layout_box": layout_box.as_dict(),
+        "layout_expanded": layout_expanded,
+        "layout_growth_factor": layout_growth_factor,
         "text_fill": list(text_fill),
         "text_background": list(text_bg),
         "placements": placements,
@@ -1219,7 +1380,11 @@ def run_render(workspace: str, config, run_id: str | None = None) -> Path:
         ws.name,
     )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
-    from manhua_pipeline.events import RENDER_REGION_COMPLETED, STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.events import (
+        RENDER_REGION_COMPLETED,
+        STAGE_COMPLETED,
+        STAGE_STARTED,
+    )
     from manhua_pipeline.io.event_emitter import emit_stage_event
 
     emit_stage_event(

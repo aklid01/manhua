@@ -145,7 +145,8 @@ OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
 # ---- Rendering ----
 FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
 FONT_MAX_PT = 21
-FONT_MIN_PT = 9
+FONT_MIN_PT = 12          # readable target floor (raised from 9)
+FONT_ABS_MIN_PT = 9       # hard clamp; never render below this silently
 FONT_STEP_PT = 1
 LINE_SPACING = 1.15
 TEXT_PADDING_PX = 8
@@ -161,6 +162,12 @@ TEXT_ERASE_USE_RECT_WHEN_SAFE = True
 TEXT_ERASE_MIN_RETENTION = 0.65
 RENDER_DEBUG_ARTIFACTS = False
 RENDER_DEBUG_REGION_IDS = []
+
+# ---- Rendering: layout-box expansion into bubble interior ----
+LAYOUT_EXPAND_ENABLED = True
+LAYOUT_INTERIOR_ERODE_PX = 10   # inset from bubble interior edge (tail/rim guard)
+LAYOUT_MAX_GROWTH_FACTOR = 3.0  # cap layout area growth vs original text box
+LAYOUT_MIN_ANCHOR_OVERLAP = 0.5 # expanded box must still cover >=50% of text box
 
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
