@@ -71,6 +71,10 @@ def run_package(workspace: str, config, formats: list[str]) -> list[Path]:
     t0 = time.monotonic()
     ws = Path(workspace)
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
+    from manhua_pipeline.events import STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.io.event_emitter import emit_stage_event
+
+    emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
 
     valid = set(getattr(config, "VALID_PACKAGE_FORMATS", ("zip", "cbz", "tar", "pdf")))
     requested = [f.lower().strip() for f in formats if f.strip()]
@@ -115,5 +119,13 @@ def run_package(workspace: str, config, formats: list[str]) -> list[Path]:
         _TOTAL_STAGES,
         _STAGE_NAME,
         f"done: {len(written)} archive(s) -> {pkg_dir} (elapsed {time.monotonic() - t0:.1f}s)",
+    )
+    emit_stage_event(
+        ws,
+        config,
+        _STAGE_NAME.lower(),
+        STAGE_COMPLETED,
+        logger=logger,
+        metadata={"packages_written": len(written)},
     )
     return written

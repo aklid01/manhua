@@ -728,6 +728,10 @@ def run_render(workspace: str, config) -> Path:
         ws.name,
     )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
+    from manhua_pipeline.events import RENDER_REGION_COMPLETED, STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.io.event_emitter import emit_stage_event
+
+    emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
 
     manifest = load_manifest(workspace, config)
     if not manifest:
@@ -818,6 +822,22 @@ def run_render(workspace: str, config) -> Path:
     manifest["updated_at"] = now
     save_manifest(ws, config, manifest)
 
+    for r in render_results:
+        if r.get("rendered"):
+            from manhua_pipeline.events import PipelineEvent
+            from manhua_pipeline.io.event_emitter import get_event_emitter
+
+            get_event_emitter(ws, config, logger=logger).emit(
+                PipelineEvent(
+                    event=RENDER_REGION_COMPLETED,
+                    run_id=getattr(config, "_run_id", "unknown"),
+                    stage=_STAGE_NAME.lower(),
+                    chapter=ws.name,
+                    region_id=r["region_id"],
+                    page=r.get("page_number"),
+                )
+            )
+
     elapsed = time.monotonic() - t0
     log_stage(
         logger,
@@ -826,5 +846,13 @@ def run_render(workspace: str, config) -> Path:
         _STAGE_NAME,
         f"done: {len(page_reports)} pages, {total_drawn} drawn, {total_left} left, "
         f"{total_overflow} overflow -> {report_path} (elapsed {elapsed:.1f}s)",
+    )
+    emit_stage_event(
+        ws,
+        config,
+        _STAGE_NAME.lower(),
+        STAGE_COMPLETED,
+        logger=logger,
+        metadata={"total_drawn": total_drawn, "total_left": total_left},
     )
     return report_path

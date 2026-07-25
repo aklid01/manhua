@@ -180,6 +180,11 @@ def run_batch(
             _append_batch_log(batch_log, f"SKIP exists     | {chapter}")
             continue
 
+        from manhua_pipeline.events import CHAPTER_COMPLETED, CHAPTER_FAILED, CHAPTER_STARTED
+        from manhua_pipeline.io.event_emitter import emit_stage_event
+
+        emit_stage_event(chapter_dir, config, "batch", CHAPTER_STARTED, logger=logger, chapter=chapter)
+
         # Run (fresh import OR manifest-driven resume, handled by _run_all_from)
         stage_after = None
         try:
@@ -204,9 +209,11 @@ def run_batch(
                 summary["failed"].append(chapter)
                 _append_batch_log(batch_log, f"FAIL rc=2       | {chapter}")
                 logger.error("[batch] %s failed (rc=2). Continuing.", chapter)
+                emit_stage_event(chapter_dir, config, "batch", CHAPTER_FAILED, logger=logger, chapter=chapter, reason="rc=2", level="ERROR")
             elif stage_after == "complete":
                 summary["done"].append(chapter)
                 _append_batch_log(batch_log, f"DONE            | {chapter}")
+                emit_stage_event(chapter_dir, config, "batch", CHAPTER_COMPLETED, logger=logger, chapter=chapter)
             else:
                 summary["pending"].append((chapter, stage_after))
                 _append_batch_log(batch_log, f"PENDING @{stage_after} | {chapter}")
@@ -219,6 +226,7 @@ def run_batch(
             logger.error(
                 "[batch] %s crashed: %s (log: %s). Continuing.", chapter, exc, err_path
             )
+            emit_stage_event(chapter_dir, config, "batch", CHAPTER_FAILED, logger=logger, chapter=chapter, reason=str(exc), level="ERROR")
             continue
 
         # Console clear ONLY on genuine completion (ignore handoff)

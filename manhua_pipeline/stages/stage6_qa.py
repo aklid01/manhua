@@ -311,6 +311,10 @@ def run_qa(workspace: str, config) -> Path:
         ws.name,
     )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
+    from manhua_pipeline.events import QA_ISSUE_DETECTED, STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.io.event_emitter import emit_stage_event
+
+    emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
 
     manifest = load_manifest(workspace, config)
     if not manifest:
@@ -452,6 +456,23 @@ def run_qa(workspace: str, config) -> Path:
     manifest["updated_at"] = now
     save_manifest(workspace, config, manifest)
 
+    for w in warnings_list:
+        from manhua_pipeline.events import PipelineEvent
+        from manhua_pipeline.io.event_emitter import get_event_emitter
+
+        get_event_emitter(ws, config, logger=logger).emit(
+            PipelineEvent(
+                event=QA_ISSUE_DETECTED,
+                run_id=getattr(config, "_run_id", "unknown"),
+                stage=_STAGE_NAME.lower(),
+                chapter=ws.name,
+                region_id=w.get("region_id"),
+                page=w.get("page_number"),
+                reason=w.get("category"),
+                metadata={"message": w.get("message"), "severity": w.get("severity")},
+            )
+        )
+
     elapsed = time.monotonic() - t0
     log_stage(
         logger,
@@ -460,6 +481,14 @@ def run_qa(workspace: str, config) -> Path:
         _STAGE_NAME,
         f"done: {total_pages} pages, {len(sorted_region_ids)} regions, "
         f"{summary_drawn} drawn, {summary_left} left, {summary_overflow} overflow -> qa.json (elapsed {elapsed:.1f}s)",
+    )
+    emit_stage_event(
+        ws,
+        config,
+        _STAGE_NAME.lower(),
+        STAGE_COMPLETED,
+        logger=logger,
+        metadata={"total_warnings": total_warnings, "qa_status": status},
     )
 
     return qa_json_path

@@ -429,6 +429,10 @@ def run_ocr(workspace: str, config) -> Path:
         ws.name,
     )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
+    from manhua_pipeline.events import STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.io.event_emitter import emit_stage_event
+
+    emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
 
     manifest = load_manifest(workspace, config)
     if not manifest:
@@ -546,6 +550,17 @@ def run_ocr(workspace: str, config) -> Path:
         _STAGE_NAME,
         f"done: {len(results)} regions OCR'd, {needs_correction_count} need correction, "
         f"{edge_touching_count} edge-touching, {warnings} warnings -> {ocr_json_path} (elapsed {elapsed:.1f}s)",
+    )
+    emit_stage_event(
+        ws,
+        config,
+        _STAGE_NAME.lower(),
+        STAGE_COMPLETED,
+        logger=logger,
+        metadata={
+            "total_regions": len(results),
+            "needs_correction": needs_correction_count,
+        },
     )
     _close_ocr()
     return ocr_json_path
