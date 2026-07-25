@@ -112,7 +112,11 @@ def run_import(
         raise ValueError(f"Unsupported input: {src}")
 
     if skip_last and skip_last > 0:
-        usable = [p for p in manifest.get("pages", []) if not p.get("skip") and p.get("filename")]
+        usable = [
+            p
+            for p in manifest.get("pages", [])
+            if not p.get("skip") and p.get("filename")
+        ]
         for p in usable[-skip_last:]:
             p["skip"] = True
             p["skip_reason"] = "trailing_skip"

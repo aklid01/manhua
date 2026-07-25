@@ -318,7 +318,6 @@ def test_validate_batch_no_overwrite():
 def test_connectivity_failure_raises_clear(tmp_path, ollama_config, monkeypatch):
     import urllib.error
 
-
     def boom(req, timeout=None):
         raise urllib.error.URLError("connection refused")
 
@@ -535,4 +534,3 @@ def test_trivial_missing_region_bypasses_hold_and_skips_glossary(
         g_data = json.loads(glossary_path.read_text(encoding="utf-8"))
         terms = [t.get("source_term") for t in g_data.get("terms", [])]
         assert "一" not in terms
-

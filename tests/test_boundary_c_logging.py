@@ -33,7 +33,16 @@ def _setup_stage_ws(tmp_path, stage_name="import"):
     manifest = {
         "chapter_id": "test_ch",
         "total_pages": 1,
-        "pages": [{"page_number": 1, "filename": "001.png", "original_filename": "001.png", "skip": False, "width": 100, "height": 100}],
+        "pages": [
+            {
+                "page_number": 1,
+                "filename": "001.png",
+                "original_filename": "001.png",
+                "skip": False,
+                "width": 100,
+                "height": 100,
+            }
+        ],
         "current_stage": stage_name,
         "completed_stages": [],
         "warning_count": 0,
@@ -45,7 +54,11 @@ def _setup_stage_ws(tmp_path, stage_name="import"):
 
 
 def _read_events(ws: Path) -> list[dict]:
-    event_file = ws / "stage_folders_logs" if (ws / "stage_folders_logs").exists() else ws / "logs" / "events.jsonl"
+    event_file = (
+        ws / "stage_folders_logs"
+        if (ws / "stage_folders_logs").exists()
+        else ws / "logs" / "events.jsonl"
+    )
     if not event_file.exists():
         # Fall back to checking logs folder
         event_file = ws / "logs" / "events.jsonl"
@@ -111,7 +124,9 @@ def test_stage5_render_emits_region_and_lifecycle_events(tmp_path):
         ],
     }
     (ws / "stage1_detection").mkdir(parents=True, exist_ok=True)
-    (ws / "stage1_detection" / "detection.json").write_text(json.dumps(det), encoding="utf-8")
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(det), encoding="utf-8"
+    )
 
     ocr = {
         "chapter_id": "test_ch",
@@ -139,7 +154,9 @@ def test_stage5_render_emits_region_and_lifecycle_events(tmp_path):
         ],
     }
     (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
-    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(json.dumps(para), encoding="utf-8")
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(
+        json.dumps(para), encoding="utf-8"
+    )
 
     from manhua_pipeline.stages.stage5_render import run_render
 
@@ -157,19 +174,60 @@ def test_stage5_render_emits_region_and_lifecycle_events(tmp_path):
 
 def test_stage6_qa_emits_issue_and_lifecycle_events(tmp_path):
     ws = _setup_stage_ws(tmp_path, "qa")
-    ocr = {"chapter_id": "test_ch", "results": [{"region_id": "P001_R001", "page_number": 1, "ocr_confidence": 0.1, "has_usable_text": True, "needs_correction": True}]}
-    tr = {"chapter_id": "test_ch", "results": [{"region_id": "P001_R001", "page_number": 1, "literal_translation": "hi", "translated": True}]}
-    para = {"chapter_id": "test_ch", "results": [{"region_id": "P001_R001", "page_number": 1, "final_text": "hi", "paraphrased": True}]}
-    render = {"chapter_id": "test_ch", "results": [{"region_id": "P001_R001", "page_number": 1, "rendered": True}], "pages": [{"page_number": 1}]}
+    ocr = {
+        "chapter_id": "test_ch",
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "page_number": 1,
+                "ocr_confidence": 0.1,
+                "has_usable_text": True,
+                "needs_correction": True,
+            }
+        ],
+    }
+    tr = {
+        "chapter_id": "test_ch",
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "page_number": 1,
+                "literal_translation": "hi",
+                "translated": True,
+            }
+        ],
+    }
+    para = {
+        "chapter_id": "test_ch",
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "page_number": 1,
+                "final_text": "hi",
+                "paraphrased": True,
+            }
+        ],
+    }
+    render = {
+        "chapter_id": "test_ch",
+        "results": [{"region_id": "P001_R001", "page_number": 1, "rendered": True}],
+        "pages": [{"page_number": 1}],
+    }
 
     (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
     (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr), encoding="utf-8")
     (ws / "stage3_translation").mkdir(parents=True, exist_ok=True)
-    (ws / "stage3_translation" / "translation.json").write_text(json.dumps(tr), encoding="utf-8")
+    (ws / "stage3_translation" / "translation.json").write_text(
+        json.dumps(tr), encoding="utf-8"
+    )
     (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
-    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(json.dumps(para), encoding="utf-8")
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(
+        json.dumps(para), encoding="utf-8"
+    )
     (ws / "stage5_render").mkdir(parents=True, exist_ok=True)
-    (ws / "stage5_render" / "render.json").write_text(json.dumps(render), encoding="utf-8")
+    (ws / "stage5_render" / "render.json").write_text(
+        json.dumps(render), encoding="utf-8"
+    )
 
     run_qa(str(ws), config)
 
@@ -230,7 +288,15 @@ def test_batch_emits_chapter_lifecycle_events(tmp_path):
         m = {
             "chapter_id": ws.name,
             "current_stage": "complete",
-            "completed_stages": ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"],
+            "completed_stages": [
+                "import",
+                "detect",
+                "ocr",
+                "translate",
+                "paraphrase",
+                "render",
+                "qa",
+            ],
         }
         (ws / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
         return 0

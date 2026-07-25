@@ -122,4 +122,3 @@ def emit_stage_event(
             metadata=metadata or {},
         )
     )
-

@@ -178,8 +178,7 @@ def grow_layout_box(
     min_overlap = float(getattr(config, "LAYOUT_MIN_ANCHOR_OVERLAP", 0.5))
     overlap = intersect_boxes(candidate, text_box)
     overlap_ratio = (
-        (overlap.w * overlap.h) / max(1, text_box.w * text_box.h)
-        if overlap else 0.0
+        (overlap.w * overlap.h) / max(1, text_box.w * text_box.h) if overlap else 0.0
     )
     if overlap_ratio < min_overlap:
         return base  # anchor safety: do not drift off the source text
@@ -192,6 +191,7 @@ def _shrink_box_around_center(box: Box, target_area: int, anchor: Box) -> Box:
     if box.w * box.h <= target_area:
         return box
     import math
+
     scale = math.sqrt(target_area / float(box.w * box.h))
     new_w = max(5, int(box.w * scale))
     new_h = max(5, int(box.h * scale))
@@ -215,9 +215,7 @@ def select_render_geometry(
 ) -> tuple[Box, Box, Box, Box]:
     text_value = region.get("read_region") or region.get("bbox")
     if not text_value:
-        raise ValueError(
-            f"Region {region.get('region_id')} has no read_region or bbox"
-        )
+        raise ValueError(f"Region {region.get('region_id')} has no read_region or bbox")
 
     text_box = clip_box(box_from_dict(text_value), image_size)
 
@@ -266,10 +264,13 @@ def estimate_text_background(
         text_box.w + 2 * pad,
         text_box.h + 2 * pad,
     )
-    ring_box = intersect_boxes(
-        clip_box(expanded, image.size),
-        bubble_box,
-    ) or text_box
+    ring_box = (
+        intersect_boxes(
+            clip_box(expanded, image.size),
+            bubble_box,
+        )
+        or text_box
+    )
 
     points: list[tuple[int, int, int]] = []
     step_x = max(1, ring_box.w // 24)
@@ -421,13 +422,15 @@ def fit_and_place_text(
 
     for line, width, height in zip(lines, line_widths, line_heights):
         cursor_x = layout_box.x + max(0, (layout_box.w - width) // 2)
-        placements.append({
-            "text": line,
-            "x": cursor_x,
-            "y": cursor_y,
-            "w": width,
-            "h": height,
-        })
+        placements.append(
+            {
+                "text": line,
+                "x": cursor_x,
+                "y": cursor_y,
+                "w": width,
+                "h": height,
+            }
+        )
         cursor_y += height + spacing_px
 
     return font, lines, font_size, overflow, placements
@@ -538,7 +541,6 @@ def _text_color_for_bg(bg: tuple[int, int, int]) -> tuple[int, int, int]:
     r, g, b = bg[:3]
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
     return (0, 0, 0) if luminance >= 128 else (255, 255, 255)
-
 
 
 def _bfs(
@@ -764,7 +766,9 @@ def _block_height(
     return total_h
 
 
-def _any_line_overflows(lines: list[str], font: ImageFont.ImageFont, target_w: int) -> bool:
+def _any_line_overflows(
+    lines: list[str], font: ImageFont.ImageFont, target_w: int
+) -> bool:
     return any(font.getlength(line) > target_w for line in lines)
 
 
@@ -894,9 +898,7 @@ def _render_region(
         return result_dict, 0, 1, 0
 
     # 1. Geometry Selection (Initial parse to get text_box and bubble_box)
-    text_box, bubble_box, _, _ = select_render_geometry(
-        region, page_img.size, config
-    )
+    text_box, bubble_box, _, _ = select_render_geometry(region, page_img.size, config)
 
     # 2. Bubble Mask for context / diagnostics (using local_text_box seed)
     local_text_box = Box(
@@ -983,7 +985,11 @@ def _render_region(
         from manhua_pipeline.events import RENDER_ERASE_MASK_LOW_OVERLAP, PipelineEvent
         from manhua_pipeline.io.event_emitter import get_event_emitter
 
-        em = emitter or (get_event_emitter(render_dir.parent, config, logger=logger) if render_dir else None)
+        em = emitter or (
+            get_event_emitter(render_dir.parent, config, logger=logger)
+            if render_dir
+            else None
+        )
         if em:
             em.emit(
                 PipelineEvent(

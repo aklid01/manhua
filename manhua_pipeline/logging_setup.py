@@ -92,6 +92,7 @@ def get_logger(name: str) -> logging.Logger:
 
 # ---- convenience helpers for consistent progress lines ----
 
+
 def log_stage(logger, index: int, total: int, name: str, message: str = "") -> None:
     """e.g. [1/6 Detection] starting ..."""
     logger.info("[%d/%d %s] %s", index, total, name, message)

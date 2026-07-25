@@ -88,9 +88,7 @@ def test_console_and_file_levels_are_independent(tmp_path):
         run_id=run_id,
     )
     root = logging.getLogger()
-    markers = {
-        getattr(h, "_manhua_marker", ""): h.level for h in root.handlers
-    }
+    markers = {getattr(h, "_manhua_marker", ""): h.level for h in root.handlers}
     assert markers.get("console") == logging.WARNING
     assert markers.get(f"run-file:{run_id}") == logging.DEBUG
 
@@ -107,6 +105,7 @@ def test_log_file_uses_full_date_format(tmp_path):
     log_file = tmp_path / f"run_{run_id}.log"
     content = log_file.read_text(encoding="utf-8")
     import re
+
     assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", content), (
         "Log file must include full date (YYYY-MM-DD HH:MM:SS)"
     )
@@ -296,10 +295,16 @@ def test_cli_stage_events_never_use_unknown_run_id(tmp_path):
 
     ctx = pipeline.create_run_context()
     config._run_id = ctx.run_id
-    pipeline._run_all_from(str(ws), config, start="import", input_path=str(ws), run_id=ctx.run_id)
+    pipeline._run_all_from(
+        str(ws), config, start="import", input_path=str(ws), run_id=ctx.run_id
+    )
 
     event_file = ws / "logs" / "events.jsonl"
     assert event_file.exists()
-    events = [json.loads(line) for line in event_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    events = [
+        json.loads(line)
+        for line in event_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     assert events
     assert all(e["run_id"] == ctx.run_id for e in events)

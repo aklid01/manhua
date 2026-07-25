@@ -49,4 +49,3 @@ def can_prompt_now(*, batch: bool = False) -> bool:
         return sys.stdin.isatty() and sys.stdout.isatty()
     except (ValueError, OSError):
         return False
-

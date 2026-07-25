@@ -315,5 +315,3 @@ def test_cjk_char_count_and_is_trivial_region():
     assert _is_trivial_region("一", config) is True
     assert _is_trivial_region("你好", config) is False
     assert _is_trivial_region("ABC", config) is False
-
-

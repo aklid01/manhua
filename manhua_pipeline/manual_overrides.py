@@ -184,9 +184,13 @@ class OverrideRequestStore:
     def _save(self, rows: list[dict]) -> None:
         import os
         from tempfile import NamedTemporaryFile
+
         with NamedTemporaryFile(
-            "w", delete=False, dir=self.path.parent,
-            suffix=".tmp", encoding="utf-8",
+            "w",
+            delete=False,
+            dir=self.path.parent,
+            suffix=".tmp",
+            encoding="utf-8",
         ) as fh:
             json.dump(rows, fh, ensure_ascii=False, indent=2)
             tmp = Path(fh.name)
@@ -224,7 +228,6 @@ class OverrideRequestStore:
                 row["resolved_at"] = datetime.now(timezone.utc).isoformat()
                 break
         self._save(rows)
-
 
 
 def atomic_write_json(path: str | Path, data: object) -> None:
@@ -279,11 +282,7 @@ def save_locked_glossary_entry(
     path: Path,
 ) -> None:
     existing = next(
-        (
-            item
-            for item in glossary
-            if item.get("source_term") == request.original_text
-        ),
+        (item for item in glossary if item.get("source_term") == request.original_text),
         None,
     )
     if existing:

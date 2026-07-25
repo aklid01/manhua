@@ -332,4 +332,3 @@ def test_text_color_for_bg():
     # Dark backgrounds -> white text
     assert stage5_render._text_color_for_bg((0, 0, 0)) == (255, 255, 255)
     assert stage5_render._text_color_for_bg((20, 20, 20)) == (255, 255, 255)
-

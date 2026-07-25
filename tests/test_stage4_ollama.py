@@ -316,7 +316,6 @@ def test_invalid_values_dropped():
 def test_connectivity_failure_raises(tmp_path, ollama_config, monkeypatch):
     import urllib.error
 
-
     def boom(req, timeout=None):
         raise urllib.error.URLError("refused")
 

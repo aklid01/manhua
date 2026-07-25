@@ -298,7 +298,8 @@ class OllamaBackend:
             for k in unexpected:
                 logger.debug(
                     "[%s] Unexpected region_id in response (ignored): %r",
-                    _STAGE_NAME, k,
+                    _STAGE_NAME,
+                    k,
                 )
 
         issues = validate_expected_regions(
@@ -314,7 +315,9 @@ class OllamaBackend:
             if issue.status != "accepted":
                 logger.debug(
                     "[%s] Region %r rejected: reason=%s",
-                    _STAGE_NAME, rid, issue.reason,
+                    _STAGE_NAME,
+                    rid,
+                    issue.reason,
                 )
         missing = [rid for rid, issue in issues.items() if issue.status != "accepted"]
         return accepted, missing, unexpected
@@ -409,14 +412,15 @@ def _resolve_locked_glossary(
             resolved[region["region_id"]] = locked_value
             logger.info(
                 "[%d/%d %s] %s -> locked glossary match (%r)",
-                _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
-                region["region_id"], locked_value,
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                region["region_id"],
+                locked_value,
             )
         else:
             remaining.append(region)
     return resolved, remaining
-
-
 
 
 def _enforce_glossary(
@@ -520,8 +524,8 @@ def _build_contextual_retry_prompt(region: dict, locked: list[dict]) -> str:
     ]
     if gloss_txt:
         lines.append(f"Glossary (apply exactly):\n{gloss_txt}")
-    lines.append(f'region_id: {rid}')
-    lines.append(f'source: {original}')
+    lines.append(f"region_id: {rid}")
+    lines.append(f"source: {original}")
     return "\n".join(lines)
 
 
@@ -619,23 +623,37 @@ def _handle_unresolved_region(
             translation_map[rid] = decision.translation
             overrides_path = ws / getattr(config, "OVERRIDES_NAME", "overrides.json")
             existing = _load_raw_overrides(overrides_path)
-            save_region_override(existing, request, decision.translation, overrides_path)
-            logger.info("[%s] Manual override (region): %s -> %r",
-                        _STAGE_NAME, rid, decision.translation)
+            save_region_override(
+                existing, request, decision.translation, overrides_path
+            )
+            logger.info(
+                "[%s] Manual override (region): %s -> %r",
+                _STAGE_NAME,
+                rid,
+                decision.translation,
+            )
             return True
 
         if decision.action == "apply_glossary" and decision.translation:
             translation_map[rid] = decision.translation
             glossary_terms = glossary.get("terms", [])
-            glossary_path = ws.parent / getattr(config, "GLOSSARY_NAME", "glossary.json")
+            glossary_path = ws.parent / getattr(
+                config, "GLOSSARY_NAME", "glossary.json"
+            )
             try:
                 save_locked_glossary_entry(
                     glossary_terms, request, decision.translation, glossary_path
                 )
-                logger.info("[%s] Manual override saved to locked glossary: %r -> %r",
-                            _STAGE_NAME, request.original_text, decision.translation)
+                logger.info(
+                    "[%s] Manual override saved to locked glossary: %r -> %r",
+                    _STAGE_NAME,
+                    request.original_text,
+                    decision.translation,
+                )
             except Exception as exc:
-                logger.warning("[%s] Could not save locked glossary: %s", _STAGE_NAME, exc)
+                logger.warning(
+                    "[%s] Could not save locked glossary: %s", _STAGE_NAME, exc
+                )
             return True
 
         if decision.action == "abort":
@@ -645,7 +663,8 @@ def _handle_unresolved_region(
     store.upsert_pending(request)
     logger.warning(
         "[%s] MANUAL_OVERRIDE_DEFERRED: %s queued (%s)",
-        _STAGE_NAME, rid,
+        _STAGE_NAME,
+        rid,
         "user deferred" if runtime.can_prompt else "non-interactive runtime",
     )
     return False
@@ -654,6 +673,7 @@ def _handle_unresolved_region(
 def _load_raw_overrides(path) -> dict:
     """Load overrides.json as a raw dict."""
     import json
+
     if not path.exists():
         return {}
     try:
@@ -663,7 +683,9 @@ def _load_raw_overrides(path) -> dict:
         return {}
 
 
-def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Path | None:  # noqa: C901
+def run_translation(
+    workspace: str, config, *, allow_prompt: bool = False
+) -> Path | None:  # noqa: C901
     """Run the Translation stage.
 
     Returns the path to translation.json on success, or None if awaiting
@@ -744,17 +766,21 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
     # Locked glossary pre-resolution: exact source_term match bypasses backend entirely.
     # Precedence: locked glossary > region override > backend translation.
     locked_index = _build_locked_index(locked)
-    glossary_resolved, usable_for_backend = _resolve_locked_glossary(usable, locked_index)
+    glossary_resolved, usable_for_backend = _resolve_locked_glossary(
+        usable, locked_index
+    )
     if glossary_resolved:
         logger.info(
             "[%d/%d %s] %d region(s) resolved via locked glossary (no backend call needed)",
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, len(glossary_resolved),
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            len(glossary_resolved),
         )
 
     bundle = _build_bundle(usable_for_backend, locked)
     backend = _get_backend(config)
     raw_response = backend.request(bundle, ws, config) if usable_for_backend else {}
-
 
     if raw_response is None:
         return None
@@ -776,7 +802,6 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
     translation_map.update(glossary_resolved)
 
     usable_ids = [r["region_id"] for r in usable]
-
 
     backend_name = getattr(config, "TRANSLATOR_BACKEND", "manual")
     if backend_name == "ollama" and usable_ids:
@@ -813,7 +838,9 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
             )
 
         # Contextual isolated retry for meaningful unresolved regions
-        if substantial_missing and getattr(config, "OLLAMA_CONTEXTUAL_RETRY_ENABLED", True):
+        if substantial_missing and getattr(
+            config, "OLLAMA_CONTEXTUAL_RETRY_ENABLED", True
+        ):
             region_by_id = {r["region_id"]: r for r in usable}
             backend_inst = backend if isinstance(backend, OllamaBackend) else None
             for rid in list(substantial_missing):
@@ -823,7 +850,11 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
                 original = orig_by_id.get(rid, "")
                 logger.info(
                     "[%d/%d %s] Contextual retry for %s (%r)",
-                    _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, rid, original,
+                    _STAGE_INDEX,
+                    _TOTAL_STAGES,
+                    _STAGE_NAME,
+                    rid,
+                    original,
                 )
                 retry_prompt = _build_contextual_retry_prompt(region, locked)
                 try:
@@ -838,13 +869,17 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
                         substantial_missing.remove(rid)
                         logger.info(
                             "[%s] Contextual retry succeeded for %s: %r",
-                            _STAGE_NAME, rid, issue.accepted_text,
+                            _STAGE_NAME,
+                            rid,
+                            issue.accepted_text,
                         )
                     else:
                         reason = issue.reason if issue else "unknown"
                         logger.warning(
                             "[%s] Contextual retry failed for %s: reason=%s",
-                            _STAGE_NAME, rid, reason,
+                            _STAGE_NAME,
+                            rid,
+                            reason,
                         )
                 except Exception as exc:
                     logger.warning(
@@ -856,7 +891,9 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
             from manhua_pipeline.interaction import InteractionMode, RuntimePolicy
 
             runtime = RuntimePolicy(
-                mode=InteractionMode.INTERACTIVE if allow_prompt else InteractionMode.NON_INTERACTIVE,
+                mode=InteractionMode.INTERACTIVE
+                if allow_prompt
+                else InteractionMode.NON_INTERACTIVE,
                 batch=not allow_prompt,
             )
             run_id = getattr(config, "_run_id", "unknown")
@@ -881,8 +918,12 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
                     substantial_missing.remove(rid)
 
         # Recalculate ratio after retries + manual overrides
-        still_missing = [rid for rid in usable_ids if rid not in translation_map
-                         and not _is_trivial_region(orig_by_id.get(rid, ""), config)]
+        still_missing = [
+            rid
+            for rid in usable_ids
+            if rid not in translation_map
+            and not _is_trivial_region(orig_by_id.get(rid, ""), config)
+        ]
         new_substantial_total = max(1, len(usable_ids) - len(trivial_missing))
         ratio = (new_substantial_total - len(still_missing)) / new_substantial_total
 
@@ -946,7 +987,6 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
             glossary_resolved_ids=frozenset(glossary_resolved.keys()),
         )
     )
-
 
 
 @dataclass

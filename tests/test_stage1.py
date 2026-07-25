@@ -249,7 +249,10 @@ def test_detection_overlay_saved_when_zero_regions(mock_resolve, tmp_path):
     assert overlay.exists()  # but the clean overlay is still saved (Fix 1)
 
 
-@patch("manhua_pipeline.stages.stage1_detection._resolve_model", side_effect=lambda x, *args: x)
+@patch(
+    "manhua_pipeline.stages.stage1_detection._resolve_model",
+    side_effect=lambda x, *args: x,
+)
 def test_detection_rtdetr_backend(mock_resolve, tmp_path):
     """Test RT-DETR backend integration: schema compatibility, parent matching, reading order."""
     import torch
@@ -298,19 +301,22 @@ def test_detection_rtdetr_backend(mock_resolve, tmp_path):
     # classes: 1: text_bubble, 0: bubble, 2: text_free
     scores = torch.tensor([0.95, 0.92, 0.85, 0.90])
     labels = torch.tensor([1, 0, 2, 1])
-    boxes = torch.tensor([
-        [100.0, 150.0, 200.0, 250.0],  # text_bubble 1 (y=150, inside bubble)
-        [90.0, 140.0, 250.0, 260.0],   # bubble 0 (y=140)
-        [400.0, 50.0, 500.0, 100.0],   # text_free 2 (y=50, narration/SFX)
-        [110.0, 450.0, 210.0, 550.0],  # text_bubble 1 (y=450, no bubble)
-    ])
-    mock_processor.post_process_object_detection.return_value = [{
-        "scores": scores,
-        "labels": labels,
-        "boxes": boxes
-    }]
+    boxes = torch.tensor(
+        [
+            [100.0, 150.0, 200.0, 250.0],  # text_bubble 1 (y=150, inside bubble)
+            [90.0, 140.0, 250.0, 260.0],  # bubble 0 (y=140)
+            [400.0, 50.0, 500.0, 100.0],  # text_free 2 (y=50, narration/SFX)
+            [110.0, 450.0, 210.0, 550.0],  # text_bubble 1 (y=450, no bubble)
+        ]
+    )
+    mock_processor.post_process_object_detection.return_value = [
+        {"scores": scores, "labels": labels, "boxes": boxes}
+    ]
 
-    with patch("manhua_pipeline.stages.stage1_detection._get_rtdetr", return_value=(mock_model, mock_processor)):
+    with patch(
+        "manhua_pipeline.stages.stage1_detection._get_rtdetr",
+        return_value=(mock_model, mock_processor),
+    ):
         with patch("manhua_pipeline.stages.stage1_detection.YOLO") as MockYOLO:
             run_detection(str(ws), cfg)
             # YOLO should not be initialized
@@ -353,16 +359,30 @@ def test_detection_rtdetr_backend(mock_resolve, tmp_path):
 
     # Verify all expected keys are present in all regions (schema validation check)
     expected_keys = {
-        "region_id", "page_number", "type", "bbox", "reading_order",
-        "style_hint", "confidence", "read_region", "erase_mask", "render",
-        "is_free_text", "parent_bubble", "text_direction"
+        "region_id",
+        "page_number",
+        "type",
+        "bbox",
+        "reading_order",
+        "style_hint",
+        "confidence",
+        "read_region",
+        "erase_mask",
+        "render",
+        "is_free_text",
+        "parent_bubble",
+        "text_direction",
     }
     for r in regs:
         assert expected_keys.issubset(r)
         assert r["erase_mask"]["type"] == "rect"
-        assert r["erase_mask"]["coords"] == [r["bbox"]["x"], r["bbox"]["y"], r["bbox"]["w"], r["bbox"]["h"]]
+        assert r["erase_mask"]["coords"] == [
+            r["bbox"]["x"],
+            r["bbox"]["y"],
+            r["bbox"]["w"],
+            r["bbox"]["h"],
+        ]
 
     # Verify visual debug overlay is written
     overlay = ws / "stage1_detection" / "overlays" / "001_overlay.png"
     assert overlay.exists()
-

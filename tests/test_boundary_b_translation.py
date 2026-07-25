@@ -80,7 +80,9 @@ def test_multiple_regions_independent():
         "P001_R002": "",
         "P001_R003": "你好",
     }
-    issues = validate_expected_regions(parsed, {"P001_R001", "P001_R002", "P001_R003", "P001_R004"})
+    issues = validate_expected_regions(
+        parsed, {"P001_R001", "P001_R002", "P001_R003", "P001_R004"}
+    )
     assert issues["P001_R001"].status == "accepted"
     assert issues["P001_R002"].reason == "empty_string"
     assert issues["P001_R003"].reason == "cjk_ratio_exceeded"
@@ -185,9 +187,13 @@ def _make_ws(tmp_path, ocr_results, glossary=None):
         "ocr_engine": "PaddleOCR",
         "results": ocr_results,
     }
-    (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr, ensure_ascii=False), encoding="utf-8")
+    (ws / "stage2_ocr" / "ocr.json").write_text(
+        json.dumps(ocr, ensure_ascii=False), encoding="utf-8"
+    )
     if glossary is not None:
-        (ws.parent / "glossary.json").write_text(json.dumps(glossary, ensure_ascii=False), encoding="utf-8")
+        (ws.parent / "glossary.json").write_text(
+            json.dumps(glossary, ensure_ascii=False), encoding="utf-8"
+        )
     return ws
 
 
@@ -232,7 +238,9 @@ def test_locked_glossary_exact_match_bypasses_backend(tmp_path):
     ws = _make_ws(tmp_path, [_ocr("P001_R001", "经理")], glossary=glossary)
     out = run_translation(str(ws), config)
     assert out is not None
-    tr = json.loads((ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8"))
+    tr = json.loads(
+        (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
+    )
     r = tr["results"][0]
     assert r["translated"] is True
     assert r["literal_translation"] == "Manager"
@@ -292,7 +300,9 @@ def test_validate_batch_returns_accepted_dict():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
     parsed = {"P001_R001": "Hello", "P001_R002": "World"}
-    accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, {"P001_R001", "P001_R002"})
+    accepted, missing, unexpected = OllamaBackend._validate_batch(
+        parsed, {"P001_R001", "P001_R002"}
+    )
     assert accepted == {"P001_R001": "Hello", "P001_R002": "World"}
     assert missing == []
     assert unexpected == []
@@ -375,7 +385,11 @@ def test_override_request_store_idempotent_list(tmp_path):
             make_override_request(
                 run_id="run-1",
                 chapter="ch01",
-                region={"region_id": "P001_R001", "original_text": "你好", "page_number": 1},
+                region={
+                    "region_id": "P001_R001",
+                    "original_text": "你好",
+                    "page_number": 1,
+                },
                 initial_reason="x",
                 final_reason="y",
                 backend="ollama",

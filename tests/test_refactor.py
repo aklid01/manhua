@@ -88,7 +88,6 @@ def test_series_glossary_inherited(tmp_path):
     assert {"yu_lili", "lin_yi"} <= ids
 
 
-
 def test_fresh_clears_chapter_artifacts(tmp_path):
     from PIL import Image
 

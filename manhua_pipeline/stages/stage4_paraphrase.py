@@ -486,7 +486,9 @@ def _partition_regions_paraphrase(
     return overridden_regions, usable, skipped
 
 
-def run_paraphrase(workspace: str, config, *, allow_prompt: bool = False) -> Path | None:
+def run_paraphrase(
+    workspace: str, config, *, allow_prompt: bool = False
+) -> Path | None:
     """Run the Paraphrase stage.
 
     Returns the path to paraphrase.json on success, or None if awaiting manual input.

@@ -106,7 +106,12 @@ def test_white_mask_holes_do_not_preserve_source_text():
     bubble_box = Box(60, 40, 180, 100)
     erase_box = Box(108, 78, 84, 54)
 
-    local_text_box = Box(x=text_box.x - bubble_box.x, y=text_box.y - bubble_box.y, w=text_box.w, h=text_box.h)
+    local_text_box = Box(
+        x=text_box.x - bubble_box.x,
+        y=text_box.y - bubble_box.y,
+        w=text_box.w,
+        h=text_box.h,
+    )
     bubble_crop = image.crop(bubble_box.as_xyxy())
     bubble_mask = _get_bubble_mask(
         bubble_crop,
@@ -160,7 +165,16 @@ def test_render_json_records_erase_and_layout_geometry(tmp_path):
     manifest = {
         "chapter_id": "test_ch",
         "total_pages": 1,
-        "pages": [{"page_number": 1, "filename": "001.png", "original_filename": "001.png", "skip": False, "width": 1280, "height": 1707}],
+        "pages": [
+            {
+                "page_number": 1,
+                "filename": "001.png",
+                "original_filename": "001.png",
+                "skip": False,
+                "width": 1280,
+                "height": 1707,
+            }
+        ],
         "current_stage": "render",
         "completed_stages": [],
         "warning_count": 0,
@@ -187,12 +201,16 @@ def test_render_json_records_erase_and_layout_geometry(tmp_path):
         ],
     }
     (ws / "stage1_detection").mkdir(parents=True, exist_ok=True)
-    (ws / "stage1_detection" / "detection.json").write_text(json.dumps(det), encoding="utf-8")
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(det), encoding="utf-8"
+    )
 
     ocr = {
         "chapter_id": "test_ch",
         "stage": "ocr",
-        "results": [{"region_id": "P001_R001", "page_number": 1, "has_usable_text": True}],
+        "results": [
+            {"region_id": "P001_R001", "page_number": 1, "has_usable_text": True}
+        ],
     }
     (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
     (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr), encoding="utf-8")
@@ -200,10 +218,18 @@ def test_render_json_records_erase_and_layout_geometry(tmp_path):
     para = {
         "chapter_id": "test_ch",
         "stage": "paraphrase",
-        "results": [{"region_id": "P001_R001", "page_number": 1, "final_text": "It's right here!"}],
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "page_number": 1,
+                "final_text": "It's right here!",
+            }
+        ],
     }
     (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
-    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(json.dumps(para), encoding="utf-8")
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(
+        json.dumps(para), encoding="utf-8"
+    )
 
     run_render(str(ws), config, run_id="run-test-123")
 
@@ -226,7 +252,16 @@ def test_render_events_receive_entrypoint_run_id(tmp_path):
     manifest = {
         "chapter_id": "test_ch",
         "total_pages": 1,
-        "pages": [{"page_number": 1, "filename": "001.png", "original_filename": "001.png", "skip": False, "width": 1000, "height": 1000}],
+        "pages": [
+            {
+                "page_number": 1,
+                "filename": "001.png",
+                "original_filename": "001.png",
+                "skip": False,
+                "width": 1000,
+                "height": 1000,
+            }
+        ],
         "current_stage": "render",
         "completed_stages": [],
         "warning_count": 0,
@@ -251,12 +286,16 @@ def test_render_events_receive_entrypoint_run_id(tmp_path):
         ],
     }
     (ws / "stage1_detection").mkdir(parents=True, exist_ok=True)
-    (ws / "stage1_detection" / "detection.json").write_text(json.dumps(det), encoding="utf-8")
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(det), encoding="utf-8"
+    )
 
     ocr = {
         "chapter_id": "test_ch",
         "stage": "ocr",
-        "results": [{"region_id": "P001_R001", "page_number": 1, "has_usable_text": True}],
+        "results": [
+            {"region_id": "P001_R001", "page_number": 1, "has_usable_text": True}
+        ],
     }
     (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
     (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr), encoding="utf-8")
@@ -264,17 +303,25 @@ def test_render_events_receive_entrypoint_run_id(tmp_path):
     para = {
         "chapter_id": "test_ch",
         "stage": "paraphrase",
-        "results": [{"region_id": "P001_R001", "page_number": 1, "final_text": "Hello!"}],
+        "results": [
+            {"region_id": "P001_R001", "page_number": 1, "final_text": "Hello!"}
+        ],
     }
     (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
-    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(json.dumps(para), encoding="utf-8")
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(
+        json.dumps(para), encoding="utf-8"
+    )
 
     target_run_id = "test-run-id-999"
     run_render(str(ws), config, run_id=target_run_id)
 
     event_file = ws / "logs" / "events.jsonl"
     assert event_file.exists()
-    events = [json.loads(line) for line in event_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    events = [
+        json.loads(line)
+        for line in event_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
     assert len(events) >= 2
     for event in events:

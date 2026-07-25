@@ -305,4 +305,3 @@ def test_validate_batch_newline_normalization():
     assert accepted["P001_R001"] == "Name: Lin\nAge: 18\nGender: Male"
     assert missing == []
     assert unexpected == []
-

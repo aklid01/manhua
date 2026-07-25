@@ -44,7 +44,9 @@ def test_pipeline_main_stage_execution(temp_workspace):
             assert exit_code == 0 or exit_code is None
             mock_load.assert_called_once_with(stage_name)
             if stage_name in ["translate", "paraphrase"]:
-                mock_fn.assert_called_once_with(str(temp_workspace), config, allow_prompt=False)
+                mock_fn.assert_called_once_with(
+                    str(temp_workspace), config, allow_prompt=False
+                )
             else:
                 mock_fn.assert_called_once_with(str(temp_workspace), config)
 
@@ -105,6 +107,7 @@ def test_pipeline_run_all_invalid_stage(temp_workspace):
 def test_pipeline_run_all_fresh_bypasses_manifest_resume(temp_workspace, tmp_path):
     """Test that run-all --fresh runs import stage even if manifest says complete."""
     import json
+
     (temp_workspace / "manifest.json").write_text(
         json.dumps({"version": "v1", "current_stage": "complete"}), encoding="utf-8"
     )
@@ -134,6 +137,7 @@ def test_pipeline_run_all_fresh_bypasses_manifest_resume(temp_workspace, tmp_pat
 def test_pipeline_run_all_fresh_bypasses_in_progress_manifest(temp_workspace, tmp_path):
     """Test that run-all --fresh starts from import even if manifest is at a later stage."""
     import json
+
     (temp_workspace / "manifest.json").write_text(
         json.dumps({"version": "v1", "current_stage": "translation"}), encoding="utf-8"
     )

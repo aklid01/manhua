@@ -174,7 +174,11 @@ def run_batch(
         existing_manifest = (
             load_manifest(str(chapter_dir), config) if chapter_dir.exists() else None
         )
-        if existing_manifest and existing_manifest.get("current_stage") == "complete" and not fresh:
+        if (
+            existing_manifest
+            and existing_manifest.get("current_stage") == "complete"
+            and not fresh
+        ):
             logger.warning("[batch] SKIP (already complete): %s", chapter)
             summary["skipped"].append(chapter)
             _append_batch_log(batch_log, f"SKIP complete   | {chapter}")
@@ -192,7 +196,15 @@ def run_batch(
         )
         from manhua_pipeline.io.event_emitter import emit_stage_event
 
-        emit_stage_event(chapter_dir, config, "batch", CHAPTER_STARTED, logger=logger, chapter=chapter, run_id=resolved_run_id)
+        emit_stage_event(
+            chapter_dir,
+            config,
+            "batch",
+            CHAPTER_STARTED,
+            logger=logger,
+            chapter=chapter,
+            run_id=resolved_run_id,
+        )
 
         # Run (fresh import OR manifest-driven resume, handled by _run_all_from)
         stage_after = None
@@ -220,11 +232,29 @@ def run_batch(
                 summary["failed"].append(chapter)
                 _append_batch_log(batch_log, f"FAIL rc=2       | {chapter}")
                 logger.error("[batch] %s failed (rc=2). Continuing.", chapter)
-                emit_stage_event(chapter_dir, config, "batch", CHAPTER_FAILED, logger=logger, chapter=chapter, reason="rc=2", level="ERROR", run_id=resolved_run_id)
+                emit_stage_event(
+                    chapter_dir,
+                    config,
+                    "batch",
+                    CHAPTER_FAILED,
+                    logger=logger,
+                    chapter=chapter,
+                    reason="rc=2",
+                    level="ERROR",
+                    run_id=resolved_run_id,
+                )
             elif stage_after == "complete":
                 summary["done"].append(chapter)
                 _append_batch_log(batch_log, f"DONE            | {chapter}")
-                emit_stage_event(chapter_dir, config, "batch", CHAPTER_COMPLETED, logger=logger, chapter=chapter, run_id=resolved_run_id)
+                emit_stage_event(
+                    chapter_dir,
+                    config,
+                    "batch",
+                    CHAPTER_COMPLETED,
+                    logger=logger,
+                    chapter=chapter,
+                    run_id=resolved_run_id,
+                )
             else:
                 summary["pending"].append((chapter, stage_after))
                 _append_batch_log(batch_log, f"PENDING @{stage_after} | {chapter}")
@@ -237,7 +267,17 @@ def run_batch(
             logger.error(
                 "[batch] %s crashed: %s (log: %s). Continuing.", chapter, exc, err_path
             )
-            emit_stage_event(chapter_dir, config, "batch", CHAPTER_FAILED, logger=logger, chapter=chapter, reason=str(exc), level="ERROR", run_id=resolved_run_id)
+            emit_stage_event(
+                chapter_dir,
+                config,
+                "batch",
+                CHAPTER_FAILED,
+                logger=logger,
+                chapter=chapter,
+                reason=str(exc),
+                level="ERROR",
+                run_id=resolved_run_id,
+            )
             continue
 
         # Console clear ONLY on genuine completion (ignore handoff)
@@ -393,7 +433,9 @@ def build_parser() -> argparse.ArgumentParser:
         "resolve-overrides",
         help="Interactively resolve queued manual translation overrides for a chapter.",
     )
-    resolve_sp.add_argument("--chapter", required=True, help="Chapter name in the series folder")
+    resolve_sp.add_argument(
+        "--chapter", required=True, help="Chapter name in the series folder"
+    )
 
     return parser
 
@@ -436,7 +478,9 @@ def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     env_run_id = os.environ.get("PIPELINE_RUN_ID")
-    _run_ctx = create_run_context(run_id=env_run_id) if env_run_id else create_run_context()
+    _run_ctx = (
+        create_run_context(run_id=env_run_id) if env_run_id else create_run_context()
+    )
     config._run_id = _run_ctx.run_id
     setup_logging(stream="stdout")  # CLI logs to stdout; MCP adapter will use stderr
 
@@ -562,6 +606,7 @@ def main(argv=None) -> int:
     logger.info("Running stage: %s", args.command)
 
     from manhua_pipeline.interaction import can_prompt_now
+
     if args.command in PROMPT_CAPABLE_STAGES:
         run_fn(str(chapter_dir), config, allow_prompt=can_prompt_now(batch=False))
     else:
@@ -574,7 +619,14 @@ def _parse_formats(raw: str | None) -> list[str]:
 
 
 def _run_stage_subprocess(
-    stage, chapter_dir, *, input_path=None, meta=None, fresh=False, skip_last=0, run_id=None
+    stage,
+    chapter_dir,
+    *,
+    input_path=None,
+    meta=None,
+    fresh=False,
+    skip_last=0,
+    run_id=None,
 ) -> int:
     import subprocess
 
@@ -659,16 +711,24 @@ def _run_all_from(  # noqa: C901
 
         if use_subprocess:
             rc = _run_stage_subprocess(
-                name, workspace,
-                input_path=input_path, meta=meta,
-                fresh=fresh, skip_last=skip_last, run_id=resolved_run_id,
+                name,
+                workspace,
+                input_path=input_path,
+                meta=meta,
+                fresh=fresh,
+                skip_last=skip_last,
+                run_id=resolved_run_id,
             )
             if rc != 0:
-                logger.error("Subprocess for stage %r failed with return code %d", name, rc)
+                logger.error(
+                    "Subprocess for stage %r failed with return code %d", name, rc
+                )
                 return 2
             manifest = load_manifest(workspace, config)
             if not manifest:
-                logger.error("Failed to load manifest after subprocess for stage %r", name)
+                logger.error(
+                    "Failed to load manifest after subprocess for stage %r", name
+                )
                 return 2
             current_stage = manifest.get("current_stage")
             if current_stage == name:
@@ -682,19 +742,20 @@ def _run_all_from(  # noqa: C901
         else:
             if name == "import":
                 res = _load_stage("import")(
-                    input_path, workspace, config,
+                    input_path,
+                    workspace,
+                    config,
                     title_romanized=meta.get("title_romanized"),
                     title_english=meta.get("title_en"),
                     source=meta.get("source"),
-                    fresh=fresh, skip_last=skip_last,
+                    fresh=fresh,
+                    skip_last=skip_last,
                 )
             elif name == "render":
                 res = _load_stage("render")(workspace, config, run_id=resolved_run_id)
             else:
                 if name in PROMPT_CAPABLE_STAGES:
-                    res = _load_stage(name)(
-                        workspace, config, allow_prompt=interactive
-                    )
+                    res = _load_stage(name)(workspace, config, allow_prompt=interactive)
                 else:
                     res = _load_stage(name)(workspace, config)
 
@@ -740,10 +801,14 @@ def resolve_overrides(chapter_dir: Path, config) -> int:  # noqa: C901
         logger.info("No pending manual override requests for %s.", chapter_dir.name)
         return 0
 
-    logger.info("Resolving %d pending override(s) for %s", len(pending), chapter_dir.name)
+    logger.info(
+        "Resolving %d pending override(s) for %s", len(pending), chapter_dir.name
+    )
 
     overrides_path = chapter_dir / getattr(config, "OVERRIDES_NAME", "overrides.json")
-    glossary_path = chapter_dir.parent / getattr(config, "GLOSSARY_NAME", "glossary.json")
+    glossary_path = chapter_dir.parent / getattr(
+        config, "GLOSSARY_NAME", "glossary.json"
+    )
 
     def _load_json(path, default):
         if not path.exists():
@@ -762,31 +827,46 @@ def resolve_overrides(chapter_dir: Path, config) -> int:  # noqa: C901
             overrides = _load_json(overrides_path, {})
             if not isinstance(overrides, dict):
                 overrides = {}
-            save_region_override(overrides, request, decision.translation, overrides_path)
-            store.mark_resolved(request.request_id, scope="region",
-                                translation=decision.translation)
+            save_region_override(
+                overrides, request, decision.translation, overrides_path
+            )
+            store.mark_resolved(
+                request.request_id, scope="region", translation=decision.translation
+            )
             resolved_count += 1
 
         elif decision.action == "apply_glossary" and decision.translation:
             glossary = _load_json(glossary_path, {"version": "v1", "terms": []})
             terms = glossary.get("terms", []) if isinstance(glossary, dict) else []
             try:
-                save_locked_glossary_entry(terms, request, decision.translation, glossary_path)
-                store.mark_resolved(request.request_id, scope="series_glossary",
-                                    translation=decision.translation)
+                save_locked_glossary_entry(
+                    terms, request, decision.translation, glossary_path
+                )
+                store.mark_resolved(
+                    request.request_id,
+                    scope="series_glossary",
+                    translation=decision.translation,
+                )
                 resolved_count += 1
             except Exception as exc:
-                logger.warning("Could not save locked glossary for %s: %s",
-                               request.region_id, exc)
+                logger.warning(
+                    "Could not save locked glossary for %s: %s", request.region_id, exc
+                )
 
         elif decision.action == "abort":
-            logger.info("Aborted at %s; remaining requests left pending.", request.region_id)
+            logger.info(
+                "Aborted at %s; remaining requests left pending.", request.region_id
+            )
             break
 
-    logger.info("Resolved %d override(s). Re-run translate -> render to apply them:",
-                resolved_count)
-    logger.info("    python pipeline.py run-all --chapter %s --from-stage translate",
-                chapter_dir.name)
+    logger.info(
+        "Resolved %d override(s). Re-run translate -> render to apply them:",
+        resolved_count,
+    )
+    logger.info(
+        "    python pipeline.py run-all --chapter %s --from-stage translate",
+        chapter_dir.name,
+    )
     return 0
 
 

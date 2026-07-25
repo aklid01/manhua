@@ -13,6 +13,7 @@ from pipeline import _run_all_from, resolve_overrides
 
 # --- interaction tests ---
 
+
 def test_can_prompt_now_false_when_batch():
     assert can_prompt_now(batch=True) is False
 
@@ -30,6 +31,7 @@ def test_can_prompt_now_false_when_not_tty(monkeypatch):
 
 
 # --- dedup tests ---
+
 
 def test_request_id_is_run_independent():
     a = build_request_id("1", "translation", "P010_R001")
@@ -57,13 +59,18 @@ def test_queue_upsert_does_not_duplicate(tmp_path):
 
 # --- run-all execution mode tests ---
 
-def test_run_all_forces_inprocess_for_translate_when_interactive(monkeypatch, temp_workspace):
+
+def test_run_all_forces_inprocess_for_translate_when_interactive(
+    monkeypatch, temp_workspace
+):
     # Setup manifest so it doesn't fail import stage validation
     (temp_workspace / config.MANIFEST_NAME).write_text(
         json.dumps({"chapter_id": "test_ch", "current_stage": "translate"})
     )
 
-    monkeypatch.setattr("manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: True)
+    monkeypatch.setattr(
+        "manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: True
+    )
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
 
     subprocess_calls = []
@@ -77,6 +84,7 @@ def test_run_all_forces_inprocess_for_translate_when_interactive(monkeypatch, te
         def run_mock(*args, **kwargs):
             inprocess_calls.append(name)
             return Path("dummy")
+
         return run_mock
 
     monkeypatch.setattr("pipeline._run_stage_subprocess", mock_subprocess)
@@ -104,7 +112,9 @@ def test_batch_command_never_prompts(monkeypatch, temp_workspace):
         json.dumps({"chapter_id": "test_ch", "current_stage": "translate"})
     )
 
-    monkeypatch.setattr("manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: True)
+    monkeypatch.setattr(
+        "manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: True
+    )
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
 
     subprocess_calls = []
@@ -126,6 +136,7 @@ def test_batch_command_never_prompts(monkeypatch, temp_workspace):
         def run_mock(*args, **kwargs):
             inprocess_calls.append(name)
             return Path("dummy")
+
         return run_mock
 
     monkeypatch.setattr("pipeline._run_stage_subprocess", mock_subprocess)
@@ -149,14 +160,19 @@ def test_batch_command_never_prompts(monkeypatch, temp_workspace):
 
 # --- resolver tests ---
 
+
 def test_resolve_overrides_requires_tty(monkeypatch, temp_workspace):
-    monkeypatch.setattr("manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: False)
+    monkeypatch.setattr(
+        "manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: False
+    )
     rc = resolve_overrides(temp_workspace, config)
     assert rc == 2
 
 
 def test_resolve_overrides_writes_region_override(monkeypatch, temp_workspace):
-    monkeypatch.setattr("manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: True)
+    monkeypatch.setattr(
+        "manhua_pipeline.interaction.can_prompt_now", lambda *, batch=False: True
+    )
 
     store = OverrideRequestStore(temp_workspace)
     region = {"region_id": "P010_R001", "original_text": "以及·", "page_number": 10}
@@ -174,10 +190,10 @@ def test_resolve_overrides_writes_region_override(monkeypatch, temp_workspace):
 
     # Mock prompt_for_override to return region decision with translation
     from manhua_pipeline.manual_overrides import ManualOverrideDecision
+
     mock_decision = ManualOverrideDecision(action="apply_region", translation="And.")
     monkeypatch.setattr(
-        "manhua_pipeline.manual_overrides.prompt_for_override",
-        lambda r: mock_decision
+        "manhua_pipeline.manual_overrides.prompt_for_override", lambda r: mock_decision
     )
 
     rc = resolve_overrides(temp_workspace, config)

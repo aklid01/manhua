@@ -478,7 +478,9 @@ def run_ocr(workspace: str, config) -> Path:
                 page_num,
             )
             continue
-        if getattr(config, "RTDETR_SKIP_TEXT_FREE", False) and region.get("is_free_text"):
+        if getattr(config, "RTDETR_SKIP_TEXT_FREE", False) and region.get(
+            "is_free_text"
+        ):
             continue
         res, is_warning = _process_single_region_ocr(
             region, page, ocr_engine, config, ws

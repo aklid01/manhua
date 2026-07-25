@@ -45,11 +45,7 @@ def _cjk_ratio(text: str) -> float:
 
 
 def normalize_newlines(text: str) -> str:
-    return (
-        text.replace("\\r\\n", "\n")
-        .replace("\\n", "\n")
-        .replace("\\r", "\n")
-    )
+    return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
 
 
 def normalize_punct(text: str) -> str:
