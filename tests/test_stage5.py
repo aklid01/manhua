@@ -332,3 +332,97 @@ def test_text_color_for_bg():
     # Dark backgrounds -> white text
     assert stage5_render._text_color_for_bg((0, 0, 0)) == (255, 255, 255)
     assert stage5_render._text_color_for_bg((20, 20, 20)) == (255, 255, 255)
+
+
+def test_dominant_fill_returns_pure_white_for_white_bubble():
+    from PIL import Image
+    from manhua_pipeline.stages.stage5_render import _dominant_fill_color, Box
+    crop = Image.new("RGB", (200, 120), (255, 255, 255))
+    assert _dominant_fill_color(crop, Box(40, 40, 60, 30), object()) == (255, 255, 255)
+
+
+def test_dominant_fill_keeps_gold():
+    from PIL import Image
+    from manhua_pipeline.stages.stage5_render import _dominant_fill_color, Box
+    crop = Image.new("RGB", (200, 120), (255, 200, 60))
+    r, g, b = _dominant_fill_color(crop, Box(40, 40, 60, 30), object())
+    assert r > 240 and 180 < g < 220 and b < 90
+
+
+def test_expansion_does_not_overlap_sibling():
+    from manhua_pipeline.stages.stage5_render import (
+        Box, grow_layout_box, intersect_boxes,
+    )
+    class Cfg:
+        LAYOUT_EXPAND_ENABLED = True
+        LAYOUT_MAX_GROWTH_FACTOR = 3.0
+        LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
+        TEXT_LAYOUT_PADDING_PX = 8
+    text_box = Box(600, 600, 120, 60)                 # this region
+    sibling = Box(600, 720, 120, 60)                  # region just below
+    interior = Box(560, 560, 400, 400)                # generous shared interior
+    grown = grow_layout_box(text_box, interior, (2000, 2000), Cfg(),
+                            siblings=[sibling])
+    assert intersect_boxes(grown, sibling) is None     # must not invade sibling
+    assert intersect_boxes(grown, text_box) is not None  # still covers anchor
+
+
+def test_shared_parent_regions_do_not_stack(monkeypatch):
+    from PIL import Image
+    from manhua_pipeline.stages.stage5_render import Box, _render_region
+    from PIL import ImageDraw
+    import config
+
+    # Mock _load_font to prevent filesystem reads/errors
+    from PIL import ImageFont
+    monkeypatch.setattr(
+        "manhua_pipeline.stages.stage5_render._load_font",
+        lambda p, pt, cfg: ImageFont.load_default()
+    )
+
+    page_img = Image.new("RGB", (1000, 1000), (255, 255, 255))
+    draw = ImageDraw.Draw(page_img)
+
+    region = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "type": "speech_bubble",
+        "bbox": {"x": 600, "y": 600, "w": 100, "h": 50},
+        "read_region": {"x": 600, "y": 600, "w": 100, "h": 50},
+        "parent_bubble": {"x": 500, "y": 500, "w": 300, "h": 300},
+        "render": True,
+        "has_usable_text": True,
+        "final_text": "Hello World",
+    }
+
+    # Sibling region's text box inside the same parent bubble
+    siblings = [Box(600, 700, 100, 50)]
+
+    res, _, _, _ = _render_region(
+        region, page_img, draw, 1, config,
+        sibling_text_boxes=siblings
+    )
+
+    layout = Box(**res["layout_box"])
+    # The layout box should not overlap the sibling text box
+    from manhua_pipeline.stages.stage5_render import intersect_boxes
+    assert intersect_boxes(layout, siblings[0]) is None
+
+    # Since it is a shared parent, its layout_box should not expand to the parent_bubble interior.
+    # It should just be the base padded text box (which has x = text_box.x + 8 = 608)
+    assert layout.x == 608
+
+
+def test_single_region_bubble_still_expands():
+    from manhua_pipeline.stages.stage5_render import Box, grow_layout_box
+    class Cfg:
+        LAYOUT_EXPAND_ENABLED = True
+        LAYOUT_MAX_GROWTH_FACTOR = 3.0
+        LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
+        TEXT_LAYOUT_PADDING_PX = 8
+    text_box = Box(600, 600, 100, 50)
+    interior = Box(500, 500, 300, 300)
+    # No siblings
+    grown = grow_layout_box(text_box, interior, (1000, 1000), Cfg(), siblings=None)
+    # It should expand significantly past the original text_box
+    assert grown.w * grown.h > text_box.w * text_box.h

@@ -134,11 +134,76 @@ def bubble_interior_box(
     )
 
 
+def _shrink_box_away_from_siblings(
+    candidate: Box,
+    anchor: Box,
+    siblings: list[Box],
+) -> Box:
+    """Shrink `candidate` (an expanded layout box) so it does not overlap any
+    sibling text box, while still covering the original `anchor` text box.
+
+    Strategy: for each sibling that intersects the candidate, pull the
+    candidate edge back to the sibling boundary on whichever side keeps the
+    anchor fully inside. Never shrinks past the anchor.
+    """
+    x0, y0, x1, y1 = candidate.x, candidate.y, candidate.x2, candidate.y2
+    ax0, ay0, ax1, ay1 = anchor.x, anchor.y, anchor.x2, anchor.y2
+
+    for sib in siblings:
+        sx0, sy0, sx1, sy1 = sib.x, sib.y, sib.x2, sib.y2
+
+        # No overlap with current candidate -> ignore.
+        if sx1 <= x0 or sx0 >= x1 or sy1 <= y0 or sy0 >= y1:
+            continue
+
+        # Compute how much we'd have to pull each edge to clear this sibling,
+        # but only along edges that don't cut into the anchor.
+        # Prefer the smallest adjustment (least lost space).
+        candidates = []
+
+        # Pull right edge left to sibling's left (if that keeps anchor).
+        if sx0 >= ax1:
+            candidates.append(("x1", sx0, x1 - sx0))
+        # Pull left edge right to sibling's right.
+        if sx1 <= ax0:
+            candidates.append(("x0", sx1, sx1 - x0))
+        # Pull bottom edge up to sibling's top.
+        if sy0 >= ay1:
+            candidates.append(("y1", sy0, y1 - sy0))
+        # Pull top edge down to sibling's bottom.
+        if sy1 <= ay0:
+            candidates.append(("y0", sy1, sy1 - y0))
+
+        if not candidates:
+            # Sibling straddles the anchor on every axis (heavily overlapping
+            # detections). Fall back: don't expand at all past the anchor.
+            return anchor
+
+        # Apply the smallest-cost adjustment.
+        edge, value, _cost = min(candidates, key=lambda c: c[2])
+        if edge == "x1":
+            x1 = min(x1, value)
+        elif edge == "x0":
+            x0 = max(x0, value)
+        elif edge == "y1":
+            y1 = min(y1, value)
+        elif edge == "y0":
+            y0 = max(y0, value)
+
+    # Guard: never smaller than the anchor.
+    x0 = min(x0, ax0)
+    y0 = min(y0, ay0)
+    x1 = max(x1, ax1)
+    y1 = max(y1, ay1)
+    return Box(x0, y0, x1 - x0, y1 - y0)
+
+
 def grow_layout_box(
     text_box: Box,
     interior_box: Box | None,
     image_size: tuple[int, int],
     config,
+    siblings: list[Box] | None = None,
 ) -> Box:
     """Expand the tight text box toward the eroded bubble interior,
     bounded by a growth cap and clipped to the interior and image.
@@ -152,9 +217,7 @@ def grow_layout_box(
         h=max(5, text_box.h - 2 * layout_padding),
     )
 
-    if not getattr(config, "LAYOUT_EXPAND_ENABLED", True):
-        return base
-    if interior_box is None:
+    if not getattr(config, "LAYOUT_EXPAND_ENABLED", True) or interior_box is None:
         return base
 
     # Candidate = union of base and interior, then clip to interior.
@@ -175,6 +238,10 @@ def grow_layout_box(
             target_area=int(max_factor * text_area),
             anchor=text_box,
         )
+
+    # NEW: never expand into another render region's text box.
+    if siblings:
+        candidate = _shrink_box_away_from_siblings(candidate, text_box, siblings)
 
     # Ensure the expanded box still overlaps the original text region.
     min_overlap = float(getattr(config, "LAYOUT_MIN_ANCHOR_OVERLAP", 0.5))
@@ -214,6 +281,7 @@ def select_render_geometry(
     *,
     bubble_mask=None,
     bubble_box: Box | None = None,
+    sibling_text_boxes: list[Box] | None = None,
 ) -> tuple[Box, Box, Box, Box]:
     text_value = region.get("read_region") or region.get("bbox")
     if not text_value:
@@ -249,7 +317,9 @@ def select_render_geometry(
             int(getattr(config, "LAYOUT_INTERIOR_ERODE_PX", 10)),
         )
 
-    layout_box = grow_layout_box(text_box, interior_box, image_size, config)
+    layout_box = grow_layout_box(
+        text_box, interior_box, image_size, config, siblings=sibling_text_boxes
+    )
 
     return text_box, bubble_box, erase_box, layout_box
 
@@ -658,8 +728,31 @@ def _dominant_fill_color(
         return (255, 255, 255)
 
     (qr, qg, qb), _ = counter.most_common(1)[0]
-    # De-quantize to bucket center.
-    return (qr * 16 + 8, qg * 16 + 8, qb * 16 + 8)
+
+    # Average the ACTUAL pixels in the winning bucket (bucket-center
+    # dequantization is what turned white into off-white).
+    rs, gs, bs = [], [], []
+    for py in range(0, h, step_y):
+        for px in range(0, w, step_x):
+            if _in_text(px, py):
+                continue
+            r, g, b = img.getpixel((px, py))[:3]
+            if (r // 16, g // 16, b // 16) == (qr, qg, qb):
+                rs.append(r); gs.append(g); bs.append(b)
+
+    if not rs:
+        return (qr * 16 + 8, qg * 16 + 8, qb * 16 + 8)
+
+    r = round(sum(rs) / len(rs))
+    g = round(sum(gs) / len(gs))
+    b = round(sum(bs) / len(bs))
+
+    # Snap near-pure so ordinary white bubbles are byte-identical to the old output.
+    if r >= 248 and g >= 248 and b >= 248:
+        return (255, 255, 255)
+    if r <= 6 and g <= 6 and b <= 6:
+        return (0, 0, 0)
+    return (r, g, b)
 
 
 def _color_close_mask(arr, fill_color: tuple[int, int, int], tol: int):
@@ -924,6 +1017,7 @@ def _render_region(
     run_id: str = "unknown",
     chapter: str = "unknown",
     render_dir: Path | None = None,
+    sibling_text_boxes: list[Box] | None = None,
 ) -> tuple[dict, int, int, int]:
     """Render a single region using explicit geometry roles and deterministic erasure."""
     rid = region["region_id"]
@@ -999,7 +1093,9 @@ def _render_region(
         return result_dict, 0, 1, 0
 
     # 1. Geometry Selection (Initial parse to get text_box and bubble_box)
-    text_box, bubble_box, _, _ = select_render_geometry(region, page_img.size, config)
+    text_box, bubble_box, _, _ = select_render_geometry(
+        region, page_img.size, config, sibling_text_boxes=sibling_text_boxes
+    )
 
     # 2. Bubble Mask for context / diagnostics (using local_text_box seed)
     local_text_box = Box(
@@ -1027,14 +1123,43 @@ def _render_region(
         fill_color=fill_color,
     )
 
+    # If this region's parent_bubble is shared with another render region,
+    # the interior belongs to multiple speakers; suppress interior expansion
+    # and rely on sibling-clipped growth only.
+    shared_parent = False
+    pb = region.get("parent_bubble")
+    if pb and sibling_text_boxes is not None:
+        # crude but effective: any sibling whose text box falls inside this
+        # parent_bubble means the bubble is shared.
+        pbx0, pby0 = pb["x"], pb["y"]
+        pbx1, pby1 = pb["x"] + pb["w"], pb["y"] + pb["h"]
+        for sib in sibling_text_boxes:
+            if (sib.x >= pbx0 and sib.y >= pby0
+                    and sib.x2 <= pbx1 and sib.y2 <= pby1):
+                shared_parent = True
+                break
+
     # Re-evaluate layout_box and erase_box now that we have the bubble mask
-    text_box, bubble_box, erase_box, layout_box = select_render_geometry(
-        region,
-        page_img.size,
-        config,
-        bubble_mask=bubble_mask,
-        bubble_box=bubble_box,
-    )
+    if shared_parent:
+        # Skip interior expansion: pass bubble_mask=None so layout stays at the
+        # padded text box (still sibling-clipped, still readable).
+        text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+            region,
+            page_img.size,
+            config,
+            bubble_mask=None,
+            bubble_box=bubble_box,
+            sibling_text_boxes=sibling_text_boxes,
+        )
+    else:
+        text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+            region,
+            page_img.size,
+            config,
+            bubble_mask=bubble_mask,
+            bubble_box=bubble_box,
+            sibling_text_boxes=sibling_text_boxes,
+        )
 
     # Coverage guard: if dominant fill mask covers too little of the crop, fall back
     min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.15))
@@ -1408,7 +1533,22 @@ def _render_single_page(
     page_results = []
     page_regions = regions_by_page.get(page_num, [])
 
+    # Precompute text boxes for every renderable region on this page.
+    render_regions = [r for r in page_regions if r.get("render", True)]
+
+    def _text_box_of(r) -> Box:
+        val = r.get("read_region") or r.get("bbox")
+        return clip_box(box_from_dict(val), page_img.size)
+
+    boxes_by_id = {r["region_id"]: _text_box_of(r) for r in render_regions}
+
     for region in page_regions:
+        rid = region["region_id"]
+        siblings = [
+            box for other_id, box in boxes_by_id.items()
+            if other_id != rid
+        ] if region.get("render", True) else None
+
         res_dict, drawn, left, ovf = _render_region(
             region,
             page_img,
@@ -1418,6 +1558,7 @@ def _render_single_page(
             render_dir=render_dir,
             run_id=run_id,
             chapter=ws.name,
+            sibling_text_boxes=siblings,
         )
         page_results.append(res_dict)
         page_drawn += drawn
