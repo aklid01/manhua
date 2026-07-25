@@ -51,6 +51,7 @@ from pathlib import Path
 
 import config
 from manhua_pipeline.logging_setup import get_logger, setup_logging
+from manhua_pipeline.run_context import create_run_context
 
 logger = get_logger(__name__)
 
@@ -409,6 +410,7 @@ def _prepare_logs_dir(chapter_dir: Path, config, fresh: bool = False) -> Path:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    _run_ctx = create_run_context()
     setup_logging(stream="stdout")  # CLI logs to stdout; MCP adapter will use stderr
 
     # Handle --set-output-dir persisting base directory
@@ -449,7 +451,7 @@ def main(argv=None) -> int:
     if args.command == "run-all":
         chapter_dir = _resolve_run_all_chapter_dir(args, base_dir)
         logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=is_fresh)
-        setup_logging(stream="stdout", log_dir=logs_dir)
+        setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
         meta = {
             "title_romanized": getattr(args, "title_romanized", None),
             "title_en": getattr(args, "title_en", None),
@@ -469,7 +471,7 @@ def main(argv=None) -> int:
     if args.command == "import":
         chapter_dir = _resolve_import_chapter_dir(args, base_dir)
         logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=is_fresh)
-        setup_logging(stream="stdout", log_dir=logs_dir)
+        setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
         logger.info("Running stage: import")
         _load_stage("import")(
             args.input,
@@ -488,7 +490,7 @@ def main(argv=None) -> int:
 
         chapter_dir = base_dir / args.chapter
         logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=False)
-        setup_logging(stream="stdout", log_dir=logs_dir)
+        setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
         stage7_package.run_package(
             str(chapter_dir), config, _parse_formats(args.package)
         )
@@ -504,7 +506,7 @@ def main(argv=None) -> int:
         chapter_dir = base_dir / args.workspace
 
     logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=is_fresh)
-    setup_logging(stream="stdout", log_dir=logs_dir)
+    setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
 
     if not (chapter_dir / config.MANIFEST_NAME).exists():
         available = []
