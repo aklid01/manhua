@@ -442,7 +442,10 @@ def test_component_near_text_wins_over_larger_background_component():
 def test_gold_panel_source_text_is_erased():
     from PIL import Image, ImageDraw
     from manhua_pipeline.stages.stage5_render import (
-        Box, erase_original_text, _dominant_fill_color, _get_bubble_mask,
+        Box,
+        erase_original_text,
+        _dominant_fill_color,
+        _get_bubble_mask,
     )
 
     class Cfg:
@@ -452,39 +455,58 @@ def test_gold_panel_source_text_is_erased():
         TEXT_ERASE_DILATION_PX = 5
         TEXT_ERASE_MIN_RETENTION = 0.65
         TEXT_ERASE_PARENT_MARGIN_PX = 8
+
     cfg = Cfg()
 
-    page = Image.new("RGB", (400, 300), (255, 200, 60))   # gold panel
+    page = Image.new("RGB", (400, 300), (255, 200, 60))  # gold panel
     draw = ImageDraw.Draw(page)
     draw.rectangle((120, 120, 300, 170), fill=(20, 20, 20))  # dark source glyphs
 
     bubble_box = Box(50, 50, 300, 200)
     text_box = Box(110, 110, 200, 70)
     erase_box = Box(98, 98, 224, 94)
-    local_text = Box(text_box.x - bubble_box.x, text_box.y - bubble_box.y,
-                     text_box.w, text_box.h)
+    local_text = Box(
+        text_box.x - bubble_box.x, text_box.y - bubble_box.y, text_box.w, text_box.h
+    )
 
     crop = page.crop(bubble_box.as_xyxy())
     fill = _dominant_fill_color(crop, local_text, cfg)
     assert abs(fill[0] - 255) < 24 and abs(fill[1] - 200) < 24 and fill[2] < 90
 
     mask = _get_bubble_mask(
-        crop, bubble_box.x, bubble_box.y, bubble_box.w, bubble_box.h,
-        page.width, page.height, cfg, seed_box=local_text, fill_color=fill,
+        crop,
+        bubble_box.x,
+        bubble_box.y,
+        bubble_box.w,
+        bubble_box.h,
+        page.width,
+        page.height,
+        cfg,
+        seed_box=local_text,
+        fill_color=fill,
     )
     erase_original_text(
-        page_img=page, draw=draw, text_box=text_box, bubble_box=bubble_box,
-        erase_box=erase_box, bubble_mask=mask, config=cfg, fill_color=fill,
+        page_img=page,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=mask,
+        config=cfg,
+        fill_color=fill,
     )
     # Glyph area now shows the gold fill, not dark text.
     px = page.getpixel((200, 140))
-    assert px[2] < 90 and px[0] > 200   # gold, not (20,20,20)
+    assert px[2] < 90 and px[0] > 200  # gold, not (20,20,20)
 
 
 def test_white_bubble_still_erases_under_dominant_mode():
     from PIL import Image, ImageDraw
     from manhua_pipeline.stages.stage5_render import (
-        Box, erase_original_text, _dominant_fill_color, _get_bubble_mask,
+        Box,
+        erase_original_text,
+        _dominant_fill_color,
+        _get_bubble_mask,
     )
 
     class Cfg:
@@ -494,29 +516,45 @@ def test_white_bubble_still_erases_under_dominant_mode():
         TEXT_ERASE_DILATION_PX = 5
         TEXT_ERASE_MIN_RETENTION = 0.65
         TEXT_ERASE_PARENT_MARGIN_PX = 8
+
     cfg = Cfg()
 
-    page = Image.new("RGB", (400, 300), (255, 255, 255))   # white panel
+    page = Image.new("RGB", (400, 300), (255, 255, 255))  # white panel
     draw = ImageDraw.Draw(page)
     draw.rectangle((120, 120, 300, 170), fill=(20, 20, 20))  # dark source glyphs
 
     bubble_box = Box(50, 50, 300, 200)
     text_box = Box(110, 110, 200, 70)
     erase_box = Box(98, 98, 224, 94)
-    local_text = Box(text_box.x - bubble_box.x, text_box.y - bubble_box.y,
-                     text_box.w, text_box.h)
+    local_text = Box(
+        text_box.x - bubble_box.x, text_box.y - bubble_box.y, text_box.w, text_box.h
+    )
 
     crop = page.crop(bubble_box.as_xyxy())
     fill = _dominant_fill_color(crop, local_text, cfg)
     assert fill[0] > 240 and fill[1] > 240 and fill[2] > 240
 
     mask = _get_bubble_mask(
-        crop, bubble_box.x, bubble_box.y, bubble_box.w, bubble_box.h,
-        page.width, page.height, cfg, seed_box=local_text, fill_color=fill,
+        crop,
+        bubble_box.x,
+        bubble_box.y,
+        bubble_box.w,
+        bubble_box.h,
+        page.width,
+        page.height,
+        cfg,
+        seed_box=local_text,
+        fill_color=fill,
     )
     erase_original_text(
-        page_img=page, draw=draw, text_box=text_box, bubble_box=bubble_box,
-        erase_box=erase_box, bubble_mask=mask, config=cfg, fill_color=fill,
+        page_img=page,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=mask,
+        config=cfg,
+        fill_color=fill,
     )
     # Glyph area now shows the white fill, not dark text.
     px = page.getpixel((200, 140))
@@ -526,7 +564,10 @@ def test_white_bubble_still_erases_under_dominant_mode():
 def test_low_coverage_falls_back_to_solid_rect():
     from PIL import Image, ImageDraw
     from manhua_pipeline.stages.stage5_render import (
-        Box, erase_original_text, _dominant_fill_color, _get_bubble_mask,
+        Box,
+        erase_original_text,
+        _dominant_fill_color,
+        _get_bubble_mask,
     )
 
     class Cfg:
@@ -537,6 +578,7 @@ def test_low_coverage_falls_back_to_solid_rect():
         TEXT_ERASE_MIN_RETENTION = 0.65
         TEXT_ERASE_PARENT_MARGIN_PX = 8
         BUBBLE_FILL_MIN_COVERAGE = 0.8  # high min coverage to trigger fallback
+
     cfg = Cfg()
 
     # Gradient/noisy panel where mask coverage will be low
@@ -545,25 +587,34 @@ def test_low_coverage_falls_back_to_solid_rect():
     # Draw noise/gradients
     for y in range(300):
         for x in range(400):
-            page.putpixel((x, y), (x % 255, y % 255, (x+y) % 255))
-    
+            page.putpixel((x, y), (x % 255, y % 255, (x + y) % 255))
+
     # Put dark text
     draw.rectangle((120, 120, 300, 170), fill=(0, 0, 0))
 
     bubble_box = Box(50, 50, 300, 200)
     text_box = Box(110, 110, 200, 70)
     erase_box = Box(98, 98, 224, 94)
-    local_text = Box(text_box.x - bubble_box.x, text_box.y - bubble_box.y,
-                     text_box.w, text_box.h)
+    local_text = Box(
+        text_box.x - bubble_box.x, text_box.y - bubble_box.y, text_box.w, text_box.h
+    )
 
     crop = page.crop(bubble_box.as_xyxy())
     fill = _dominant_fill_color(crop, local_text, cfg)
 
     mask = _get_bubble_mask(
-        crop, bubble_box.x, bubble_box.y, bubble_box.w, bubble_box.h,
-        page.width, page.height, cfg, seed_box=local_text, fill_color=fill,
+        crop,
+        bubble_box.x,
+        bubble_box.y,
+        bubble_box.w,
+        bubble_box.h,
+        page.width,
+        page.height,
+        cfg,
+        seed_box=local_text,
+        fill_color=fill,
     )
-    
+
     # Let's count coverage. Should be low.
     mask_hist = mask.histogram()
     mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
@@ -573,11 +624,18 @@ def test_low_coverage_falls_back_to_solid_rect():
 
     # If we apply the fallback manually, it becomes solid rect
     from manhua_pipeline.stages.stage5_render import _solid_rect_mask
+
     fallback_mask = _solid_rect_mask(bubble_box, erase_box)
 
     erase_original_text(
-        page_img=page, draw=draw, text_box=text_box, bubble_box=bubble_box,
-        erase_box=erase_box, bubble_mask=fallback_mask, config=cfg, fill_color=fill,
+        page_img=page,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=fallback_mask,
+        config=cfg,
+        fill_color=fill,
     )
     # The entire erase_box area must be filled with the fill color
     for x in range(erase_box.x, erase_box.x2):
@@ -588,11 +646,13 @@ def test_low_coverage_falls_back_to_solid_rect():
 
 def test_text_color_black_on_gold():
     from manhua_pipeline.stages.stage5_render import _text_color_for_bg
+
     assert _text_color_for_bg((255, 200, 60)) == (0, 0, 0)
 
 
 def test_normalize_escaped_newlines_is_case_insensitive():
     from manhua_pipeline.stages.stage5_render import normalize_escaped_newlines
+
     assert normalize_escaped_newlines(r"A\NB") == "A\nB"
     assert normalize_escaped_newlines(r"A\nB") == "A\nB"
     assert normalize_escaped_newlines(r"A\R\NB") == "A\nB"

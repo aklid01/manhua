@@ -192,13 +192,22 @@ def test_small_font_emits_render_text_too_small(tmp_path):
     draw = ImageDraw.Draw(img)
 
     plan = _plan_and_erase_region(
-        region, img, draw, page_num=1, config=cfg, render_dir=render_dir,
+        region,
+        img,
+        draw,
+        page_num=1,
+        config=cfg,
+        render_dir=render_dir,
     )
     _draw_region_plan(plan, draw)
     emitter_arg = emitter
     _finalize_plan(
-        plan, emitter=emitter_arg, run_id="test_run", chapter="ch1",
-        render_dir=render_dir, config=cfg,
+        plan,
+        emitter=emitter_arg,
+        run_id="test_run",
+        chapter="ch1",
+        render_dir=render_dir,
+        config=cfg,
     )
 
     # Read the emitted events
@@ -393,12 +402,21 @@ def test_render_json_records_effective_max_pt_and_width(tmp_path):
     draw = ImageDraw.Draw(img)
 
     plan = _plan_and_erase_region(
-        region, img, draw, page_num=1, config=cfg, render_dir=render_dir,
+        region,
+        img,
+        draw,
+        page_num=1,
+        config=cfg,
+        render_dir=render_dir,
     )
     _draw_region_plan(plan, draw)
     result_dict, _, _, _ = _finalize_plan(
-        plan, emitter=None, run_id="test_run", chapter="ch1",
-        render_dir=render_dir, config=cfg,
+        plan,
+        emitter=None,
+        run_id="test_run",
+        chapter="ch1",
+        render_dir=render_dir,
+        config=cfg,
     )
 
     assert result_dict["effective_max_pt"] == 57  # max(20, int(1280 * 0.045)) = 57

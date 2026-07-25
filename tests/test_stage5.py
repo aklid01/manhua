@@ -337,6 +337,7 @@ def test_text_color_for_bg():
 def test_dominant_fill_returns_pure_white_for_white_bubble():
     from PIL import Image
     from manhua_pipeline.stages.stage5_render import _dominant_fill_color, Box
+
     crop = Image.new("RGB", (200, 120), (255, 255, 255))
     assert _dominant_fill_color(crop, Box(40, 40, 60, 30), object()) == (255, 255, 255)
 
@@ -344,6 +345,7 @@ def test_dominant_fill_returns_pure_white_for_white_bubble():
 def test_dominant_fill_keeps_gold():
     from PIL import Image
     from manhua_pipeline.stages.stage5_render import _dominant_fill_color, Box
+
     crop = Image.new("RGB", (200, 120), (255, 200, 60))
     r, g, b = _dominant_fill_color(crop, Box(40, 40, 60, 30), object())
     assert r > 240 and 180 < g < 220 and b < 90
@@ -351,32 +353,38 @@ def test_dominant_fill_keeps_gold():
 
 def test_expansion_does_not_overlap_sibling():
     from manhua_pipeline.stages.stage5_render import (
-        Box, grow_layout_box, intersect_boxes,
+        Box,
+        grow_layout_box,
+        intersect_boxes,
     )
+
     class Cfg:
         LAYOUT_EXPAND_ENABLED = True
         LAYOUT_MAX_GROWTH_FACTOR = 3.0
         LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
         TEXT_LAYOUT_PADDING_PX = 8
-    text_box = Box(600, 600, 120, 60)                 # this region
-    sibling = Box(600, 720, 120, 60)                  # region just below
-    interior = Box(560, 560, 400, 400)                # generous shared interior
-    grown = grow_layout_box(text_box, interior, (2000, 2000), Cfg(),
-                            siblings=[sibling])
-    assert intersect_boxes(grown, sibling) is None     # must not invade sibling
+
+    text_box = Box(600, 600, 120, 60)  # this region
+    sibling = Box(600, 720, 120, 60)  # region just below
+    interior = Box(560, 560, 400, 400)  # generous shared interior
+    grown = grow_layout_box(text_box, interior, (2000, 2000), Cfg(), siblings=[sibling])
+    assert intersect_boxes(grown, sibling) is None  # must not invade sibling
     assert intersect_boxes(grown, text_box) is not None  # still covers anchor
 
 
 def test_shared_parent_regions_do_not_stack(monkeypatch):
     from PIL import Image, ImageDraw, ImageFont
     from manhua_pipeline.stages.stage5_render import (
-        Box, _plan_and_erase_region, _draw_region_plan, _finalize_plan,
+        Box,
+        _plan_and_erase_region,
+        _draw_region_plan,
+        _finalize_plan,
     )
     import config
 
     monkeypatch.setattr(
         "manhua_pipeline.stages.stage5_render._load_font",
-        lambda p, pt, cfg: ImageFont.load_default()
+        lambda p, pt, cfg: ImageFont.load_default(),
     )
 
     page_img = Image.new("RGB", (1000, 1000), (255, 255, 255))
@@ -396,25 +404,35 @@ def test_shared_parent_regions_do_not_stack(monkeypatch):
 
     siblings = [Box(600, 700, 100, 50)]
 
-    plan = _plan_and_erase_region(region, page_img, draw, 1, config, sibling_text_boxes=siblings)
+    plan = _plan_and_erase_region(
+        region, page_img, draw, 1, config, sibling_text_boxes=siblings
+    )
     _draw_region_plan(plan, draw)
     res, _, _, _ = _finalize_plan(
-        plan, emitter=None, run_id="test", chapter="ch", render_dir=None, config=config,
+        plan,
+        emitter=None,
+        run_id="test",
+        chapter="ch",
+        render_dir=None,
+        config=config,
     )
 
     layout = Box(**res["layout_box"])
     from manhua_pipeline.stages.stage5_render import intersect_boxes
+
     assert intersect_boxes(layout, siblings[0]) is None
     assert layout.x == 608
 
 
 def test_single_region_bubble_still_expands():
     from manhua_pipeline.stages.stage5_render import Box, grow_layout_box
+
     class Cfg:
         LAYOUT_EXPAND_ENABLED = True
         LAYOUT_MAX_GROWTH_FACTOR = 3.0
         LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
         TEXT_LAYOUT_PADDING_PX = 8
+
     text_box = Box(600, 600, 100, 50)
     interior = Box(500, 500, 300, 300)
     grown = grow_layout_box(text_box, interior, (1000, 1000), Cfg(), siblings=None)
@@ -439,20 +457,34 @@ def test_two_overlapping_bubbles_neither_text_is_erased(tmp_path, monkeypatch):
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
 
-    det = _det([
-        _region_pb("P001_R001", 50, 50, 100, 80, pb=(40, 40, 120, 110)),
-        _region_pb("P001_R002", 80, 100, 100, 80, pb=(70, 90, 120, 110)),
-    ])
-    ocr = {"results": [
-        {"region_id": "P001_R001", "has_usable_text": True},
-        {"region_id": "P001_R002", "has_usable_text": True},
-    ]}
-    para = {"results": [
-        {"region_id": "P001_R001", "final_text": "First bubble full text.",
-         "register": "neutral", "paraphrased": True},
-        {"region_id": "P001_R002", "final_text": "Second bubble full text.",
-         "register": "neutral", "paraphrased": True},
-    ]}
+    det = _det(
+        [
+            _region_pb("P001_R001", 50, 50, 100, 80, pb=(40, 40, 120, 110)),
+            _region_pb("P001_R002", 80, 100, 100, 80, pb=(70, 90, 120, 110)),
+        ]
+    )
+    ocr = {
+        "results": [
+            {"region_id": "P001_R001", "has_usable_text": True},
+            {"region_id": "P001_R002", "has_usable_text": True},
+        ]
+    }
+    para = {
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "final_text": "First bubble full text.",
+                "register": "neutral",
+                "paraphrased": True,
+            },
+            {
+                "region_id": "P001_R002",
+                "final_text": "Second bubble full text.",
+                "register": "neutral",
+                "paraphrased": True,
+            },
+        ]
+    }
     _setup(ws := tmp_path / "workspace", det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
 
@@ -490,18 +522,34 @@ def test_erase_all_happens_before_any_draw(tmp_path, monkeypatch):
     monkeypatch.setattr(stage5_render, "erase_original_text", spy_erase)
     monkeypatch.setattr(stage5_render, "_draw_region_plan", spy_draw)
 
-    det = _det([
-        _region_pb("P001_R001", 50, 50, 80, 60),
-        _region_pb("P001_R002", 200, 300, 80, 60),
-    ])
-    ocr = {"results": [
-        {"region_id": "P001_R001", "has_usable_text": True},
-        {"region_id": "P001_R002", "has_usable_text": True},
-    ]}
-    para = {"results": [
-        {"region_id": "P001_R001", "final_text": "Alpha.", "register": "neutral", "paraphrased": True},
-        {"region_id": "P001_R002", "final_text": "Beta.", "register": "neutral", "paraphrased": True},
-    ]}
+    det = _det(
+        [
+            _region_pb("P001_R001", 50, 50, 80, 60),
+            _region_pb("P001_R002", 200, 300, 80, 60),
+        ]
+    )
+    ocr = {
+        "results": [
+            {"region_id": "P001_R001", "has_usable_text": True},
+            {"region_id": "P001_R002", "has_usable_text": True},
+        ]
+    }
+    para = {
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "final_text": "Alpha.",
+                "register": "neutral",
+                "paraphrased": True,
+            },
+            {
+                "region_id": "P001_R002",
+                "final_text": "Beta.",
+                "register": "neutral",
+                "paraphrased": True,
+            },
+        ]
+    }
     _setup(ws := tmp_path / "workspace", det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
 
@@ -524,10 +572,16 @@ def test_single_bubble_two_pass_unchanged(tmp_path, monkeypatch):
 
     det = _det([_region("P001_R001", 50, 50, 100, 50)])
     ocr = {"results": [{"region_id": "P001_R001", "has_usable_text": True}]}
-    para = {"results": [{
-        "region_id": "P001_R001", "final_text": "Hello.",
-        "register": "neutral", "paraphrased": True,
-    }]}
+    para = {
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "final_text": "Hello.",
+                "register": "neutral",
+                "paraphrased": True,
+            }
+        ]
+    }
     _setup(ws := tmp_path / "workspace", det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
 
