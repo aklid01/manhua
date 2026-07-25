@@ -28,19 +28,40 @@ PACKAGE_FORMATS = ["cbz", "zip", "tar", "pdf"]
 # Stages that use a prompt/response handoff when backend is manual/mcp.
 # (paths mirror config STAGE_FOLDERS + *_PROMPT/RESPONSE_NAME defaults)
 HANDOFF_HINTS = {
-    "translate": ("stage3_translation/translation_prompt.json",
-                  "stage3_translation/translation_response.json"),
-    "paraphrase": ("stage4_paraphrase/paraphrase_prompt.json",
-                   "stage4_paraphrase/paraphrase_response.json"),
+    "translate": (
+        "stage3_translation/translation_prompt.json",
+        "stage3_translation/translation_response.json",
+    ),
+    "paraphrase": (
+        "stage4_paraphrase/paraphrase_prompt.json",
+        "stage4_paraphrase/paraphrase_response.json",
+    ),
 }
 
 # Only surface meaningful lines in the log (warnings, re-runs, overrides, verdicts) -
 # hide the per-page INFO spam. Case-insensitive substring match.
 SHOW_KEYWORDS = (
-    "warning", "error", "failed", "review", "success", "done:",
-    "held", "not advancing", "re-run", "rerun", "handoff",
-    "override", "glossary", "not translated", "missing", "giving up",
-    "completion", "conflict", "skip", "credits", "stitch",
+    "warning",
+    "error",
+    "failed",
+    "review",
+    "success",
+    "done:",
+    "held",
+    "not advancing",
+    "re-run",
+    "rerun",
+    "handoff",
+    "override",
+    "glossary",
+    "not translated",
+    "missing",
+    "giving up",
+    "completion",
+    "conflict",
+    "skip",
+    "credits",
+    "stitch",
 )
 
 
@@ -58,7 +79,9 @@ def _write_setting(key: str, value) -> None:
     s = _read_settings()
     s[key] = value
     try:
-        SETTINGS.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+        SETTINGS.write_text(
+            json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     except Exception:
         pass
 
@@ -100,57 +123,97 @@ class PipelineGUI:
         pad = {"padx": 8, "pady": 4}
 
         # Series folder (persisted)
-        top = ttk.LabelFrame(self.root, text="Series folder (where chapters are stored)")
+        top = ttk.LabelFrame(
+            self.root, text="Series folder (where chapters are stored)"
+        )
         top.pack(fill="x", **pad)
         self.series_var = tk.StringVar(value=_read_settings().get("output_dir", ""))
-        ttk.Entry(top, textvariable=self.series_var).pack(side="left", fill="x", expand=True, padx=6, pady=6)
-        ttk.Button(top, text="Browse…", command=self._pick_series).pack(side="right", padx=6)
+        ttk.Entry(top, textvariable=self.series_var).pack(
+            side="left", fill="x", expand=True, padx=6, pady=6
+        )
+        ttk.Button(top, text="Browse…", command=self._pick_series).pack(
+            side="right", padx=6
+        )
 
         # Input picker
         inp = ttk.LabelFrame(self.root, text="Chapter input")
         inp.pack(fill="x", **pad)
-        row = ttk.Frame(inp); row.pack(fill="x", padx=6, pady=6)
-        ttk.Button(row, text="Choose Folder…", command=self._pick_folder).pack(side="left")
-        ttk.Button(row, text="Choose CBZ/ZIP…", command=self._pick_archive).pack(side="left", padx=6)
+        row = ttk.Frame(inp)
+        row.pack(fill="x", padx=6, pady=6)
+        ttk.Button(row, text="Choose Folder…", command=self._pick_folder).pack(
+            side="left"
+        )
+        ttk.Button(row, text="Choose CBZ/ZIP…", command=self._pick_archive).pack(
+            side="left", padx=6
+        )
         self.input_lbl = ttk.Label(inp, text="No input selected.", foreground="#888")
         self.input_lbl.pack(anchor="w", padx=6, pady=(0, 6))
         self.fresh_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(inp, text="Fresh  (⚠ wipes prior outputs for this chapter)",
-                        variable=self.fresh_var).pack(anchor="w", padx=6, pady=(0, 6))
+        ttk.Checkbutton(
+            inp,
+            text="Fresh  (⚠ wipes prior outputs for this chapter)",
+            variable=self.fresh_var,
+        ).pack(anchor="w", padx=6, pady=(0, 6))
 
         self.skip_last_var = tk.IntVar(value=0)
         row2 = ttk.Frame(inp)
         row2.pack(anchor="w", padx=6, pady=(0, 6))
         ttk.Label(row2, text="Skip last").pack(side="left")
-        ttk.Spinbox(row2, from_=0, to=20, width=4, textvariable=self.skip_last_var).pack(side="left", padx=4)
+        ttk.Spinbox(
+            row2, from_=0, to=20, width=4, textvariable=self.skip_last_var
+        ).pack(side="left", padx=4)
         ttk.Label(row2, text="pages (promo/credits at chapter end)").pack(side="left")
 
         # Stages
         st = ttk.LabelFrame(self.root, text="Stages (unlock in order)")
         st.pack(fill="x", **pad)
         for name in STAGES:
-            r = ttk.Frame(st); r.pack(fill="x", padx=6, pady=2)
-            btn = ttk.Button(r, text=STAGE_LABELS[name], width=18,
-                             command=lambda n=name: self._run_stage(n))
+            r = ttk.Frame(st)
+            r.pack(fill="x", padx=6, pady=2)
+            btn = ttk.Button(
+                r,
+                text=STAGE_LABELS[name],
+                width=18,
+                command=lambda n=name: self._run_stage(n),
+            )
             btn.pack(side="left")
             btn.state(["disabled"])
             self.stage_btns[name] = btn
             if name == "qa":
                 # Package sits beside QA (both unlock after Render).
-                self.pkg_fmt = tk.StringVar(value=_read_settings().get("gui_default_package", "cbz"))
-                self.pkg_btn = ttk.Button(r, text="Package", width=12, command=self._run_package)
+                self.pkg_fmt = tk.StringVar(
+                    value=_read_settings().get("gui_default_package", "cbz")
+                )
+                self.pkg_btn = ttk.Button(
+                    r, text="Package", width=12, command=self._run_package
+                )
                 self.pkg_btn.pack(side="left", padx=(12, 4))
                 self.pkg_btn.state(["disabled"])
-                ttk.Combobox(r, textvariable=self.pkg_fmt, values=PACKAGE_FORMATS,
-                             width=6, state="readonly").pack(side="left")
+                ttk.Combobox(
+                    r,
+                    textvariable=self.pkg_fmt,
+                    values=PACKAGE_FORMATS,
+                    width=6,
+                    state="readonly",
+                ).pack(side="left")
 
         # Log
-        lg = ttk.LabelFrame(self.root, text="Output (warnings · re-runs · overrides · verdicts)")
+        lg = ttk.LabelFrame(
+            self.root, text="Output (warnings · re-runs · overrides · verdicts)"
+        )
         lg.pack(fill="both", expand=True, **pad)
-        self.log = tk.Text(lg, height=14, wrap="word", state="disabled",
-                           font=("Consolas", 9), bg="#111", fg="#ddd")
+        self.log = tk.Text(
+            lg,
+            height=14,
+            wrap="word",
+            state="disabled",
+            font=("Consolas", 9),
+            bg="#111",
+            fg="#ddd",
+        )
         self.log.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
-        sb = ttk.Scrollbar(lg, command=self.log.yview); sb.pack(side="right", fill="y", pady=6)
+        sb = ttk.Scrollbar(lg, command=self.log.yview)
+        sb.pack(side="right", fill="y", pady=6)
         self.log.config(yscrollcommand=sb.set)
         self.log.tag_config("err", foreground="#ff6b6b")
         self.log.tag_config("warn", foreground="#ffd166")
@@ -170,8 +233,9 @@ class PipelineGUI:
             self._on_input_selected(d)
 
     def _pick_archive(self):
-        f = filedialog.askopenfilename(title="Select CBZ/ZIP",
-                                       filetypes=[("Comic archives", "*.cbz *.zip")])
+        f = filedialog.askopenfilename(
+            title="Select CBZ/ZIP", filetypes=[("Comic archives", "*.cbz *.zip")]
+        )
         if f:
             self._on_input_selected(f)
 
@@ -185,7 +249,9 @@ class PipelineGUI:
             return
         self.input_path = path
         self.chapter = _chapter_name(path)
-        self.input_lbl.config(text=f"{Path(path).name}   →   chapter '{self.chapter}'", foreground="#ddd")
+        self.input_lbl.config(
+            text=f"{Path(path).name}   →   chapter '{self.chapter}'", foreground="#ddd"
+        )
 
         # RESET stage buttons for the new chapter
         self.stage_done = {s: False for s in STAGES}
@@ -197,8 +263,10 @@ class PipelineGUI:
         self._clear_log()
 
         if self.fresh_var.get():
-            if not messagebox.askyesno("Fresh run",
-                                       f"Fresh will WIPE prior outputs for '{self.chapter}'.\nContinue?"):
+            if not messagebox.askyesno(
+                "Fresh run",
+                f"Fresh will WIPE prior outputs for '{self.chapter}'.\nContinue?",
+            ):
                 return
         self._sys(f"Input selected: {self.chapter}. Auto-running Import…")
         self._run_stage("import", auto=True)
@@ -221,23 +289,42 @@ class PipelineGUI:
         if self.running:
             return
         fmt = self.pkg_fmt.get()
-        _write_setting("gui_default_package", fmt)   # remember choice
-        cmd = [sys.executable, str(PIPELINE), "package", "--chapter", self.chapter, "--package", fmt]
-        self._run_cmd(cmd, on_done=lambda rc: self._sys(
-            f"Package {'done' if rc == 0 else 'FAILED'} ({fmt}).", "ok" if rc == 0 else "err"))
+        _write_setting("gui_default_package", fmt)  # remember choice
+        cmd = [
+            sys.executable,
+            str(PIPELINE),
+            "package",
+            "--chapter",
+            self.chapter,
+            "--package",
+            fmt,
+        ]
+        self._run_cmd(
+            cmd,
+            on_done=lambda rc: self._sys(
+                f"Package {'done' if rc == 0 else 'FAILED'} ({fmt}).",
+                "ok" if rc == 0 else "err",
+            ),
+        )
 
     def _stage_finished(self, name: str, rc: int):
         # Hard failure -> keep this stage enabled so the user can retry.
         if rc != 0:
-            self._sys(f"{STAGE_LABELS.get(name, name)} did not complete cleanly - "
-                      f"fix the issue above and re-run this stage.", "err")
+            self._sys(
+                f"{STAGE_LABELS.get(name, name)} did not complete cleanly - "
+                f"fix the issue above and re-run this stage.",
+                "err",
+            )
             self.stage_btns[name].state(["!disabled"])
             return
 
         cs = self._manifest_current_stage()
         if cs is None:
-            self._sys("Couldn't read manifest to confirm the stage advanced - "
-                      "re-run this stage if needed.", "warn")
+            self._sys(
+                "Couldn't read manifest to confirm the stage advanced - "
+                "re-run this stage if needed.",
+                "warn",
+            )
             self.stage_btns[name].state(["!disabled"])
             return
 
@@ -249,7 +336,9 @@ class PipelineGUI:
 
         # Truly complete (manifest advanced past this stage, or reached 'complete').
         self.stage_done[name] = True
-        self.stage_btns[name].configure(text=STAGE_LABELS[name])   # clear any "Resume" label
+        self.stage_btns[name].configure(
+            text=STAGE_LABELS[name]
+        )  # clear any "Resume" label
         self._sys(f"{STAGE_LABELS.get(name, name)} complete.", "ok")
         self.stage_btns["import"].state(["!disabled"])
 
@@ -265,32 +354,54 @@ class PipelineGUI:
     def _handoff_pending(self, name: str):
         """Stage wrote its prompt and is waiting for a manual/MCP response. Keep it active
         as 'Resume', tell the user exactly what to do, and DON'T unlock the next stage."""
-        prompt_rel, resp_rel = HANDOFF_HINTS.get(name, ("<prompt>.json", "<response>.json"))
+        prompt_rel, resp_rel = HANDOFF_HINTS.get(
+            name, ("<prompt>.json", "<response>.json")
+        )
         btn = self.stage_btns[name]
         btn.configure(text=f"Resume ▶ {STAGE_LABELS[name]}")
         btn.state(["!disabled"])
         self._sys(f"{STAGE_LABELS.get(name, name)} needs a manual/MCP handoff:", "warn")
         self._sys(f"   1. Prompt written to:  {self.chapter}/{prompt_rel}", "warn")
-        self._sys(f"   2. Get the result - paste it to your chatbot, or run your MCP tool.", "warn")
+        self._sys(
+            "   2. Get the result - paste it to your chatbot, or run your MCP tool.",
+            "warn",
+        )
         self._sys(f"   3. Save the reply as:  {self.chapter}/{resp_rel}", "warn")
-        self._sys(f"   4. Click 'Resume ▶ {STAGE_LABELS[name]}' to ingest and continue.", "warn")
+        self._sys(
+            f"   4. Click 'Resume ▶ {STAGE_LABELS[name]}' to ingest and continue.",
+            "warn",
+        )
 
     def _set_output_dir(self, path: str):
-        self._run_cmd([sys.executable, str(PIPELINE), "--set-output-dir", path],
-                      on_done=lambda rc: self._sys(f"Series folder saved.", "ok") if rc == 0 else None,
-                      quiet=True)
+        self._run_cmd(
+            [sys.executable, str(PIPELINE), "--set-output-dir", path],
+            on_done=lambda rc: (
+                self._sys("Series folder saved.", "ok") if rc == 0 else None
+            ),
+            quiet=True,
+        )
 
     # ---------------- subprocess plumbing ----------------
     def _run_cmd(self, cmd: list[str], on_done=None, quiet: bool = False):
         self.running = True
         self._set_buttons_running(True)
         if not quiet:
-            self._sys("$ " + " ".join(Path(c).name if c == cmd[1] else c for c in cmd), "sys")
+            self._sys(
+                "$ " + " ".join(Path(c).name if c == cmd[1] else c for c in cmd), "sys"
+            )
 
         def worker():
             try:
-                proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True, bufsize=1,encoding="utf-8", errors="replace")
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(ROOT),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    encoding="utf-8",
+                    errors="replace",
+                )
                 for line in proc.stdout:
                     self.q.put(("line", line.rstrip("\n")))
                 proc.wait()
@@ -338,9 +449,19 @@ class PipelineGUI:
         low = line.lower()
         if not any(k in low for k in SHOW_KEYWORDS):
             return
-        tag = "err" if ("error" in low or "failed" in low or "giving up" in low) else \
-              "warn" if ("warning" in low or "held" in low or "missing" in low
-                         or "not translated" in low or "conflict" in low) else None
+        tag = (
+            "err"
+            if ("error" in low or "failed" in low or "giving up" in low)
+            else "warn"
+            if (
+                "warning" in low
+                or "held" in low
+                or "missing" in low
+                or "not translated" in low
+                or "conflict" in low
+            )
+            else None
+        )
         self._append(line, tag)
 
     def _sys(self, msg: str, tag: str = "sys"):
@@ -360,8 +481,10 @@ class PipelineGUI:
 
 def main():
     if not PIPELINE.exists():
-        print(f"pipeline.py not found next to this GUI ({PIPELINE}). "
-              f"Place pipeline_gui.py in the project root.")
+        print(
+            f"pipeline.py not found next to this GUI ({PIPELINE}). "
+            f"Place pipeline_gui.py in the project root."
+        )
     root = tk.Tk()
     try:
         ttk.Style().theme_use("clam")

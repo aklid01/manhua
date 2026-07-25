@@ -486,7 +486,9 @@ def _partition_regions_paraphrase(
     return overridden_regions, usable, skipped
 
 
-def run_paraphrase(workspace: str, config) -> Path | None:
+def run_paraphrase(
+    workspace: str, config, *, allow_prompt: bool = False
+) -> Path | None:
     """Run the Paraphrase stage.
 
     Returns the path to paraphrase.json on success, or None if awaiting manual input.
@@ -502,6 +504,10 @@ def run_paraphrase(workspace: str, config) -> Path | None:
         ws.name,
     )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
+    from manhua_pipeline.events import STAGE_STARTED
+    from manhua_pipeline.io.event_emitter import emit_stage_event
+
+    emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
 
     manifest = load_manifest(workspace, config)
     if not manifest:
@@ -807,6 +813,17 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
         _STAGE_NAME,
         f"done: {paraphrased_count} paraphrased, {len(skipped)} passthrough, "
         f"{missing_count} missing; avg {avg_chars} chars -> {out_path} (elapsed {elapsed:.1f}s)",
+    )
+    from manhua_pipeline.events import STAGE_COMPLETED
+    from manhua_pipeline.io.event_emitter import emit_stage_event
+
+    emit_stage_event(
+        ws,
+        config,
+        _STAGE_NAME.lower(),
+        STAGE_COMPLETED,
+        logger=logger,
+        metadata={"paraphrased_count": paraphrased_count},
     )
     return out_path
 

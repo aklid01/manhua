@@ -88,7 +88,6 @@ def test_series_glossary_inherited(tmp_path):
     assert {"yu_lili", "lin_yi"} <= ids
 
 
-
 def test_fresh_clears_chapter_artifacts(tmp_path):
     from PIL import Image
 
@@ -207,10 +206,10 @@ def test_run_all_stops_at_handoff(tmp_path, monkeypatch):
     monkeypatch.setattr(
         s3,
         "run_translation",
-        lambda ws, cfg: calls.append("t") or None,
+        lambda ws, cfg, **kw: calls.append("t") or None,
     )  # None => awaiting handoff
-    monkeypatch.setattr(s4, "run_paraphrase", lambda ws, cfg: calls.append("p"))
-    monkeypatch.setattr(s5, "run_render", lambda ws, cfg: calls.append("r"))
+    monkeypatch.setattr(s4, "run_paraphrase", lambda ws, cfg, **kw: calls.append("p"))
+    monkeypatch.setattr(s5, "run_render", lambda ws, cfg, **kw: calls.append("r"))
     pipeline._run_all_from(tmp_path, config, start="translate")
     assert calls == [
         "t"

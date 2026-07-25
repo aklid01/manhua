@@ -42,7 +42,11 @@ def load_series_glossary(base_dir: Path, config) -> dict:
 
 
 def append_glossary_term(
-    base_dir: Path, config, source_term: str, target_term: str = "", locked: bool = False
+    base_dir: Path,
+    config,
+    source_term: str,
+    target_term: str = "",
+    locked: bool = False,
 ) -> None:
     """Add a term stub if the source_term isn't already present."""
     p = series_glossary_path(base_dir, config)
@@ -64,4 +68,3 @@ def append_glossary_term(
             json.dump(g, fh, ensure_ascii=False, indent=2)
     except Exception as exc:
         logger.warning("Failed to save series glossary to %s: %s", p, exc)
-

@@ -22,13 +22,19 @@ with this program. If not, see <https://www.gnu.org/licenses/>.
 import argparse
 import os
 import sys
+import time
+import traceback
+import warnings
+from datetime import datetime, timezone
+from pathlib import Path
+
+import config
+from manhua_pipeline.logging_setup import get_logger, setup_logging
+from manhua_pipeline.run_context import create_run_context
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-import time
-import warnings
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -45,12 +51,6 @@ try:
     disable_progress_bars()
 except Exception:
     pass
-import traceback
-from datetime import datetime, timezone
-from pathlib import Path
-
-import config
-from manhua_pipeline.logging_setup import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -63,6 +63,8 @@ STAGE_REGISTRY = {
     "render": ("stage5_render", "run_render"),
     "qa": ("stage6_qa", "run_qa"),
 }
+
+PROMPT_CAPABLE_STAGES = {"translate", "paraphrase"}
 
 
 def _load_stage(name):
@@ -134,10 +136,14 @@ def run_batch(
     clear_delay: int = 10,
     meta: dict | None = None,
     formats: list[str] | None = None,
+    run_id: str | None = None,
 ) -> int:
     """Process every CBZ in a folder. Continue-on-error; skip completed;
     resume pending; slim batch log + per-error logs; clean console per chapter."""
     from manhua_pipeline.io.workspace import load_manifest
+
+    resolved_run_id = run_id or getattr(config, "_run_id", "unknown")
+    config._run_id = resolved_run_id
 
     folder = Path(input_folder)
     if not folder.is_dir():
@@ -168,7 +174,11 @@ def run_batch(
         existing_manifest = (
             load_manifest(str(chapter_dir), config) if chapter_dir.exists() else None
         )
-        if existing_manifest and existing_manifest.get("current_stage") == "complete" and not fresh:
+        if (
+            existing_manifest
+            and existing_manifest.get("current_stage") == "complete"
+            and not fresh
+        ):
             logger.warning("[batch] SKIP (already complete): %s", chapter)
             summary["skipped"].append(chapter)
             _append_batch_log(batch_log, f"SKIP complete   | {chapter}")
@@ -178,6 +188,23 @@ def run_batch(
             summary["skipped"].append(chapter)
             _append_batch_log(batch_log, f"SKIP exists     | {chapter}")
             continue
+
+        from manhua_pipeline.events import (
+            CHAPTER_COMPLETED,
+            CHAPTER_FAILED,
+            CHAPTER_STARTED,
+        )
+        from manhua_pipeline.io.event_emitter import emit_stage_event
+
+        emit_stage_event(
+            chapter_dir,
+            config,
+            "batch",
+            CHAPTER_STARTED,
+            logger=logger,
+            chapter=chapter,
+            run_id=resolved_run_id,
+        )
 
         # Run (fresh import OR manifest-driven resume, handled by _run_all_from)
         stage_after = None
@@ -195,6 +222,8 @@ def run_batch(
                 fresh=fresh,
                 skip_last=skip_last,
                 formats=formats or [],
+                run_id=resolved_run_id,
+                allow_prompt=False,
             )
             m = load_manifest(str(chapter_dir), config)
             stage_after = m.get("current_stage") if m else None
@@ -203,9 +232,29 @@ def run_batch(
                 summary["failed"].append(chapter)
                 _append_batch_log(batch_log, f"FAIL rc=2       | {chapter}")
                 logger.error("[batch] %s failed (rc=2). Continuing.", chapter)
+                emit_stage_event(
+                    chapter_dir,
+                    config,
+                    "batch",
+                    CHAPTER_FAILED,
+                    logger=logger,
+                    chapter=chapter,
+                    reason="rc=2",
+                    level="ERROR",
+                    run_id=resolved_run_id,
+                )
             elif stage_after == "complete":
                 summary["done"].append(chapter)
                 _append_batch_log(batch_log, f"DONE            | {chapter}")
+                emit_stage_event(
+                    chapter_dir,
+                    config,
+                    "batch",
+                    CHAPTER_COMPLETED,
+                    logger=logger,
+                    chapter=chapter,
+                    run_id=resolved_run_id,
+                )
             else:
                 summary["pending"].append((chapter, stage_after))
                 _append_batch_log(batch_log, f"PENDING @{stage_after} | {chapter}")
@@ -217,6 +266,17 @@ def run_batch(
             )
             logger.error(
                 "[batch] %s crashed: %s (log: %s). Continuing.", chapter, exc, err_path
+            )
+            emit_stage_event(
+                chapter_dir,
+                config,
+                "batch",
+                CHAPTER_FAILED,
+                logger=logger,
+                chapter=chapter,
+                reason=str(exc),
+                level="ERROR",
+                run_id=resolved_run_id,
             )
             continue
 
@@ -369,6 +429,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated formats to package (zip,cbz,tar,pdf)",
     )
 
+    resolve_sp = sub.add_parser(
+        "resolve-overrides",
+        help="Interactively resolve queued manual translation overrides for a chapter.",
+    )
+    resolve_sp.add_argument(
+        "--chapter", required=True, help="Chapter name in the series folder"
+    )
+
     return parser
 
 
@@ -409,6 +477,11 @@ def _prepare_logs_dir(chapter_dir: Path, config, fresh: bool = False) -> Path:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    env_run_id = os.environ.get("PIPELINE_RUN_ID")
+    _run_ctx = (
+        create_run_context(run_id=env_run_id) if env_run_id else create_run_context()
+    )
+    config._run_id = _run_ctx.run_id
     setup_logging(stream="stdout")  # CLI logs to stdout; MCP adapter will use stderr
 
     # Handle --set-output-dir persisting base directory
@@ -444,12 +517,13 @@ def main(argv=None) -> int:
                 "source": getattr(args, "source", None),
             },
             formats=_parse_formats(getattr(args, "package", None)),
+            run_id=_run_ctx.run_id,
         )
 
     if args.command == "run-all":
         chapter_dir = _resolve_run_all_chapter_dir(args, base_dir)
         logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=is_fresh)
-        setup_logging(stream="stdout", log_dir=logs_dir)
+        setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
         meta = {
             "title_romanized": getattr(args, "title_romanized", None),
             "title_en": getattr(args, "title_en", None),
@@ -464,12 +538,13 @@ def main(argv=None) -> int:
             fresh=is_fresh,
             skip_last=skip_last_val,
             formats=_parse_formats(getattr(args, "package", None)),
+            run_id=_run_ctx.run_id,
         )
 
     if args.command == "import":
         chapter_dir = _resolve_import_chapter_dir(args, base_dir)
         logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=is_fresh)
-        setup_logging(stream="stdout", log_dir=logs_dir)
+        setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
         logger.info("Running stage: import")
         _load_stage("import")(
             args.input,
@@ -488,11 +563,17 @@ def main(argv=None) -> int:
 
         chapter_dir = base_dir / args.chapter
         logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=False)
-        setup_logging(stream="stdout", log_dir=logs_dir)
+        setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
         stage7_package.run_package(
             str(chapter_dir), config, _parse_formats(args.package)
         )
         return 0
+
+    if args.command == "resolve-overrides":
+        chapter_dir = base_dir / args.chapter
+        logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=False)
+        setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
+        return resolve_overrides(chapter_dir, config)
 
     # For other commands
     chapter = getattr(args, "chapter", None)
@@ -504,7 +585,7 @@ def main(argv=None) -> int:
         chapter_dir = base_dir / args.workspace
 
     logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=is_fresh)
-    setup_logging(stream="stdout", log_dir=logs_dir)
+    setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
 
     if not (chapter_dir / config.MANIFEST_NAME).exists():
         available = []
@@ -523,7 +604,13 @@ def main(argv=None) -> int:
 
     run_fn = _load_stage(args.command)
     logger.info("Running stage: %s", args.command)
-    run_fn(str(chapter_dir), config)
+
+    from manhua_pipeline.interaction import can_prompt_now
+
+    if args.command in PROMPT_CAPABLE_STAGES:
+        run_fn(str(chapter_dir), config, allow_prompt=can_prompt_now(batch=False))
+    else:
+        run_fn(str(chapter_dir), config)
     return 0
 
 
@@ -532,7 +619,14 @@ def _parse_formats(raw: str | None) -> list[str]:
 
 
 def _run_stage_subprocess(
-    stage, chapter_dir, *, input_path=None, meta=None, fresh=False, skip_last=0
+    stage,
+    chapter_dir,
+    *,
+    input_path=None,
+    meta=None,
+    fresh=False,
+    skip_last=0,
+    run_id=None,
 ) -> int:
     import subprocess
 
@@ -559,25 +653,34 @@ def _run_stage_subprocess(
             cmd += ["--fresh"]
         if skip_last > 0:
             cmd += ["--skip-last", str(skip_last)]
-    return subprocess.run(cmd).returncode
+    env = os.environ.copy()
+    if run_id:
+        env["PIPELINE_RUN_ID"] = run_id
+    return subprocess.run(cmd, env=env).returncode
 
 
-def _run_all_from(
+def _run_all_from(  # noqa: C901
     workspace: str,
     config,
+    *,
+    run_id: str | None = None,
     start: str = "import",
     input_path: str | None = None,
     meta: dict | None = None,
     fresh: bool = False,
     skip_last: int = 0,
     formats: list[str] | None = None,
+    allow_prompt: bool = True,
 ) -> int:
+    from manhua_pipeline.interaction import can_prompt_now
+
+    resolved_run_id = run_id or getattr(config, "_run_id", "unknown")
+    config._run_id = resolved_run_id
     order = config.STAGE_ORDER
     if start not in order:
         logger.error("Unknown start stage %r (expected one of %s)", start, order)
         return 2
 
-    # Add manifest-driven resume
     from manhua_pipeline.io.workspace import load_manifest
 
     manifest = load_manifest(workspace, config)
@@ -596,11 +699,25 @@ def _run_all_from(
         return 2
     logger.info("run-all: starting from %r", start)
     meta = meta or {}
+
+    interactive = allow_prompt and can_prompt_now(batch=False)
+    use_subprocess_default = bool(getattr(config, "BATCH_SUBPROCESS", False))
+
     for name in order[start_idx:]:
         logger.info("=" * 60)
-        if getattr(config, "BATCH_SUBPROCESS", False):
+
+        prompt_stage = name in PROMPT_CAPABLE_STAGES
+        use_subprocess = use_subprocess_default and not (prompt_stage and interactive)
+
+        if use_subprocess:
             rc = _run_stage_subprocess(
-                name, workspace, input_path=input_path, meta=meta, fresh=fresh, skip_last=skip_last
+                name,
+                workspace,
+                input_path=input_path,
+                meta=meta,
+                fresh=fresh,
+                skip_last=skip_last,
+                run_id=resolved_run_id,
             )
             if rc != 0:
                 logger.error(
@@ -617,7 +734,8 @@ def _run_all_from(
             if current_stage == name:
                 stage_title = name.title() if name != "ocr" else "OCR"
                 logger.info(
-                    "Stopping run-all: manual handoff required at %s. Resume with: python pipeline.py run-all",
+                    "Stopping run-all: manual handoff required at %s. "
+                    "Resume with: python pipeline.py run-all",
                     stage_title,
                 )
                 return 0
@@ -633,13 +751,19 @@ def _run_all_from(
                     fresh=fresh,
                     skip_last=skip_last,
                 )
+            elif name == "render":
+                res = _load_stage("render")(workspace, config, run_id=resolved_run_id)
             else:
-                res = _load_stage(name)(workspace, config)
+                if name in PROMPT_CAPABLE_STAGES:
+                    res = _load_stage(name)(workspace, config, allow_prompt=interactive)
+                else:
+                    res = _load_stage(name)(workspace, config)
 
             if res is None:
                 stage_title = name.title() if name != "ocr" else "OCR"
                 logger.info(
-                    "Stopping run-all: manual handoff required at %s. Resume with: python pipeline.py run-all",
+                    "Stopping run-all: manual handoff required at %s. "
+                    "Resume with: python pipeline.py run-all",
                     stage_title,
                 )
                 return 0
@@ -648,6 +772,101 @@ def _run_all_from(
         from manhua_pipeline.stages import stage7_package
 
         stage7_package.run_package(workspace, config, formats)
+    return 0
+
+
+def resolve_overrides(chapter_dir: Path, config) -> int:  # noqa: C901
+    """Interactively drain pending manual override requests for a chapter."""
+    import json
+
+    from manhua_pipeline.interaction import can_prompt_now
+    from manhua_pipeline.manual_overrides import (
+        OverrideRequestStore,
+        prompt_for_override,
+        request_from_row,
+        save_locked_glossary_entry,
+        save_region_override,
+    )
+
+    if not can_prompt_now(batch=False):
+        logger.error(
+            "resolve-overrides needs an interactive terminal. "
+            "Run it directly in a shell (not piped / not under batch)."
+        )
+        return 2
+
+    store = OverrideRequestStore(chapter_dir)
+    pending = store.list_pending()
+    if not pending:
+        logger.info("No pending manual override requests for %s.", chapter_dir.name)
+        return 0
+
+    logger.info(
+        "Resolving %d pending override(s) for %s", len(pending), chapter_dir.name
+    )
+
+    overrides_path = chapter_dir / getattr(config, "OVERRIDES_NAME", "overrides.json")
+    glossary_path = chapter_dir.parent / getattr(
+        config, "GLOSSARY_NAME", "glossary.json"
+    )
+
+    def _load_json(path, default):
+        if not path.exists():
+            return default
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+
+    resolved_count = 0
+    for row in pending:
+        request = request_from_row(row)
+        decision = prompt_for_override(request)
+
+        if decision.action == "apply_region" and decision.translation:
+            overrides = _load_json(overrides_path, {})
+            if not isinstance(overrides, dict):
+                overrides = {}
+            save_region_override(
+                overrides, request, decision.translation, overrides_path
+            )
+            store.mark_resolved(
+                request.request_id, scope="region", translation=decision.translation
+            )
+            resolved_count += 1
+
+        elif decision.action == "apply_glossary" and decision.translation:
+            glossary = _load_json(glossary_path, {"version": "v1", "terms": []})
+            terms = glossary.get("terms", []) if isinstance(glossary, dict) else []
+            try:
+                save_locked_glossary_entry(
+                    terms, request, decision.translation, glossary_path
+                )
+                store.mark_resolved(
+                    request.request_id,
+                    scope="series_glossary",
+                    translation=decision.translation,
+                )
+                resolved_count += 1
+            except Exception as exc:
+                logger.warning(
+                    "Could not save locked glossary for %s: %s", request.region_id, exc
+                )
+
+        elif decision.action == "abort":
+            logger.info(
+                "Aborted at %s; remaining requests left pending.", request.region_id
+            )
+            break
+
+    logger.info(
+        "Resolved %d override(s). Re-run translate -> render to apply them:",
+        resolved_count,
+    )
+    logger.info(
+        "    python pipeline.py run-all --chapter %s --from-stage translate",
+        chapter_dir.name,
+    )
     return 0
 
 

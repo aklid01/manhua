@@ -13,10 +13,10 @@ OVERLAY_ENABLED = True
 READING_ORDER_BAND_FRACTION = 0.02
 
 # ---- Detector backend ----
-DETECTOR_BACKEND = "rtdetr"          # "yolov8" (fallback) | "rtdetr"
+DETECTOR_BACKEND = "rtdetr"  # "yolov8" (fallback) | "rtdetr"
 RTDETR_REPO = "ogkalu/comic-text-and-bubble-detector"
-RTDETR_CONF = 0.30                   # score threshold
-RTDETR_SKIP_TEXT_FREE = True         # don't OCR text_free (SFX/watermark/credits)
+RTDETR_CONF = 0.30  # score threshold
+RTDETR_SKIP_TEXT_FREE = True  # don't OCR text_free (SFX/watermark/credits)
 # Class ids from the model card. DON'T CHANGE THESE!
 RTDETR_CLASS_BUBBLE = 0
 RTDETR_CLASS_TEXT_BUBBLE = 1
@@ -37,12 +37,12 @@ OVERRIDES_NAME = "overrides.json"
 # ---- OCR ----
 OCR_CONFIDENCE_THRESHOLD = 0.7  # below this -> needs_correction
 OCR_LANG = "ch"
-OCR_USE_GPU = True # set to false if not using GPU
-DETECTOR_USE_GPU = True # set to false if not using GPU
+OCR_USE_GPU = True  # set to false if not using GPU
+DETECTOR_USE_GPU = True  # set to false if not using GPU
 OCR_MIN_TEXT_CONF = 0.30
-OCR_VERSION = "PP-OCRv6" # check https://github.com/PaddlePaddle/PaddleOCR/releases to see which version is latest
+OCR_VERSION = "PP-OCRv6"  # check https://github.com/PaddlePaddle/PaddleOCR/releases to see which version is latest
 EDGE_TOUCH_EPS = 3
-BATCH_SUBPROCESS = True # use subprocesses for batch flag
+BATCH_SUBPROCESS = True  # use subprocesses for batch flag
 
 # ---- OCR retry ----
 OCR_RETRY_ENABLED = True
@@ -144,8 +144,10 @@ OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
 
 # ---- Rendering ----
 FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
-FONT_MAX_PT = 21
-FONT_MIN_PT = 9
+FONT_MAX_PT = 40
+FONT_MAX_PAGE_FRAC = 0.045  # ceiling as a fraction of page WIDTH (~4.5%)
+FONT_MIN_PT = 12  # readable target floor (raised from 9)
+FONT_ABS_MIN_PT = 9  # hard clamp; never render below this silently
 FONT_STEP_PT = 1
 LINE_SPACING = 1.15
 TEXT_PADDING_PX = 8
@@ -153,6 +155,24 @@ EMPHASIS_UPPERCASE = True
 BG_FILL_DEFAULT = (255, 255, 255)
 FONT_MISSING_HARD_ERROR = True
 BUBBLE_WHITE_THRESHOLD = 220
+# --- Colored / non-white panel erasing ---
+BUBBLE_FILL_MODE = "dominant"      # "white" (legacy) | "dominant"
+BUBBLE_FILL_TOLERANCE = 42         # max per-channel-ish RGB distance to the fill color
+BUBBLE_FILL_MIN_COVERAGE = 0.15    # if dominant mask covers < this frac of crop, fall back
+TEXT_ERASE_PADDING_PX = 12
+TEXT_LAYOUT_PADDING_PX = 8
+TEXT_ERASE_DILATION_PX = 5
+TEXT_ERASE_PARENT_MARGIN_PX = 8
+TEXT_ERASE_USE_RECT_WHEN_SAFE = True
+TEXT_ERASE_MIN_RETENTION = 0.65
+RENDER_DEBUG_ARTIFACTS = False
+RENDER_DEBUG_REGION_IDS = []
+
+# ---- Rendering: layout-box expansion into bubble interior ----
+LAYOUT_EXPAND_ENABLED = True
+LAYOUT_INTERIOR_ERODE_PX = 10  # inset from bubble interior edge (tail/rim guard)
+LAYOUT_MAX_GROWTH_FACTOR = 3.0  # cap layout area growth vs original text box
+LAYOUT_MIN_ANCHOR_OVERLAP = 0.5  # expanded box must still cover >=50% of text box
 
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]

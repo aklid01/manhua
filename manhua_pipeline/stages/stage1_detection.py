@@ -44,18 +44,24 @@ def _get_rtdetr(config):
     _RTDETR_PROCESSOR = AutoImageProcessor.from_pretrained(repo)
     _RTDETR_MODEL = AutoModelForObjectDetection.from_pretrained(repo)
     _RTDETR_MODEL.eval()
-    dev = "cuda" if torch.cuda.is_available() and getattr(config, "DETECTOR_USE_GPU", False) else "cpu"
+    dev = (
+        "cuda"
+        if torch.cuda.is_available() and getattr(config, "DETECTOR_USE_GPU", False)
+        else "cpu"
+    )
     _RTDETR_MODEL.to(dev)
     logger.info("[%s] RT-DETR loaded (%s, cached)", _STAGE_NAME, repo)
     return _RTDETR_MODEL, _RTDETR_PROCESSOR
 
 
-def _mk_region(config, page_num, idx, rec, *, type_, parent_bubble, is_free_text) -> dict:
+def _mk_region(
+    config, page_num, idx, rec, *, type_, parent_bubble, is_free_text
+) -> dict:
     """Build a region dict matching the schema downstream expects."""
     x, y, w, h = rec["x"], rec["y"], rec["w"], rec["h"]
     eb = parent_bubble if parent_bubble else {"x": x, "y": y, "w": w, "h": h}
     style_hint = "narration" if type_ == config.TYPE_NARRATION else "round"
-    
+
     return {
         "region_id": config.REGION_ID_FORMAT.format(page=page_num, idx=idx),
         "page_number": page_num,
@@ -72,9 +78,14 @@ def _mk_region(config, page_num, idx, rec, *, type_, parent_bubble, is_free_text
         "render": not is_free_text,
         "is_free_text": is_free_text,
         "parent_bubble": (
-            {"x": parent_bubble["x"], "y": parent_bubble["y"],
-             "w": parent_bubble["w"], "h": parent_bubble["h"]}
-            if parent_bubble else None
+            {
+                "x": parent_bubble["x"],
+                "y": parent_bubble["y"],
+                "w": parent_bubble["w"],
+                "h": parent_bubble["h"],
+            }
+            if parent_bubble
+            else None
         ),
         "text_direction": "horizontal",
     }
@@ -87,16 +98,21 @@ def _draw_debug_overlay_rtdetr(
     with Image.open(img_path) as im:
         overlay = im.copy()
         draw = ImageDraw.Draw(overlay)
-        
+
         # 1. Draw parent bubble containers (green)
         for b in bubbles:
             bx, by, bw, bh = b["x"], b["y"], b["w"], b["h"]
             draw.rectangle([bx, by, bx + bw, by + bh], outline=(0, 255, 0), width=2)
             draw.text((bx + 5, by + 5), f"bubble ({b['conf']:.2f})", fill=(0, 255, 0))
-            
+
         # 2. Draw sorted detected regions (speech/narration)
         for box in sorted_boxes:
-            bx, by, bw, bh = box["bbox"]["x"], box["bbox"]["y"], box["bbox"]["w"], box["bbox"]["h"]
+            bx, by, bw, bh = (
+                box["bbox"]["x"],
+                box["bbox"]["y"],
+                box["bbox"]["w"],
+                box["bbox"]["h"],
+            )
             if box["type"] == "speech_bubble":
                 color = (255, 0, 0)  # Red for speech
                 label = f"{box['region_id']} ({box['confidence']:.2f})"
@@ -108,9 +124,13 @@ def _draw_debug_overlay_rtdetr(
             else:
                 color = (0, 0, 255)  # Blue for narration/SFX
                 label = f"{box['region_id']} (SFX, {box['confidence']:.2f})"
-            
+
             draw.rectangle([bx, by, bx + bw, by + bh], outline=color, width=3)
-            draw.text((bx + 5, by + 18 if box["type"] == "speech_bubble" else by + 5), label, fill=color)
+            draw.text(
+                (bx + 5, by + 18 if box["type"] == "speech_bubble" else by + 5),
+                label,
+                fill=color,
+            )
 
         dest_overlay = overlays_dir / f"{page_num:03d}_overlay.png"
         overlay.save(dest_overlay)
@@ -144,9 +164,15 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
     bubbles, raw_boxes = [], []
     for score, label, box in zip(det["scores"], det["labels"], det["boxes"]):
         x0, y0, x1, y1 = [int(v) for v in box.cpu().tolist()]
-        rec = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "conf": float(score.item())}
+        rec = {
+            "x": x0,
+            "y": y0,
+            "w": x1 - x0,
+            "h": y1 - y0,
+            "conf": float(score.item()),
+        }
         cid = int(label.item())
-        
+
         if cid == C_BUB:
             bubbles.append(rec)
         elif cid == C_TXT:
@@ -177,10 +203,17 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
     regions = []
     for idx, box in enumerate(sorted_boxes, start=1):
         parent = _parent_bubble(box) if box["type"] == config.TYPE_SPEECH else None
-        regions.append(_mk_region(
-            config, page_num, idx, box, type_=box["type"],
-            parent_bubble=parent, is_free_text=box["is_free_text"]
-        ))
+        regions.append(
+            _mk_region(
+                config,
+                page_num,
+                idx,
+                box,
+                type_=box["type"],
+                parent_bubble=parent,
+                is_free_text=box["is_free_text"],
+            )
+        )
 
     if getattr(config, "OVERLAY_ENABLED", True):
         _draw_debug_overlay_rtdetr(img_path, regions, bubbles, overlays_dir, page_num)
@@ -416,7 +449,8 @@ def _pages_link(a, b, det_by_page, config) -> bool:
     bottom = [
         x
         for x in det_by_page.get(a["page_number"], [])
-        if x.get("type") == config.TYPE_SPEECH and _box_touches_bottom(_stitch_box(x), ha, eps)
+        if x.get("type") == config.TYPE_SPEECH
+        and _box_touches_bottom(_stitch_box(x), ha, eps)
     ]
     top = [
         x
@@ -486,7 +520,8 @@ def _link_has_text(ws, page_a, page_b, det_by_page, config, ocr_engine) -> bool:
     bottom = [
         x
         for x in det_by_page.get(page_a["page_number"], [])
-        if x.get("type") == config.TYPE_SPEECH and _box_touches_bottom(_stitch_box(x), ha, eps)
+        if x.get("type") == config.TYPE_SPEECH
+        and _box_touches_bottom(_stitch_box(x), ha, eps)
     ]
     top = [
         x
@@ -538,7 +573,9 @@ def _apply_stitching(
         by_num = {p["page_number"]: p for p in pages_meta}
         for chain in chains:
             ok = all(
-                _link_has_text(ws, by_num[na], by_num[nb], per_page_regions, config, ocr_engine)
+                _link_has_text(
+                    ws, by_num[na], by_num[nb], per_page_regions, config, ocr_engine
+                )
                 for na, nb in zip(chain, chain[1:])
             )
             if ok:
@@ -563,16 +600,22 @@ def _apply_stitching(
         seq += 1
         if n in head_of:
             chain = head_of[n]
-            others = [next(x for x in pages_meta if x["page_number"] == m) for m in chain[1:]]
+            others = [
+                next(x for x in pages_meta if x["page_number"] == m) for m in chain[1:]
+            ]
             W, H, seam = _merge_page_chain(ws, p, others, config)
             merged_page = dict(p)
             merged_page.update({"width": W, "height": H, "global_y_offset": seam})
             merged_page["page_number"] = seq
             backend = getattr(config, "DETECTOR_BACKEND", "yolov8")
             if backend == "rtdetr":
-                regions = _detect_page_regions_rtdetr(merged_page, config, ws, overlays_dir)
+                regions = _detect_page_regions_rtdetr(
+                    merged_page, config, ws, overlays_dir
+                )
             else:
-                regions = _detect_page_regions(merged_page, model, config, ws, overlays_dir)
+                regions = _detect_page_regions(
+                    merged_page, model, config, ws, overlays_dir
+                )
             logger.info("[%s] Stitched chain %s -> merged page.", _STAGE_NAME, chain)
         else:
             merged_page = dict(p)
@@ -604,6 +647,10 @@ def run_detection(workspace: str, config) -> Path:
         ws.name,
     )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
+    from manhua_pipeline.events import STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.io.event_emitter import emit_stage_event
+
+    emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
 
     manifest = load_manifest(workspace, config)
     if not manifest:
@@ -618,7 +665,13 @@ def run_detection(workspace: str, config) -> Path:
 
     # 2. Load model once (lazy-load via ultralytics YOLO)
     backend = getattr(config, "DETECTOR_BACKEND", "yolov8")
-    logger.info("[%d/%d %s] Detector backend: %s", _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, backend)
+    logger.info(
+        "[%d/%d %s] Detector backend: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        backend,
+    )
 
     model = None
     if backend == "yolov8":
@@ -657,9 +710,13 @@ def run_detection(workspace: str, config) -> Path:
 
         try:
             if backend == "rtdetr":
-                page_regions = _detect_page_regions_rtdetr(page, config, ws, overlays_dir)
+                page_regions = _detect_page_regions_rtdetr(
+                    page, config, ws, overlays_dir
+                )
             else:
-                page_regions = _detect_page_regions(page, model, config, ws, overlays_dir)
+                page_regions = _detect_page_regions(
+                    page, model, config, ws, overlays_dir
+                )
             per_page_regions[page_num] = page_regions
             pages_processed += 1
             if getattr(config, "OVERLAY_ENABLED", True):
@@ -696,7 +753,9 @@ def run_detection(workspace: str, config) -> Path:
         "chapter_id": manifest.get("chapter_id", "unknown_chapter"),
         "stage": "detection",
         "generated_at": now,
-        "model": getattr(config, "RTDETR_REPO", "ogkalu/comic-text-and-bubble-detector") if backend == "rtdetr" else config.DETECTION_MODEL,
+        "model": getattr(config, "RTDETR_REPO", "ogkalu/comic-text-and-bubble-detector")
+        if backend == "rtdetr"
+        else config.DETECTION_MODEL,
         "regions": regions,
     }
     detection_json_path = detect_dir / "detection.json"
@@ -728,5 +787,13 @@ def run_detection(workspace: str, config) -> Path:
         _STAGE_NAME,
         f"done: {total_pages} pages ({pages_processed} processed), {len(regions)} regions, "
         f"{overlays_written} overlays, {warnings} warnings -> {detection_json_path} (elapsed {elapsed:.1f}s)",
+    )
+    emit_stage_event(
+        ws,
+        config,
+        _STAGE_NAME.lower(),
+        STAGE_COMPLETED,
+        logger=logger,
+        metadata={"total_regions": len(regions), "pages_processed": pages_processed},
     )
     return detection_json_path

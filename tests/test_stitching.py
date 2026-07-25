@@ -102,4 +102,3 @@ def test_find_pair_rtdetr_parent_bubble_edge_touch():
     det = {1: [box_a], 2: [box_b]}
     pairs = s1._find_split_pairs(det, _pages(1, 2, h=600), config)
     assert len(pairs) == 1 and pairs[0][0] == 1 and pairs[0][1] == 2
-

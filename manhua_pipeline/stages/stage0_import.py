@@ -84,6 +84,10 @@ def run_import(
     log_stage(
         logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, f"starting - source: {src}"
     )
+    from manhua_pipeline.events import STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.io.event_emitter import emit_stage_event
+
+    emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
 
     if not src.exists():
         raise FileNotFoundError(f"Input not found: {src}")
@@ -108,7 +112,11 @@ def run_import(
         raise ValueError(f"Unsupported input: {src}")
 
     if skip_last and skip_last > 0:
-        usable = [p for p in manifest.get("pages", []) if not p.get("skip") and p.get("filename")]
+        usable = [
+            p
+            for p in manifest.get("pages", [])
+            if not p.get("skip") and p.get("filename")
+        ]
         for p in usable[-skip_last:]:
             p["skip"] = True
             p["skip_reason"] = "trailing_skip"
@@ -129,6 +137,14 @@ def run_import(
         _STAGE_NAME,
         f"done: {manifest['total_pages']} pages, {manifest['warning_count']} warnings, "
         f"format={manifest['input_format']} (elapsed {elapsed:.1f}s) -> {out}",
+    )
+    emit_stage_event(
+        ws,
+        config,
+        _STAGE_NAME.lower(),
+        STAGE_COMPLETED,
+        logger=logger,
+        metadata={"total_pages": manifest["total_pages"]},
     )
     return out
 

@@ -333,3 +333,205 @@ def test_text_color_for_bg():
     assert stage5_render._text_color_for_bg((0, 0, 0)) == (255, 255, 255)
     assert stage5_render._text_color_for_bg((20, 20, 20)) == (255, 255, 255)
 
+
+def test_dominant_fill_returns_pure_white_for_white_bubble():
+    from PIL import Image
+    from manhua_pipeline.stages.stage5_render import _dominant_fill_color, Box
+    crop = Image.new("RGB", (200, 120), (255, 255, 255))
+    assert _dominant_fill_color(crop, Box(40, 40, 60, 30), object()) == (255, 255, 255)
+
+
+def test_dominant_fill_keeps_gold():
+    from PIL import Image
+    from manhua_pipeline.stages.stage5_render import _dominant_fill_color, Box
+    crop = Image.new("RGB", (200, 120), (255, 200, 60))
+    r, g, b = _dominant_fill_color(crop, Box(40, 40, 60, 30), object())
+    assert r > 240 and 180 < g < 220 and b < 90
+
+
+def test_expansion_does_not_overlap_sibling():
+    from manhua_pipeline.stages.stage5_render import (
+        Box, grow_layout_box, intersect_boxes,
+    )
+    class Cfg:
+        LAYOUT_EXPAND_ENABLED = True
+        LAYOUT_MAX_GROWTH_FACTOR = 3.0
+        LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
+        TEXT_LAYOUT_PADDING_PX = 8
+    text_box = Box(600, 600, 120, 60)                 # this region
+    sibling = Box(600, 720, 120, 60)                  # region just below
+    interior = Box(560, 560, 400, 400)                # generous shared interior
+    grown = grow_layout_box(text_box, interior, (2000, 2000), Cfg(),
+                            siblings=[sibling])
+    assert intersect_boxes(grown, sibling) is None     # must not invade sibling
+    assert intersect_boxes(grown, text_box) is not None  # still covers anchor
+
+
+def test_shared_parent_regions_do_not_stack(monkeypatch):
+    from PIL import Image, ImageDraw, ImageFont
+    from manhua_pipeline.stages.stage5_render import (
+        Box, _plan_and_erase_region, _draw_region_plan, _finalize_plan,
+    )
+    import config
+
+    monkeypatch.setattr(
+        "manhua_pipeline.stages.stage5_render._load_font",
+        lambda p, pt, cfg: ImageFont.load_default()
+    )
+
+    page_img = Image.new("RGB", (1000, 1000), (255, 255, 255))
+    draw = ImageDraw.Draw(page_img)
+
+    region = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "type": "speech_bubble",
+        "bbox": {"x": 600, "y": 600, "w": 100, "h": 50},
+        "read_region": {"x": 600, "y": 600, "w": 100, "h": 50},
+        "parent_bubble": {"x": 500, "y": 500, "w": 300, "h": 300},
+        "render": True,
+        "has_usable_text": True,
+        "final_text": "Hello World",
+    }
+
+    siblings = [Box(600, 700, 100, 50)]
+
+    plan = _plan_and_erase_region(region, page_img, draw, 1, config, sibling_text_boxes=siblings)
+    _draw_region_plan(plan, draw)
+    res, _, _, _ = _finalize_plan(
+        plan, emitter=None, run_id="test", chapter="ch", render_dir=None, config=config,
+    )
+
+    layout = Box(**res["layout_box"])
+    from manhua_pipeline.stages.stage5_render import intersect_boxes
+    assert intersect_boxes(layout, siblings[0]) is None
+    assert layout.x == 608
+
+
+def test_single_region_bubble_still_expands():
+    from manhua_pipeline.stages.stage5_render import Box, grow_layout_box
+    class Cfg:
+        LAYOUT_EXPAND_ENABLED = True
+        LAYOUT_MAX_GROWTH_FACTOR = 3.0
+        LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
+        TEXT_LAYOUT_PADDING_PX = 8
+    text_box = Box(600, 600, 100, 50)
+    interior = Box(500, 500, 300, 300)
+    grown = grow_layout_box(text_box, interior, (1000, 1000), Cfg(), siblings=None)
+    assert grown.w * grown.h > text_box.w * text_box.h
+
+
+def _region_pb(rid, x, y, w, h, *, pb=None):
+    """Like _region() but with an optional parent_bubble tuple (px, py, pw, ph)."""
+    r = _region(rid, x, y, w, h)
+    if pb:
+        r["parent_bubble"] = {"x": pb[0], "y": pb[1], "w": pb[2], "h": pb[3]}
+    return r
+
+
+def test_two_overlapping_bubbles_neither_text_is_erased(tmp_path, monkeypatch):
+    """Stacked figure-8 pair: after two-pass render, BOTH bubbles keep full text."""
+    from PIL import ImageFont
+    from manhua_pipeline.stages import stage5_render
+    import config
+
+    monkeypatch.setattr(
+        stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
+    )
+
+    det = _det([
+        _region_pb("P001_R001", 50, 50, 100, 80, pb=(40, 40, 120, 110)),
+        _region_pb("P001_R002", 80, 100, 100, 80, pb=(70, 90, 120, 110)),
+    ])
+    ocr = {"results": [
+        {"region_id": "P001_R001", "has_usable_text": True},
+        {"region_id": "P001_R002", "has_usable_text": True},
+    ]}
+    para = {"results": [
+        {"region_id": "P001_R001", "final_text": "First bubble full text.",
+         "register": "neutral", "paraphrased": True},
+        {"region_id": "P001_R002", "final_text": "Second bubble full text.",
+         "register": "neutral", "paraphrased": True},
+    ]}
+    _setup(ws := tmp_path / "workspace", det=det, ocr=ocr, para=para)
+    stage5_render.run_render(str(ws), config)
+
+    render = json.loads((ws / "stage5_render" / "render.json").read_text())
+    by_id = {r["region_id"]: r for r in render["results"]}
+    assert by_id["P001_R001"]["rendered"] and by_id["P001_R002"]["rendered"]
+    assert by_id["P001_R001"]["overflow"] is False
+    assert by_id["P001_R002"]["overflow"] is False
+
+
+def test_erase_all_happens_before_any_draw(tmp_path, monkeypatch):
+    """Instrument: every erase call must precede every draw call on a page."""
+    from PIL import ImageFont
+    from manhua_pipeline.stages import stage5_render
+    import config
+
+    monkeypatch.setattr(
+        stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
+    )
+
+    events = []
+    real_erase = stage5_render.erase_original_text
+
+    def spy_erase(**kw):
+        events.append("erase")
+        return real_erase(**kw)
+
+    real_draw = stage5_render._draw_region_plan
+
+    def spy_draw(plan, draw, render_dir=None):
+        if plan.rendered:
+            events.append("draw")
+        return real_draw(plan, draw, render_dir=render_dir)
+
+    monkeypatch.setattr(stage5_render, "erase_original_text", spy_erase)
+    monkeypatch.setattr(stage5_render, "_draw_region_plan", spy_draw)
+
+    det = _det([
+        _region_pb("P001_R001", 50, 50, 80, 60),
+        _region_pb("P001_R002", 200, 300, 80, 60),
+    ])
+    ocr = {"results": [
+        {"region_id": "P001_R001", "has_usable_text": True},
+        {"region_id": "P001_R002", "has_usable_text": True},
+    ]}
+    para = {"results": [
+        {"region_id": "P001_R001", "final_text": "Alpha.", "register": "neutral", "paraphrased": True},
+        {"region_id": "P001_R002", "final_text": "Beta.", "register": "neutral", "paraphrased": True},
+    ]}
+    _setup(ws := tmp_path / "workspace", det=det, ocr=ocr, para=para)
+    stage5_render.run_render(str(ws), config)
+
+    assert len(events) >= 2
+    # All erases must precede all draws
+    first_draw = next((i for i, e in enumerate(events) if e == "draw"), len(events))
+    last_erase = max((i for i, e in enumerate(events) if e == "erase"), default=-1)
+    assert last_erase < first_draw, f"Erase/draw ordering violated: {events}"
+
+
+def test_single_bubble_two_pass_unchanged(tmp_path, monkeypatch):
+    """A lone bubble renders correctly under two-pass (no regression)."""
+    from PIL import ImageFont
+    from manhua_pipeline.stages import stage5_render
+    import config
+
+    monkeypatch.setattr(
+        stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
+    )
+
+    det = _det([_region("P001_R001", 50, 50, 100, 50)])
+    ocr = {"results": [{"region_id": "P001_R001", "has_usable_text": True}]}
+    para = {"results": [{
+        "region_id": "P001_R001", "final_text": "Hello.",
+        "register": "neutral", "paraphrased": True,
+    }]}
+    _setup(ws := tmp_path / "workspace", det=det, ocr=ocr, para=para)
+    stage5_render.run_render(str(ws), config)
+
+    render = json.loads((ws / "stage5_render" / "render.json").read_text())
+    r = render["results"][0]
+    assert r["rendered"] is True
+    assert r["overflow"] is False
