@@ -22,13 +22,19 @@ with this program. If not, see <https://www.gnu.org/licenses/>.
 import argparse
 import os
 import sys
+import time
+import traceback
+import warnings
+from datetime import datetime, timezone
+from pathlib import Path
+
+import config
+from manhua_pipeline.logging_setup import get_logger, setup_logging
+from manhua_pipeline.run_context import create_run_context
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-import time
-import warnings
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -45,13 +51,6 @@ try:
     disable_progress_bars()
 except Exception:
     pass
-import traceback
-from datetime import datetime, timezone
-from pathlib import Path
-
-import config
-from manhua_pipeline.logging_setup import get_logger, setup_logging
-from manhua_pipeline.run_context import create_run_context
 
 logger = get_logger(__name__)
 
@@ -186,7 +185,11 @@ def run_batch(
             _append_batch_log(batch_log, f"SKIP exists     | {chapter}")
             continue
 
-        from manhua_pipeline.events import CHAPTER_COMPLETED, CHAPTER_FAILED, CHAPTER_STARTED
+        from manhua_pipeline.events import (
+            CHAPTER_COMPLETED,
+            CHAPTER_FAILED,
+            CHAPTER_STARTED,
+        )
         from manhua_pipeline.io.event_emitter import emit_stage_event
 
         emit_stage_event(chapter_dir, config, "batch", CHAPTER_STARTED, logger=logger, chapter=chapter, run_id=resolved_run_id)
@@ -604,7 +607,7 @@ def _run_stage_subprocess(
     return subprocess.run(cmd, env=env).returncode
 
 
-def _run_all_from(
+def _run_all_from(  # noqa: C901
     workspace: str,
     config,
     *,
@@ -711,7 +714,7 @@ def _run_all_from(
     return 0
 
 
-def resolve_overrides(chapter_dir: Path, config) -> int:
+def resolve_overrides(chapter_dir: Path, config) -> int:  # noqa: C901
     """Interactively drain pending manual override requests for a chapter."""
     import json
 

@@ -2,23 +2,18 @@
 
 import json
 import logging
-import sys
-from pathlib import Path
 
 import pytest
 
 from manhua_pipeline.events import (
-    BACKEND_JSON_INVALID,
-    BACKEND_RESPONSE_BLANK,
     MANUAL_OVERRIDE_REQUIRED,
     TRANSLATION_VALUE_EMPTY,
     PipelineEvent,
 )
 from manhua_pipeline.io.event_emitter import EventEmitter
-from manhua_pipeline.io.parse_result import JsonParseResult, parse_json_result
+from manhua_pipeline.io.parse_result import parse_json_result
 from manhua_pipeline.logging_setup import setup_logging
-from manhua_pipeline.run_context import RunContext, create_run_context
-
+from manhua_pipeline.run_context import create_run_context
 
 # ---------------------------------------------------------------------------
 # RunContext
@@ -289,9 +284,11 @@ def test_blank_parse_result_is_frozen():
 
 def test_cli_stage_events_never_use_unknown_run_id(tmp_path):
     import json
+
+    from PIL import Image
+
     import config
     import pipeline
-    from PIL import Image
 
     ws = (tmp_path / "workspace").resolve()
     ws.mkdir(parents=True, exist_ok=True)

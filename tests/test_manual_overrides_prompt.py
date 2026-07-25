@@ -1,9 +1,6 @@
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 import config
 from manhua_pipeline.interaction import can_prompt_now
@@ -11,10 +8,8 @@ from manhua_pipeline.manual_overrides import (
     OverrideRequestStore,
     build_request_id,
     make_override_request,
-    request_from_row,
 )
 from pipeline import _run_all_from, resolve_overrides
-
 
 # --- interaction tests ---
 

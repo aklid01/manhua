@@ -2,7 +2,6 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-
 ParseStatus = Literal["success", "blank", "invalid_json", "non_object"]
 
 

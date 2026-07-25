@@ -43,7 +43,10 @@ def test_pipeline_main_stage_execution(temp_workspace):
             exit_code = main([stage_name, "--workspace", str(temp_workspace)])
             assert exit_code == 0 or exit_code is None
             mock_load.assert_called_once_with(stage_name)
-            mock_fn.assert_called_once_with(str(temp_workspace), config)
+            if stage_name in ["translate", "paraphrase"]:
+                mock_fn.assert_called_once_with(str(temp_workspace), config, allow_prompt=False)
+            else:
+                mock_fn.assert_called_once_with(str(temp_workspace), config)
 
 
 def test_pipeline_main_import_calls_run_import(temp_workspace):

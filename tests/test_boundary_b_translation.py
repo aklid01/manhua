@@ -8,7 +8,6 @@ import json
 import pytest
 
 import config
-
 from manhua_pipeline.interaction import InteractionMode, RuntimePolicy
 from manhua_pipeline.translation_validation import (
     TranslationIssue,
@@ -17,7 +16,6 @@ from manhua_pipeline.translation_validation import (
     normalize_punct,
     validate_expected_regions,
 )
-
 
 # ---------------------------------------------------------------------------
 # validate_expected_regions
@@ -358,7 +356,7 @@ def test_override_request_store_appends(tmp_path):
         model="qwen2.5:3b",
         attempts=2,
     )
-    store.append_pending(request)
+    store.upsert_pending(request)
     pending = store.list_pending()
     assert len(pending) == 1
     assert pending[0]["region_id"] == "P001_R001"
@@ -373,7 +371,7 @@ def test_override_request_store_idempotent_list(tmp_path):
 
     store = OverrideRequestStore(tmp_path)
     for _ in range(3):
-        store.append_pending(
+        store.upsert_pending(
             make_override_request(
                 run_id="run-1",
                 chapter="ch01",
@@ -385,8 +383,8 @@ def test_override_request_store_idempotent_list(tmp_path):
                 attempts=1,
             )
         )
-    # All 3 appended (duplicates allowed in JSONL - consumer deduplicates by request_id)
-    assert len(store.list_pending()) == 3
+    # Deduplicates on upsert -> only 1 pending
+    assert len(store.list_pending()) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +424,10 @@ def test_load_overrides_accepts_legacy_string(tmp_path):
 
 def test_load_overrides_accepts_manual_record(tmp_path):
     from manhua_pipeline.io.overrides import load_overrides
-    from manhua_pipeline.manual_overrides import make_override_request, save_region_override
+    from manhua_pipeline.manual_overrides import (
+        make_override_request,
+        save_region_override,
+    )
 
     req = make_override_request(
         run_id="run-1",

@@ -13,12 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from manhua_pipeline.interaction import InteractionMode, RuntimePolicy, default_runtime_policy
 from manhua_pipeline.io.glossary_series import load_series_glossary
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_stage
 from manhua_pipeline.manual_overrides import (
-    ManualOverrideDecision,
     OverrideRequestStore,
     make_override_request,
     prompt_for_override,
@@ -27,9 +25,7 @@ from manhua_pipeline.manual_overrides import (
 )
 from manhua_pipeline.stages import _backends as be
 from manhua_pipeline.translation_validation import (
-    TranslationIssue,
     is_meaningful_region,
-    normalize_newlines,
     normalize_punct,
     validate_expected_regions,
 )
@@ -667,7 +663,7 @@ def _load_raw_overrides(path) -> dict:
         return {}
 
 
-def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Path | None:
+def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Path | None:  # noqa: C901
     """Run the Translation stage.
 
     Returns the path to translation.json on success, or None if awaiting
@@ -684,7 +680,7 @@ def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Pa
         ws.name,
     )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
-    from manhua_pipeline.events import STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.events import STAGE_STARTED
     from manhua_pipeline.io.event_emitter import emit_stage_event
 
     emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)

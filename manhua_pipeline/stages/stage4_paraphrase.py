@@ -502,7 +502,7 @@ def run_paraphrase(workspace: str, config, *, allow_prompt: bool = False) -> Pat
         ws.name,
     )
     log_stage(logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, "starting")
-    from manhua_pipeline.events import STAGE_COMPLETED, STAGE_STARTED
+    from manhua_pipeline.events import STAGE_STARTED
     from manhua_pipeline.io.event_emitter import emit_stage_event
 
     emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)

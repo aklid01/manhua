@@ -271,13 +271,13 @@ class PipelineGUI:
         btn.state(["!disabled"])
         self._sys(f"{STAGE_LABELS.get(name, name)} needs a manual/MCP handoff:", "warn")
         self._sys(f"   1. Prompt written to:  {self.chapter}/{prompt_rel}", "warn")
-        self._sys(f"   2. Get the result - paste it to your chatbot, or run your MCP tool.", "warn")
+        self._sys("   2. Get the result - paste it to your chatbot, or run your MCP tool.", "warn")
         self._sys(f"   3. Save the reply as:  {self.chapter}/{resp_rel}", "warn")
         self._sys(f"   4. Click 'Resume ▶ {STAGE_LABELS[name]}' to ingest and continue.", "warn")
 
     def _set_output_dir(self, path: str):
         self._run_cmd([sys.executable, str(PIPELINE), "--set-output-dir", path],
-                      on_done=lambda rc: self._sys(f"Series folder saved.", "ok") if rc == 0 else None,
+                      on_done=lambda rc: self._sys("Series folder saved.", "ok") if rc == 0 else None,
                       quiet=True)
 
     # ---------------- subprocess plumbing ----------------

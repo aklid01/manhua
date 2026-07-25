@@ -55,7 +55,7 @@ def _mk_region(config, page_num, idx, rec, *, type_, parent_bubble, is_free_text
     x, y, w, h = rec["x"], rec["y"], rec["w"], rec["h"]
     eb = parent_bubble if parent_bubble else {"x": x, "y": y, "w": w, "h": h}
     style_hint = "narration" if type_ == config.TYPE_NARRATION else "round"
-    
+
     return {
         "region_id": config.REGION_ID_FORMAT.format(page=page_num, idx=idx),
         "page_number": page_num,
@@ -87,13 +87,13 @@ def _draw_debug_overlay_rtdetr(
     with Image.open(img_path) as im:
         overlay = im.copy()
         draw = ImageDraw.Draw(overlay)
-        
+
         # 1. Draw parent bubble containers (green)
         for b in bubbles:
             bx, by, bw, bh = b["x"], b["y"], b["w"], b["h"]
             draw.rectangle([bx, by, bx + bw, by + bh], outline=(0, 255, 0), width=2)
             draw.text((bx + 5, by + 5), f"bubble ({b['conf']:.2f})", fill=(0, 255, 0))
-            
+
         # 2. Draw sorted detected regions (speech/narration)
         for box in sorted_boxes:
             bx, by, bw, bh = box["bbox"]["x"], box["bbox"]["y"], box["bbox"]["w"], box["bbox"]["h"]
@@ -108,7 +108,7 @@ def _draw_debug_overlay_rtdetr(
             else:
                 color = (0, 0, 255)  # Blue for narration/SFX
                 label = f"{box['region_id']} (SFX, {box['confidence']:.2f})"
-            
+
             draw.rectangle([bx, by, bx + bw, by + bh], outline=color, width=3)
             draw.text((bx + 5, by + 18 if box["type"] == "speech_bubble" else by + 5), label, fill=color)
 
@@ -146,7 +146,7 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
         x0, y0, x1, y1 = [int(v) for v in box.cpu().tolist()]
         rec = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "conf": float(score.item())}
         cid = int(label.item())
-        
+
         if cid == C_BUB:
             bubbles.append(rec)
         elif cid == C_TXT:

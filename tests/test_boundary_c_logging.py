@@ -17,11 +17,10 @@ from manhua_pipeline.events import (
     STAGE_COMPLETED,
     STAGE_STARTED,
 )
-from manhua_pipeline.io.event_emitter import EventEmitter, get_event_emitter
+from manhua_pipeline.io.event_emitter import get_event_emitter
 from manhua_pipeline.stages.stage0_import import run_import
 from manhua_pipeline.stages.stage6_qa import run_qa
 from manhua_pipeline.stages.stage7_package import run_package
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -208,6 +207,7 @@ def test_batch_emits_chapter_lifecycle_events(tmp_path):
     in_dir.mkdir()
 
     import zipfile
+
     from PIL import Image
 
     img_path = tmp_path / "001.jpg"
@@ -221,10 +221,9 @@ def test_batch_emits_chapter_lifecycle_events(tmp_path):
     series_dir.mkdir()
 
     # Run batch import only or mock run_all
-    from pipeline import run_batch
-
     # Patch _run_all_from to quickly complete chapter
     import pipeline
+    from pipeline import run_batch
 
     def mock_run_all(*args, **kwargs):
         ws = Path(args[0])

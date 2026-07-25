@@ -4,9 +4,9 @@ Validation never calls input(), writes files, or manipulates UI.
 All rejection reasons are preserved as typed fields.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
-import re
 
 ValidationStatus = Literal["accepted", "missing", "rejected"]
 

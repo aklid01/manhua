@@ -5,14 +5,11 @@ and run_id propagation as defined in stage5_render_original_text_survival_fix.md
 """
 
 import json
-from pathlib import Path
 
-import pytest
 from PIL import Image, ImageDraw
 
 import config
 from manhua_pipeline.events import RENDER_REGION_COMPLETED
-from manhua_pipeline.io.event_emitter import get_event_emitter
 from manhua_pipeline.stages.stage5_render import (
     Box,
     box_inside,
@@ -378,6 +375,7 @@ def test_low_overlap_never_falls_back_to_unclipped_rectangle():
 
 def test_component_near_text_wins_over_larger_background_component():
     from PIL import Image
+
     from manhua_pipeline.stages.stage5_render import _get_bubble_mask
 
     img = Image.new("RGB", (200, 200), (50, 50, 50))
