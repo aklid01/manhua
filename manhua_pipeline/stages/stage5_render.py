@@ -362,6 +362,21 @@ def erase_original_text(
     }
 
 
+def effective_max_pt(config, page_width: int | None) -> int:
+    """Ceiling for font sizing, scaled to page WIDTH.
+
+    Static FONT_MAX_PT is a floor-of-the-max so narrow pages keep a readable
+    size. Width is used (not height) because stitched canvases and webtoon
+    strips are tall but keep a normal width, so width is the stable reading
+    unit across merged pages and strip formats.
+    """
+    static_max = int(getattr(config, "FONT_MAX_PT", 40))
+    frac = float(getattr(config, "FONT_MAX_PAGE_FRAC", 0.0) or 0.0)
+    if page_width and frac > 0:
+        return max(static_max, int(page_width * frac))
+    return static_max
+
+
 def fit_and_place_text(
     *,
     draw: ImageDraw.ImageDraw,
@@ -369,8 +384,9 @@ def fit_and_place_text(
     font_path: str,
     layout_box: Box,
     config,
+    page_width: int | None = None,
 ) -> tuple[ImageFont.ImageFont, list[str], int, bool, list[dict]]:
-    max_pt = getattr(config, "FONT_MAX_PT", 21)
+    resolved_max_pt = effective_max_pt(config, page_width)
     min_pt = getattr(config, "FONT_MIN_PT", 9)
     step_pt = getattr(config, "FONT_STEP_PT", 1)
     line_spacing = getattr(config, "LINE_SPACING", 1.15)
@@ -380,7 +396,7 @@ def fit_and_place_text(
         bbox_w=layout_box.w,
         bbox_h=layout_box.h,
         font_path=font_path,
-        max_pt=max_pt,
+        max_pt=resolved_max_pt,
         min_pt=min_pt,
         step_pt=step_pt,
         line_spacing=line_spacing,
@@ -1030,6 +1046,7 @@ def _render_region(
         font_path=font_path,
         layout_box=layout_box,
         config=config,
+        page_width=page_img.width,
     )
 
     for placement in placements:
@@ -1051,6 +1068,7 @@ def _render_region(
         )
 
     readable_min = int(getattr(config, "FONT_MIN_PT", 12))
+    eff_max_pt = effective_max_pt(config, page_img.width)
     total_overflow = 1 if overflow else 0
 
     if font_size < readable_min or overflow:
@@ -1088,6 +1106,9 @@ def _render_region(
                         "font_size_pt": font_size,
                         "readable_min_pt": readable_min,
                         "abs_min_pt": int(getattr(config, "FONT_ABS_MIN_PT", 9)),
+                        "effective_max_pt": eff_max_pt,
+                        "page_width": page_img.width,
+                        "page_height": page_img.height,
                         "overflow": overflow,
                         "layout_box": layout_box.as_dict(),
                         "text_box": text_box.as_dict(),
@@ -1127,6 +1148,9 @@ def _render_region(
         "rendered": True,
         "action": "drew",
         "font_size_pt": font_size,
+        "effective_max_pt": eff_max_pt,
+        "page_width": page_img.width,
+        "page_height": page_img.height,
         "lines": len(lines),
         "readable_min_pt": readable_min,
         "abs_min_pt": int(getattr(config, "FONT_ABS_MIN_PT", 9)),

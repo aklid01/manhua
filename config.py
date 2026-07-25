@@ -144,7 +144,8 @@ OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
 
 # ---- Rendering ----
 FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
-FONT_MAX_PT = 21
+FONT_MAX_PT = 40
+FONT_MAX_PAGE_FRAC = 0.045   # ceiling as a fraction of page WIDTH (~4.5%)
 FONT_MIN_PT = 12          # readable target floor (raised from 9)
 FONT_ABS_MIN_PT = 9       # hard clamp; never render below this silently
 FONT_STEP_PT = 1

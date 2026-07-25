@@ -9,6 +9,8 @@ from manhua_pipeline.stages.stage5_render import (
     _fit_text,
     _render_region,
     bubble_interior_box,
+    effective_max_pt,
+    fit_and_place_text,
     intersect_boxes,
     select_render_geometry,
 )
@@ -243,3 +245,164 @@ def test_p028_r001_layout_larger_than_text_box_but_anchored():
     # layout_box should still overlap text_box
     overlap = intersect_boxes(layout_box, text_box)
     assert overlap is not None
+
+
+def test_effective_max_pt_scales_with_width():
+    class Cfg:
+        FONT_MAX_PT = 40
+        FONT_MAX_PAGE_FRAC = 0.045
+
+    assert effective_max_pt(Cfg(), 700) == 40  # 31 -> static floor wins
+    assert effective_max_pt(Cfg(), 1280) == 57  # scales up
+
+
+def test_effective_max_pt_disabled_when_frac_zero():
+    class Cfg:
+        FONT_MAX_PT = 40
+        FONT_MAX_PAGE_FRAC = 0.0
+
+    assert effective_max_pt(Cfg(), 5000) == 40
+
+
+def test_effective_max_pt_none_width_uses_static():
+    class Cfg:
+        FONT_MAX_PT = 40
+        FONT_MAX_PAGE_FRAC = 0.045
+
+    assert effective_max_pt(Cfg(), None) == 40
+
+
+def test_merged_canvas_ceiling_matches_single_page():
+    class Cfg:
+        FONT_MAX_PT = 40
+        FONT_MAX_PAGE_FRAC = 0.045
+
+    single_w = 900
+    merged_w = 900  # width unchanged by vertical stitching
+    assert effective_max_pt(Cfg(), single_w) == effective_max_pt(Cfg(), merged_w)
+
+
+def test_strip_ceiling_uses_width_not_height():
+    class Cfg:
+        FONT_MAX_PT = 40
+        FONT_MAX_PAGE_FRAC = 0.045
+
+    # strip: 800 wide x 8000 tall -> ceiling based on 800, not 8000
+    assert effective_max_pt(Cfg(), 800) == 40
+
+
+def test_same_text_larger_on_wider_page():
+    class TestConfig:
+        FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
+        FONT_MAX_PT = 20
+        FONT_MAX_PAGE_FRAC = 0.045
+        FONT_MIN_PT = 12
+        FONT_ABS_MIN_PT = 9
+        FONT_STEP_PT = 1
+        LINE_SPACING = 1.15
+        TEXT_PADDING_PX = 8
+        FONT_MISSING_HARD_ERROR = True
+
+    cfg = TestConfig()
+    text = "Short text."
+    layout = Box(0, 0, 500, 300)
+    img = Image.new("RGB", (1600, 1000), "white")
+    draw = ImageDraw.Draw(img)
+
+    _, _, pt_narrow, _, _ = fit_and_place_text(
+        draw=draw,
+        final_text=text,
+        font_path=cfg.FONT_PATH,
+        layout_box=layout,
+        config=cfg,
+        page_width=700,
+    )
+    _, _, pt_wide, _, _ = fit_and_place_text(
+        draw=draw,
+        final_text=text,
+        font_path=cfg.FONT_PATH,
+        layout_box=layout,
+        config=cfg,
+        page_width=1600,
+    )
+    assert pt_wide > pt_narrow
+
+
+def test_fit_and_place_text_without_page_width_matches_static():
+    class TestConfig:
+        FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
+        FONT_MAX_PT = 20
+        FONT_MAX_PAGE_FRAC = 0.045
+        FONT_MIN_PT = 12
+        FONT_ABS_MIN_PT = 9
+        FONT_STEP_PT = 1
+        LINE_SPACING = 1.15
+        TEXT_PADDING_PX = 8
+        FONT_MISSING_HARD_ERROR = True
+
+    cfg = TestConfig()
+    img = Image.new("RGB", (500, 500), "white")
+    draw = ImageDraw.Draw(img)
+
+    _, _, pt, _, _ = fit_and_place_text(
+        draw=draw,
+        final_text="Hi there",
+        font_path=cfg.FONT_PATH,
+        layout_box=Box(0, 0, 400, 300),
+        config=cfg,
+    )
+    assert pt <= cfg.FONT_MAX_PT
+
+
+def test_render_json_records_effective_max_pt_and_width(tmp_path):
+    class TestConfig:
+        FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
+        FONT_MAX_PT = 20
+        FONT_MAX_PAGE_FRAC = 0.045
+        FONT_MIN_PT = 12
+        FONT_ABS_MIN_PT = 9
+        FONT_STEP_PT = 1
+        LINE_SPACING = 1.15
+        TEXT_PADDING_PX = 8
+        LAYOUT_EXPAND_ENABLED = True
+        LAYOUT_INTERIOR_ERODE_PX = 10
+        LAYOUT_MAX_GROWTH_FACTOR = 3.0
+        LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
+        TEXT_LAYOUT_PADDING_PX = 8
+        FONT_MISSING_HARD_ERROR = True
+        TEXT_ERASE_PADDING_PX = 12
+        EMPHASIS_UPPERCASE = True
+
+    cfg = TestConfig()
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    render_dir = ws / "stage5_render"
+    render_dir.mkdir()
+
+    region = {
+        "region_id": "P001_R001",
+        "bbox": {"x": 10, "y": 10, "w": 100, "h": 50},
+        "read_region": {"x": 10, "y": 10, "w": 100, "h": 50},
+        "parent_bubble": {"x": 10, "y": 10, "w": 100, "h": 50},
+        "render": True,
+        "has_usable_text": True,
+        "final_text": "Hello world",
+    }
+
+    img = Image.new("RGB", (1280, 1600), "white")
+    draw = ImageDraw.Draw(img)
+
+    result_dict, _, _, _ = _render_region(
+        region,
+        img,
+        draw,
+        page_num=1,
+        config=cfg,
+        run_id="test_run",
+        chapter="ch1",
+        render_dir=render_dir,
+    )
+
+    assert result_dict["effective_max_pt"] == 57  # max(20, int(1280 * 0.045)) = 57
+    assert result_dict["page_width"] == 1280
+    assert result_dict["page_height"] == 1600
