@@ -2,7 +2,33 @@
 
 All notable changes to the Manhua Pipeline project will be documented in this file.
 
-## [Unreleased] - 2026-07-23
+## [Unreleased]
+
+## [0.5.0] - 2026-07-25
+
+### Added
+- **Stage 5 — Two-Pass Render (erase-all, then draw-all)**:
+  - Introduced `RenderPlan` dataclass to carry all per-region draw state computed during Pass 1.
+  - Added `_plan_and_erase_region()` (Pass 1): selects geometry, erases source text, computes font fit. Returns a `RenderPlan`. No drawing.
+  - Added `_draw_region_plan()` (Pass 2): draws stored placements only. No pixel destruction.
+  - Added `_finalize_plan()`: emits events and builds the `render.json` result row, called once after all draws.
+  - Rewrote `_render_single_page()` to loop erase-all → draw-all → finalize, guaranteeing no erase can clobber an already-drawn glyph regardless of bubble overlap or detection order.
+  - Retired `_render_region()` (now raises `NotImplementedError`).
+- **Stage 5 — Dominant Fill Color Panel Erase**:
+  - Added `_dominant_fill_color()`: samples a coarse grid over the bubble crop (excluding the text-glyph area) and returns the most common quantized color, averaged from actual pixels in the winning bucket. Near-pure white/black snapped to exact values.
+  - Added `BUBBLE_FILL_MODE = "dominant"` config key; falls back to white-threshold mode when unset.
+  - Added `_color_close_mask()` for Chebyshev-distance fill masking.
+- **Stage 5 — Sibling-Region Layout Clip**:
+  - Added `_shrink_box_away_from_siblings()`: pulls expanded layout boxes back from adjacent region text boxes so English text from different bubbles can never overlap.
+  - `grow_layout_box()` now accepts a `siblings` list and applies the clip after interior expansion.
+  - Shared-parent guard: when two regions share the same `parent_bubble`, interior expansion is suppressed for both to avoid cross-bubble layout drift.
+
+### Fixed
+- **Stacked bubble text clobbering** (known issue, now resolved): in figure-8 / stacked bubble pairs, a later region's erase step was painting white over an earlier region's already-drawn glyphs. The two-pass refactor eliminates this entirely - all erases complete before any draw, for any number of overlapping bubbles.
+- **Off-white bubble fill**: `_dominant_fill_color()` now averages actual pixels in the winning quantization bucket instead of using the bucket midpoint, and snaps results ≥ 248 to pure white. Standard white bubbles now erase byte-identically to the previous output.
+- **Case-insensitive `\n`/`\r\n` escape normalization**: `normalize_escaped_newlines()` now handles uppercase `\N`, `\R`, and `\R\N` escape sequences emitted by some LLMs.
+
+## [0.4.0] - 2026-07-23
 
 ### Added
 - **Human-directed Trailing Page Skip (`--skip-last N`)**:

@@ -333,7 +333,7 @@ your-series/
 - **Detection** defaults to RT-DETR (`ogkalu/comic-text-and-bubble-detector`) with YOLOv8 as fallback, skipping text-free regions (SFX/watermark/credits) during downstream OCR.
 - **OCR** retries low-confidence regions with escalating image preprocessing, keeping the best result - deterministic OCR only improves when the _input_ changes.
 - **Translation / Paraphrase** each pick a backend independently (`manual`, `mcp`, `ollama`) and enforce a locked glossary, flagging conflicts rather than silently rewriting. Single-character CJK noise/SFX is filtered from blocking chapter completion and glossary auto-seeding.
-- **Rendering** typesets each bubble with adaptive WCAG text coloring (white text on dark background balloons, black text on light backgrounds) and appends a randomly chosen **credits page** (outside the QA/manifest page count).
+- **Rendering** erases source text and typesets English in two passes per page (erase-all, then draw-all) so no erase can clobber an already-drawn glyph. Fill color is detected from the dominant bubble background (with white-snap for standard bubbles) and adaptive WCAG text coloring is applied. A randomly chosen **credits page** is appended outside the QA/manifest page count.
 - **Split-bubble stitching** (detection sub-step) merges a bubble sliced across two pages into one using container bubble geometry (RT-DETR) and a relaxed text probe for cut-off edge regions.
 
 ---
@@ -440,15 +440,6 @@ All tunables live in `config.py`. Highlights:
 
 Per-chapter **overrides** (`overrides.json`) let you hand-set any region's final text, and
 the series **glossary** (`glossary.json`) locks names/terms across every chapter.
-
----
-
-## Known Issues & Open Work
-
-- **Standalone Character Names (`qwen2.5:3b-instruct`)**:
-  - *Issue*: Small local models occasionally return empty string `""` for isolated 2-3 character CJK names (e.g. `季青临`).
-  - *Impact*: Critical - dropped names remove character identity context that cannot be inferred downstream.
-  - *Workaround*: Pre-seed character names in `glossary.json` or use `mcp` / larger model backends.
 
 ---
 
