@@ -9,7 +9,7 @@ import random
 import re
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
@@ -49,6 +49,54 @@ class Box:
 
     def as_dict(self) -> dict[str, int]:
         return {"x": self.x, "y": self.y, "w": self.w, "h": self.h}
+
+
+@dataclass
+class RenderPlan:
+    """Everything Pass 2 needs to DRAW a region, computed during Pass 1.
+
+    Pass 1 does all pixel-destructive work (erasing). Pass 2 only draws text,
+    so erases can never clobber already-drawn glyphs.
+    """
+    region_id: str
+    page_number: int
+    rendered: bool
+    action: str
+
+    placements: list[dict] = field(default_factory=list)
+    font: object | None = None
+    text_fill: tuple[int, int, int] = (0, 0, 0)
+
+    font_size_pt: int | None = None
+    lines: int = 0
+    overflow: bool = False
+    register: str = "neutral"
+    style_hint: str = "round"
+    glossary_conflict: bool = False
+    effective_max_pt: int | None = None
+    page_width: int = 0
+    page_height: int = 0
+    readable_min_pt: int | None = None
+    abs_min_pt: int | None = None
+    text_box: dict = field(default_factory=dict)
+    layout_box: dict = field(default_factory=dict)
+    erase_box: dict = field(default_factory=dict)
+    bubble_box: dict = field(default_factory=dict)
+    erase_strategy: str = ""
+    layout_expanded: bool = False
+    layout_growth_factor: float = 1.0
+    text_bg: tuple[int, int, int] = (255, 255, 255)
+
+    bubble_mask_bbox: list | None = None
+    bubble_mask_pixels: int = 0
+    bubble_mask_area: int = 0
+    bubble_mask_coverage: float = 0.0
+
+    debug_paths: dict = field(default_factory=dict)
+
+    emit_too_small: bool = False
+    emit_low_overlap: bool = False
+    low_overlap_retention: float = 0.0
 
 
 def box_from_dict(value: dict) -> Box:
@@ -1006,20 +1054,17 @@ def _fit_text(
     return font, lines, hard_floor, True
 
 
-def _render_region(
+def _plan_and_erase_region(
     region: dict,
     page_img: Image.Image,
     draw: ImageDraw.ImageDraw,
     page_num: int,
     config,
     *,
-    emitter=None,
-    run_id: str = "unknown",
-    chapter: str = "unknown",
     render_dir: Path | None = None,
     sibling_text_boxes: list[Box] | None = None,
-) -> tuple[dict, int, int, int]:
-    """Render a single region using explicit geometry roles and deterministic erasure."""
+) -> "RenderPlan":
+    """Pass 1: select geometry, ERASE source text, compute fit. No drawing."""
     rid = region["region_id"]
     render_flag = region.get("render", True)
     has_usable = region.get("has_usable_text", False)
@@ -1028,140 +1073,72 @@ def _render_region(
     register = region.get("register", "neutral")
     glossary_conflict = region.get("glossary_conflict", False)
 
-    if not render_flag:
-        result_dict = {
-            "region_id": rid,
-            "page_number": page_num,
-            "rendered": False,
-            "action": "left_original_not_render_type",
-            "font_size_pt": None,
-            "lines": 0,
-            "overflow": False,
-            "overflow_ask_llm": False,
-            "register": register,
-            "style_hint": style_hint,
-            "glossary_conflict": glossary_conflict,
-        }
-        return result_dict, 0, 1, 0
+    def _left(action: str) -> RenderPlan:
+        return RenderPlan(
+            region_id=rid, page_number=page_num, rendered=False, action=action,
+            register=register, style_hint=style_hint,
+            glossary_conflict=glossary_conflict,
+            page_width=page_img.width, page_height=page_img.height,
+        )
 
+    if not render_flag:
+        return _left("left_original_not_render_type")
     if not has_usable:
         logger.info(
             "[%d/%d %s] Page %d %s -> left original (no usable text)",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
-            rid,
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, page_num, rid,
         )
-        result_dict = {
-            "region_id": rid,
-            "page_number": page_num,
-            "rendered": False,
-            "action": "left_original_no_text",
-            "font_size_pt": None,
-            "lines": 0,
-            "overflow": False,
-            "overflow_ask_llm": False,
-            "register": register,
-            "style_hint": style_hint,
-            "glossary_conflict": glossary_conflict,
-        }
-        return result_dict, 0, 1, 0
-
+        return _left("left_original_no_text")
     if not final_text:
         logger.warning(
             "[%d/%d %s] Page %d %s -> left original (missing final_text)",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
-            rid,
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, page_num, rid,
         )
-        result_dict = {
-            "region_id": rid,
-            "page_number": page_num,
-            "rendered": False,
-            "action": "missing_text",
-            "font_size_pt": None,
-            "lines": 0,
-            "overflow": False,
-            "overflow_ask_llm": False,
-            "register": register,
-            "style_hint": style_hint,
-            "glossary_conflict": glossary_conflict,
-        }
-        return result_dict, 0, 1, 0
+        return _left("missing_text")
 
-    # 1. Geometry Selection (Initial parse to get text_box and bubble_box)
+    # 1. Geometry (initial parse to get text_box + bubble_box)
     text_box, bubble_box, _, _ = select_render_geometry(
-        region, page_img.size, config, sibling_text_boxes=sibling_text_boxes
+        region, page_img.size, config,
+        sibling_text_boxes=sibling_text_boxes,
     )
 
-    # 2. Bubble Mask for context / diagnostics (using local_text_box seed)
+    # 2. Bubble mask (seeded by local text box) + dominant fill color
     local_text_box = Box(
-        x=text_box.x - bubble_box.x,
-        y=text_box.y - bubble_box.y,
-        w=text_box.w,
-        h=text_box.h,
+        x=text_box.x - bubble_box.x, y=text_box.y - bubble_box.y,
+        w=text_box.w, h=text_box.h,
     )
     bubble_crop = page_img.crop(bubble_box.as_xyxy())
+
     if getattr(config, "BUBBLE_FILL_MODE", "white") == "dominant":
         fill_color = _dominant_fill_color(bubble_crop, local_text_box, config)
     else:
         fill_color = None
 
     bubble_mask = _get_bubble_mask(
-        bubble_crop,
-        bubble_box.x,
-        bubble_box.y,
-        bubble_box.w,
-        bubble_box.h,
-        page_img.width,
-        page_img.height,
-        config,
-        seed_box=local_text_box,
-        fill_color=fill_color,
+        bubble_crop, bubble_box.x, bubble_box.y, bubble_box.w, bubble_box.h,
+        page_img.width, page_img.height, config,
+        seed_box=local_text_box, fill_color=fill_color,
     )
 
-    # If this region's parent_bubble is shared with another render region,
-    # the interior belongs to multiple speakers; suppress interior expansion
-    # and rely on sibling-clipped growth only.
+    # Shared-parent guard: suppress interior expansion when siblings share the bubble.
     shared_parent = False
     pb = region.get("parent_bubble")
-    if pb and sibling_text_boxes is not None:
-        # crude but effective: any sibling whose text box falls inside this
-        # parent_bubble means the bubble is shared.
+    if pb and sibling_text_boxes:
         pbx0, pby0 = pb["x"], pb["y"]
         pbx1, pby1 = pb["x"] + pb["w"], pb["y"] + pb["h"]
         for sib in sibling_text_boxes:
-            if (sib.x >= pbx0 and sib.y >= pby0
-                    and sib.x2 <= pbx1 and sib.y2 <= pby1):
+            if sib.x >= pbx0 and sib.y >= pby0 and sib.x2 <= pbx1 and sib.y2 <= pby1:
                 shared_parent = True
                 break
 
-    # Re-evaluate layout_box and erase_box now that we have the bubble mask
-    if shared_parent:
-        # Skip interior expansion: pass bubble_mask=None so layout stays at the
-        # padded text box (still sibling-clipped, still readable).
-        text_box, bubble_box, erase_box, layout_box = select_render_geometry(
-            region,
-            page_img.size,
-            config,
-            bubble_mask=None,
-            bubble_box=bubble_box,
-            sibling_text_boxes=sibling_text_boxes,
-        )
-    else:
-        text_box, bubble_box, erase_box, layout_box = select_render_geometry(
-            region,
-            page_img.size,
-            config,
-            bubble_mask=bubble_mask,
-            bubble_box=bubble_box,
-            sibling_text_boxes=sibling_text_boxes,
-        )
+    text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+        region, page_img.size, config,
+        bubble_mask=None if shared_parent else bubble_mask,
+        bubble_box=bubble_box,
+        sibling_text_boxes=sibling_text_boxes,
+    )
 
-    # Coverage guard: if dominant fill mask covers too little of the crop, fall back
+    # Coverage guard: fall back to solid rect mask if fill mask is too sparse.
     min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.15))
     mask_hist = bubble_mask.histogram()
     mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
@@ -1170,11 +1147,7 @@ def _render_region(
         logger.warning(
             "[%d/%d %s] Page %d %s -> low fill-mask coverage (%.3f); "
             "falling back to padded text-box erase.",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
-            rid,
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, page_num, rid,
             mask_pixels / crop_area,
         )
         bubble_mask = _solid_rect_mask(bubble_box, erase_box)
@@ -1187,254 +1160,255 @@ def _render_region(
         debug_paths["before"] = str(
             save_render_debug_image(
                 page_img.crop(erase_box.as_xyxy()),
-                debug_dir=debug_dir,
-                region_id=rid,
-                suffix="before",
+                debug_dir=debug_dir, region_id=rid, suffix="before",
             )
         )
         debug_paths["bubble_crop"] = str(
             save_render_debug_image(
-                bubble_crop,
-                debug_dir=debug_dir,
-                region_id=rid,
-                suffix="bubble_crop",
+                bubble_crop, debug_dir=debug_dir, region_id=rid, suffix="bubble_crop",
             )
         )
         debug_paths["bubble_mask"] = str(
             save_render_debug_image(
-                bubble_mask,
-                debug_dir=debug_dir,
-                region_id=rid,
-                suffix="bubble_mask",
+                bubble_mask, debug_dir=debug_dir, region_id=rid, suffix="bubble_mask",
             )
         )
 
-    # 3. Erase Source Text
+    # 3. ERASE (pixel-destructive; happens in Pass 1 only)
     erase_meta = erase_original_text(
-        page_img=page_img,
-        draw=draw,
-        text_box=text_box,
-        bubble_box=bubble_box,
-        erase_box=erase_box,
-        bubble_mask=bubble_mask,
-        config=config,
-        fill_color=fill_color,
+        page_img=page_img, draw=draw,
+        text_box=text_box, bubble_box=bubble_box, erase_box=erase_box,
+        bubble_mask=bubble_mask, config=config, fill_color=fill_color,
     )
-
-    if erase_meta.get("low_overlap"):
-        min_retention = float(getattr(config, "TEXT_ERASE_MIN_RETENTION", 0.65))
-        logger.warning(
-            "[%d/%d %s] Page %d %s -> Low erase mask retention ratio (%.2f < %.2f)",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
-            rid,
-            erase_meta["clip_retention_ratio"],
-            min_retention,
-        )
-        from manhua_pipeline.events import RENDER_ERASE_MASK_LOW_OVERLAP, PipelineEvent
-        from manhua_pipeline.io.event_emitter import get_event_emitter
-
-        em = emitter or (
-            get_event_emitter(render_dir.parent, config, logger=logger)
-            if render_dir
-            else None
-        )
-        if em:
-            em.emit(
-                PipelineEvent(
-                    event=RENDER_ERASE_MASK_LOW_OVERLAP,
-                    run_id=run_id,
-                    stage=_STAGE_NAME.lower(),
-                    chapter=chapter,
-                    region_id=rid,
-                    page=page_num,
-                    metadata={
-                        "retention": erase_meta["clip_retention_ratio"],
-                        "min_retention": min_retention,
-                    },
-                )
-            )
 
     if do_debug:
         debug_paths["text_mask"] = str(
             save_render_debug_image(
                 erase_meta["text_mask"],
-                debug_dir=debug_dir,
-                region_id=rid,
-                suffix="text_mask",
+                debug_dir=debug_dir, region_id=rid, suffix="text_mask",
             )
         )
         debug_paths["erase_mask_clipped"] = str(
             save_render_debug_image(
                 erase_meta["erase_mask"],
-                debug_dir=debug_dir,
-                region_id=rid,
-                suffix="erase_mask_clipped",
+                debug_dir=debug_dir, region_id=rid, suffix="erase_mask_clipped",
             )
         )
         debug_paths["after_erase"] = str(
             save_render_debug_image(
                 page_img.crop(erase_box.as_xyxy()),
-                debug_dir=debug_dir,
-                region_id=rid,
-                suffix="after_erase",
+                debug_dir=debug_dir, region_id=rid, suffix="after_erase",
             )
         )
 
-    # 4. Text Background & Fill
-    text_bg = fill_color or estimate_text_background(page_img, text_box, bubble_box)
-    text_fill = _text_color_for_bg(text_bg)
+    plan = RenderPlan(
+        region_id=rid, page_number=page_num, rendered=True, action="drew",
+        register=register, style_hint=style_hint,
+        glossary_conflict=glossary_conflict,
+        page_width=page_img.width, page_height=page_img.height,
+        text_box=text_box.as_dict(), layout_box=layout_box.as_dict(),
+        erase_box=erase_box.as_dict(), bubble_box=bubble_box.as_dict(),
+        erase_strategy=erase_meta.get("erase_strategy", ""),
+        debug_paths=debug_paths,
+    )
 
-    # Apply spiky/rude style emphasis
+    if erase_meta.get("low_overlap"):
+        plan.emit_low_overlap = True
+        plan.low_overlap_retention = erase_meta.get("clip_retention_ratio", 0.0)
+
+    # Bubble mask stats (preserved in result dict)
+    mask_bbox = bubble_mask.getbbox()
+    mask_hist2 = bubble_mask.histogram()
+    mask_px = mask_hist2[255] if len(mask_hist2) > 255 else 0
+    mask_area = bubble_box.w * bubble_box.h
+    plan.bubble_mask_bbox = list(mask_bbox) if mask_bbox else None
+    plan.bubble_mask_pixels = mask_px
+    plan.bubble_mask_area = mask_area
+    plan.bubble_mask_coverage = (mask_px / mask_area) if mask_area else 0.0
+
+    # 4. Text background + color (sample AFTER erase so fill is clean)
+    text_bg = fill_color or estimate_text_background(page_img, text_box, bubble_box)
+    plan.text_fill = _text_color_for_bg(text_bg)
+    plan.text_bg = text_bg
+
     text_to_draw = final_text
     if (register == "rude" or style_hint == "spiky") and getattr(
         config, "EMPHASIS_UPPERCASE", True
     ):
         text_to_draw = final_text.upper()
 
+    # 5. Fit (compute placements; DO NOT draw)
     font_path = getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Regular.ttf")
-
-    # 5. Fit & Place English inside layout_box
     font, lines, font_size, overflow, placements = fit_and_place_text(
-        draw=draw,
-        final_text=text_to_draw,
-        font_path=font_path,
-        layout_box=layout_box,
-        config=config,
-        page_width=page_img.width,
+        draw=draw, final_text=text_to_draw, font_path=font_path,
+        layout_box=layout_box, config=config, page_width=page_img.width,
     )
 
-    for placement in placements:
-        draw.text(
-            (placement["x"], placement["y"]),
-            placement["text"],
-            fill=text_fill,
-            font=font,
-        )
-
-    if do_debug:
-        debug_paths["final"] = str(
-            save_render_debug_image(
-                page_img.crop(erase_box.as_xyxy()),
-                debug_dir=debug_dir,
-                region_id=rid,
-                suffix="final",
-            )
-        )
-
-    readable_min = int(getattr(config, "FONT_MIN_PT", 12))
-    eff_max_pt = effective_max_pt(config, page_img.width)
-    total_overflow = 1 if overflow else 0
-
-    if font_size < readable_min or overflow:
-        logger.warning(
-            "[%d/%d %s] Page %d %s -> text below readable floor "
-            "(pt=%d, min=%d, overflow=%s)",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
-            rid,
-            font_size,
-            readable_min,
-            overflow,
-        )
-        from manhua_pipeline.events import RENDER_TEXT_TOO_SMALL, PipelineEvent
-        from manhua_pipeline.io.event_emitter import get_event_emitter
-
-        em = emitter or (
-            get_event_emitter(render_dir.parent, config, logger=logger)
-            if render_dir
-            else None
-        )
-        if em:
-            em.emit(
-                PipelineEvent(
-                    event=RENDER_TEXT_TOO_SMALL,
-                    run_id=run_id,
-                    stage=_STAGE_NAME.lower(),
-                    chapter=chapter,
-                    region_id=rid,
-                    page=page_num,
-                    level="WARNING",
-                    metadata={
-                        "font_size_pt": font_size,
-                        "readable_min_pt": readable_min,
-                        "abs_min_pt": int(getattr(config, "FONT_ABS_MIN_PT", 9)),
-                        "effective_max_pt": eff_max_pt,
-                        "page_width": page_img.width,
-                        "page_height": page_img.height,
-                        "overflow": overflow,
-                        "layout_box": layout_box.as_dict(),
-                        "text_box": text_box.as_dict(),
-                    },
-                )
-            )
-    else:
-        logger.info(
-            "[%d/%d %s] Page %d %s -> drew (%dpt, %d lines, erase=%s)",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
-            rid,
-            font_size,
-            len(lines),
-            erase_meta["erase_strategy"],
-        )
+    plan.font = font
+    plan.placements = placements
+    plan.font_size_pt = font_size
+    plan.lines = len(lines)
+    plan.overflow = overflow
+    plan.effective_max_pt = effective_max_pt(config, page_img.width)
+    plan.readable_min_pt = int(getattr(config, "FONT_MIN_PT", 12))
+    plan.abs_min_pt = int(getattr(config, "FONT_ABS_MIN_PT", 9))
 
     layout_padding = int(getattr(config, "TEXT_LAYOUT_PADDING_PX", 8))
     base_w = max(5, text_box.w - 2 * layout_padding)
     base_h = max(5, text_box.h - 2 * layout_padding)
-    base_area = base_w * base_h
-    layout_area = layout_box.w * layout_box.h
-    layout_expanded = layout_area > base_area
-    layout_growth_factor = round(layout_area / max(1, base_area), 2)
+    plan.layout_expanded = layout_box.w * layout_box.h > base_w * base_h
+    plan.layout_growth_factor = round(
+        layout_box.w * layout_box.h / max(1, base_w * base_h), 2
+    )
 
-    mask_bbox = bubble_mask.getbbox()
-    mask_hist = bubble_mask.histogram()
-    mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
-    mask_area = bubble_box.w * bubble_box.h
-    mask_coverage = (mask_pixels / mask_area) if mask_area else 0.0
+    if font_size < plan.readable_min_pt or overflow:
+        plan.emit_too_small = True
 
-    result_dict = {
-        "region_id": rid,
-        "page_number": page_num,
+    return plan
+
+
+def _draw_region_plan(
+    plan: "RenderPlan",
+    draw: ImageDraw.ImageDraw,
+    render_dir: Path | None = None,
+) -> None:
+    """Pass 2: draw stored text. No erasing, no pixel destruction."""
+    if not plan.rendered or plan.font is None:
+        return
+    for p in plan.placements:
+        draw.text((p["x"], p["y"]), p["text"], fill=tuple(plan.text_fill), font=plan.font)
+
+    if plan.debug_paths and render_dir:
+        debug_dir = render_dir / "debug"
+        # "final" debug crop captured after draw (correct two-pass position)
+        erase_box = Box(**plan.erase_box)
+        save_render_debug_image(
+            draw._image.crop(erase_box.as_xyxy()),  # type: ignore[attr-defined]
+            debug_dir=debug_dir, region_id=plan.region_id, suffix="final",
+        )
+
+
+def _finalize_plan(
+    plan: "RenderPlan",
+    *,
+    emitter,
+    run_id: str,
+    chapter: str,
+    render_dir,
+    config,
+) -> tuple[dict, int, int, int]:
+    """Emit events for a drawn region and return (result_dict, drawn, left, overflow)."""
+    if not plan.rendered:
+        result = {
+            "region_id": plan.region_id,
+            "page_number": plan.page_number,
+            "rendered": False,
+            "action": plan.action,
+            "font_size_pt": None,
+            "lines": 0,
+            "overflow": False,
+            "overflow_ask_llm": False,
+            "register": plan.register,
+            "style_hint": plan.style_hint,
+            "glossary_conflict": plan.glossary_conflict,
+        }
+        return result, 0, 1, 0
+
+    from manhua_pipeline.io.event_emitter import get_event_emitter
+
+    em = emitter or (
+        get_event_emitter(render_dir.parent, config, logger=logger)
+        if render_dir else None
+    )
+
+    if plan.emit_low_overlap and em:
+        from manhua_pipeline.events import RENDER_ERASE_MASK_LOW_OVERLAP, PipelineEvent
+        min_retention = float(getattr(config, "TEXT_ERASE_MIN_RETENTION", 0.65))
+        logger.warning(
+            "[%d/%d %s] Page %d %s -> Low erase mask retention ratio (%.2f < %.2f)",
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
+            plan.page_number, plan.region_id, plan.low_overlap_retention, min_retention,
+        )
+        em.emit(PipelineEvent(
+            event=RENDER_ERASE_MASK_LOW_OVERLAP, run_id=run_id,
+            stage=_STAGE_NAME.lower(), chapter=chapter,
+            region_id=plan.region_id, page=plan.page_number,
+            metadata={"retention": plan.low_overlap_retention, "min_retention": min_retention},
+        ))
+
+    if plan.emit_too_small and em:
+        from manhua_pipeline.events import RENDER_TEXT_TOO_SMALL, PipelineEvent
+        logger.warning(
+            "[%d/%d %s] Page %d %s -> text below readable floor (pt=%d, min=%d, overflow=%s)",
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
+            plan.page_number, plan.region_id, plan.font_size_pt,
+            plan.readable_min_pt, plan.overflow,
+        )
+        em.emit(PipelineEvent(
+            event=RENDER_TEXT_TOO_SMALL, run_id=run_id,
+            stage=_STAGE_NAME.lower(), chapter=chapter,
+            region_id=plan.region_id, page=plan.page_number, level="WARNING",
+            metadata={
+                "font_size_pt": plan.font_size_pt,
+                "readable_min_pt": plan.readable_min_pt,
+                "abs_min_pt": plan.abs_min_pt,
+                "effective_max_pt": plan.effective_max_pt,
+                "page_width": plan.page_width,
+                "page_height": plan.page_height,
+                "overflow": plan.overflow,
+                "layout_box": plan.layout_box,
+                "text_box": plan.text_box,
+            },
+        ))
+    else:
+        logger.info(
+            "[%d/%d %s] Page %d %s -> drew (%dpt, %d lines, erase=%s)",
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
+            plan.page_number, plan.region_id, plan.font_size_pt,
+            plan.lines, plan.erase_strategy,
+        )
+
+    result: dict = {
+        "region_id": plan.region_id,
+        "page_number": plan.page_number,
         "rendered": True,
         "action": "drew",
-        "font_size_pt": font_size,
-        "effective_max_pt": eff_max_pt,
-        "page_width": page_img.width,
-        "page_height": page_img.height,
-        "lines": len(lines),
-        "readable_min_pt": readable_min,
-        "abs_min_pt": int(getattr(config, "FONT_ABS_MIN_PT", 9)),
-        "overflow": overflow,
-        "overflow_ask_llm": overflow,
-        "register": register,
-        "style_hint": style_hint,
-        "glossary_conflict": glossary_conflict,
-        "erase_strategy": erase_meta["erase_strategy"],
-        "text_box": text_box.as_dict(),
-        "bubble_box": bubble_box.as_dict(),
-        "erase_box": erase_box.as_dict(),
-        "layout_box": layout_box.as_dict(),
-        "layout_expanded": layout_expanded,
-        "layout_growth_factor": layout_growth_factor,
-        "text_fill": list(text_fill),
-        "text_background": list(text_bg),
-        "placements": placements,
-        "bubble_mask_bbox": list(mask_bbox) if mask_bbox else None,
-        "bubble_mask_pixels": mask_pixels,
-        "bubble_mask_area": mask_area,
-        "bubble_mask_coverage": mask_coverage,
+        "font_size_pt": plan.font_size_pt,
+        "effective_max_pt": plan.effective_max_pt,
+        "page_width": plan.page_width,
+        "page_height": plan.page_height,
+        "lines": plan.lines,
+        "readable_min_pt": plan.readable_min_pt,
+        "abs_min_pt": plan.abs_min_pt,
+        "overflow": plan.overflow,
+        "overflow_ask_llm": plan.overflow,
+        "register": plan.register,
+        "style_hint": plan.style_hint,
+        "glossary_conflict": plan.glossary_conflict,
+        "erase_strategy": plan.erase_strategy,
+        "text_box": plan.text_box,
+        "bubble_box": plan.bubble_box,
+        "erase_box": plan.erase_box,
+        "layout_box": plan.layout_box,
+        "layout_expanded": plan.layout_expanded,
+        "layout_growth_factor": plan.layout_growth_factor,
+        "text_fill": list(plan.text_fill),
+        "text_background": list(plan.text_bg),
+        "placements": plan.placements,
+        "bubble_mask_bbox": plan.bubble_mask_bbox,
+        "bubble_mask_pixels": plan.bubble_mask_pixels,
+        "bubble_mask_area": plan.bubble_mask_area,
+        "bubble_mask_coverage": plan.bubble_mask_coverage,
     }
-    if debug_paths:
-        result_dict["debug_paths"] = debug_paths
+    if plan.debug_paths:
+        result["debug_paths"] = plan.debug_paths
+    return result, 1, 0, (1 if plan.overflow else 0)
 
-    return result_dict, 1, 0, total_overflow
+
+def _render_region(*_args, **_kwargs):
+    raise NotImplementedError(
+        "_render_region is retired; use _plan_and_erase_region + _draw_region_plan."
+    )
 
 
 def _load_and_merge_regions(
@@ -1486,17 +1460,18 @@ def _render_single_page(
     config,
     run_id: str = "unknown",
 ) -> tuple[list[dict], dict | None, int, int, int]:
-    """Render regions on a single page, save output image, and return report components."""
+    """Render regions on a single page using a two-pass approach.
+
+    Pass 1: geometry + erase + fit for every region (no drawing).
+    Pass 2: draw all text (erases already complete, so no erase can clobber drawn glyphs).
+    """
     page_num = page["page_number"]
     filename = page["filename"]
     orig_filename = page.get("original_filename")
     if page.get("skip") or not filename or not orig_filename:
         logger.info(
             "[%d/%d %s] Skipping skipped/failed Page %d",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, page_num,
         )
         return [], None, 0, 0, 0
 
@@ -1504,36 +1479,22 @@ def _render_single_page(
     if not orig_path.exists():
         logger.warning(
             "[%d/%d %s] Page %d file not found: %s",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
-            orig_path,
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, page_num, orig_path,
         )
         return [], None, 0, 0, 0
 
-    # Load page image
     try:
         page_img = Image.open(orig_path).convert("RGB")
     except Exception as exc:
         logger.error(
             "[%d/%d %s] Failed to load Page %d: %s",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            page_num,
-            exc,
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, page_num, exc,
         )
         return [], None, 0, 0, 0
 
     draw = ImageDraw.Draw(page_img)
-    page_drawn = 0
-    page_left = 0
-    page_overflow = 0
-    page_results = []
     page_regions = regions_by_page.get(page_num, [])
 
-    # Precompute text boxes for every renderable region on this page.
     render_regions = [r for r in page_regions if r.get("render", True)]
 
     def _text_box_of(r) -> Box:
@@ -1542,43 +1503,46 @@ def _render_single_page(
 
     boxes_by_id = {r["region_id"]: _text_box_of(r) for r in render_regions}
 
+    # ---------- PASS 1: geometry + erase + fit (no drawing) ----------
+    plans: list[RenderPlan] = []
     for region in page_regions:
         rid = region["region_id"]
-        siblings = [
-            box for other_id, box in boxes_by_id.items()
-            if other_id != rid
-        ] if region.get("render", True) else None
-
-        res_dict, drawn, left, ovf = _render_region(
-            region,
-            page_img,
-            draw,
-            page_num,
-            config,
+        siblings = (
+            [box for other_id, box in boxes_by_id.items() if other_id != rid]
+            if region.get("render", True) else None
+        )
+        plan = _plan_and_erase_region(
+            region, page_img, draw, page_num, config,
             render_dir=render_dir,
-            run_id=run_id,
-            chapter=ws.name,
             sibling_text_boxes=siblings,
         )
-        page_results.append(res_dict)
+        plans.append(plan)
+
+    # ---------- PASS 2: draw all text (erases already complete) ----------
+    for plan in plans:
+        _draw_region_plan(plan, draw, render_dir=render_dir)
+
+    # ---------- Finalize: events + result rows ----------
+    page_results = []
+    page_drawn = page_left = page_overflow = 0
+    for plan in plans:
+        result, drawn, left, ovf = _finalize_plan(
+            plan, emitter=None, run_id=run_id, chapter=ws.name,
+            render_dir=render_dir, config=config,
+        )
+        page_results.append(result)
         page_drawn += drawn
         page_left += left
         page_overflow += ovf
 
-    # Save output image with sequential page number name
     rendered_dir = render_dir / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
     out_path = rendered_dir / f"{page_num:03d}.png"
     page_img.save(out_path)
     logger.info(
         "[%d/%d %s] Page %d -> saved %s (%d drawn, %d left)",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        page_num,
-        out_path.relative_to(ws),
-        page_drawn,
-        page_left,
+        _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, page_num,
+        out_path.relative_to(ws), page_drawn, page_left,
     )
 
     page_report = {
