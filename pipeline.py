@@ -65,6 +65,8 @@ STAGE_REGISTRY = {
     "qa": ("stage6_qa", "run_qa"),
 }
 
+PROMPT_CAPABLE_STAGES = {"translate", "paraphrase"}
+
 
 def _load_stage(name):
     """Import a single stage module on demand and return its run function."""
@@ -206,6 +208,7 @@ def run_batch(
                 skip_last=skip_last,
                 formats=formats or [],
                 run_id=resolved_run_id,
+                allow_prompt=False,
             )
             m = load_manifest(str(chapter_dir), config)
             stage_after = m.get("current_stage") if m else None
@@ -383,6 +386,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated formats to package (zip,cbz,tar,pdf)",
     )
 
+    resolve_sp = sub.add_parser(
+        "resolve-overrides",
+        help="Interactively resolve queued manual translation overrides for a chapter.",
+    )
+    resolve_sp.add_argument("--chapter", required=True, help="Chapter name in the series folder")
+
     return parser
 
 
@@ -513,6 +522,12 @@ def main(argv=None) -> int:
         )
         return 0
 
+    if args.command == "resolve-overrides":
+        chapter_dir = base_dir / args.chapter
+        logs_dir = _prepare_logs_dir(chapter_dir, config, fresh=False)
+        setup_logging(stream="stdout", log_dir=logs_dir, run_id=_run_ctx.run_id)
+        return resolve_overrides(chapter_dir, config)
+
     # For other commands
     chapter = getattr(args, "chapter", None)
     if chapter:
@@ -542,7 +557,12 @@ def main(argv=None) -> int:
 
     run_fn = _load_stage(args.command)
     logger.info("Running stage: %s", args.command)
-    run_fn(str(chapter_dir), config)
+
+    from manhua_pipeline.interaction import can_prompt_now
+    if args.command in PROMPT_CAPABLE_STAGES:
+        run_fn(str(chapter_dir), config, allow_prompt=can_prompt_now(batch=False))
+    else:
+        run_fn(str(chapter_dir), config)
     return 0
 
 
@@ -587,14 +607,18 @@ def _run_stage_subprocess(
 def _run_all_from(
     workspace: str,
     config,
+    *,
+    run_id: str | None = None,
     start: str = "import",
     input_path: str | None = None,
     meta: dict | None = None,
     fresh: bool = False,
     skip_last: int = 0,
     formats: list[str] | None = None,
-    run_id: str | None = None,
+    allow_prompt: bool = True,
 ) -> int:
+    from manhua_pipeline.interaction import can_prompt_now
+
     resolved_run_id = run_id or getattr(config, "_run_id", "unknown")
     config._run_id = resolved_run_id
     order = config.STAGE_ORDER
@@ -602,7 +626,6 @@ def _run_all_from(
         logger.error("Unknown start stage %r (expected one of %s)", start, order)
         return 2
 
-    # Add manifest-driven resume
     from manhua_pipeline.io.workspace import load_manifest
 
     manifest = load_manifest(workspace, config)
@@ -621,52 +644,62 @@ def _run_all_from(
         return 2
     logger.info("run-all: starting from %r", start)
     meta = meta or {}
+
+    interactive = allow_prompt and can_prompt_now(batch=False)
+    use_subprocess_default = bool(getattr(config, "BATCH_SUBPROCESS", False))
+
     for name in order[start_idx:]:
         logger.info("=" * 60)
-        if getattr(config, "BATCH_SUBPROCESS", False):
+
+        prompt_stage = name in PROMPT_CAPABLE_STAGES
+        use_subprocess = use_subprocess_default and not (prompt_stage and interactive)
+
+        if use_subprocess:
             rc = _run_stage_subprocess(
-                name, workspace, input_path=input_path, meta=meta, fresh=fresh, skip_last=skip_last, run_id=resolved_run_id
+                name, workspace,
+                input_path=input_path, meta=meta,
+                fresh=fresh, skip_last=skip_last, run_id=resolved_run_id,
             )
             if rc != 0:
-                logger.error(
-                    "Subprocess for stage %r failed with return code %d", name, rc
-                )
+                logger.error("Subprocess for stage %r failed with return code %d", name, rc)
                 return 2
             manifest = load_manifest(workspace, config)
             if not manifest:
-                logger.error(
-                    "Failed to load manifest after subprocess for stage %r", name
-                )
+                logger.error("Failed to load manifest after subprocess for stage %r", name)
                 return 2
             current_stage = manifest.get("current_stage")
             if current_stage == name:
                 stage_title = name.title() if name != "ocr" else "OCR"
                 logger.info(
-                    "Stopping run-all: manual handoff required at %s. Resume with: python pipeline.py run-all",
+                    "Stopping run-all: manual handoff required at %s. "
+                    "Resume with: python pipeline.py run-all",
                     stage_title,
                 )
                 return 0
         else:
             if name == "import":
                 res = _load_stage("import")(
-                    input_path,
-                    workspace,
-                    config,
+                    input_path, workspace, config,
                     title_romanized=meta.get("title_romanized"),
                     title_english=meta.get("title_en"),
                     source=meta.get("source"),
-                    fresh=fresh,
-                    skip_last=skip_last,
+                    fresh=fresh, skip_last=skip_last,
                 )
             elif name == "render":
                 res = _load_stage("render")(workspace, config, run_id=resolved_run_id)
             else:
-                res = _load_stage(name)(workspace, config)
+                if name in PROMPT_CAPABLE_STAGES:
+                    res = _load_stage(name)(
+                        workspace, config, allow_prompt=interactive
+                    )
+                else:
+                    res = _load_stage(name)(workspace, config)
 
             if res is None:
                 stage_title = name.title() if name != "ocr" else "OCR"
                 logger.info(
-                    "Stopping run-all: manual handoff required at %s. Resume with: python pipeline.py run-all",
+                    "Stopping run-all: manual handoff required at %s. "
+                    "Resume with: python pipeline.py run-all",
                     stage_title,
                 )
                 return 0
@@ -675,6 +708,82 @@ def _run_all_from(
         from manhua_pipeline.stages import stage7_package
 
         stage7_package.run_package(workspace, config, formats)
+    return 0
+
+
+def resolve_overrides(chapter_dir: Path, config) -> int:
+    """Interactively drain pending manual override requests for a chapter."""
+    import json
+
+    from manhua_pipeline.interaction import can_prompt_now
+    from manhua_pipeline.manual_overrides import (
+        OverrideRequestStore,
+        prompt_for_override,
+        request_from_row,
+        save_locked_glossary_entry,
+        save_region_override,
+    )
+
+    if not can_prompt_now(batch=False):
+        logger.error(
+            "resolve-overrides needs an interactive terminal. "
+            "Run it directly in a shell (not piped / not under batch)."
+        )
+        return 2
+
+    store = OverrideRequestStore(chapter_dir)
+    pending = store.list_pending()
+    if not pending:
+        logger.info("No pending manual override requests for %s.", chapter_dir.name)
+        return 0
+
+    logger.info("Resolving %d pending override(s) for %s", len(pending), chapter_dir.name)
+
+    overrides_path = chapter_dir / getattr(config, "OVERRIDES_NAME", "overrides.json")
+    glossary_path = chapter_dir.parent / getattr(config, "GLOSSARY_NAME", "glossary.json")
+
+    def _load_json(path, default):
+        if not path.exists():
+            return default
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+
+    resolved_count = 0
+    for row in pending:
+        request = request_from_row(row)
+        decision = prompt_for_override(request)
+
+        if decision.action == "apply_region" and decision.translation:
+            overrides = _load_json(overrides_path, {})
+            if not isinstance(overrides, dict):
+                overrides = {}
+            save_region_override(overrides, request, decision.translation, overrides_path)
+            store.mark_resolved(request.request_id, scope="region",
+                                translation=decision.translation)
+            resolved_count += 1
+
+        elif decision.action == "apply_glossary" and decision.translation:
+            glossary = _load_json(glossary_path, {"version": "v1", "terms": []})
+            terms = glossary.get("terms", []) if isinstance(glossary, dict) else []
+            try:
+                save_locked_glossary_entry(terms, request, decision.translation, glossary_path)
+                store.mark_resolved(request.request_id, scope="series_glossary",
+                                    translation=decision.translation)
+                resolved_count += 1
+            except Exception as exc:
+                logger.warning("Could not save locked glossary for %s: %s",
+                               request.region_id, exc)
+
+        elif decision.action == "abort":
+            logger.info("Aborted at %s; remaining requests left pending.", request.region_id)
+            break
+
+    logger.info("Resolved %d override(s). Re-run translate -> render to apply them:",
+                resolved_count)
+    logger.info("    python pipeline.py run-all --chapter %s --from-stage translate",
+                chapter_dir.name)
     return 0
 
 

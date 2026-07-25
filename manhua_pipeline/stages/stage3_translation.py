@@ -590,7 +590,84 @@ def _partition_regions_translation(
     return overridden_regions, usable, skipped
 
 
-def run_translation(workspace: str, config) -> Path | None:
+def _handle_unresolved_region(
+    *,
+    region: dict,
+    initial_reason: str,
+    final_reason: str,
+    runtime,
+    run_id: str,
+    chapter: str,
+    ws,
+    config,
+    translation_map: dict,
+    glossary: dict,
+) -> bool:
+    """Resolve one unresolved region."""
+    request = make_override_request(
+        run_id=run_id,
+        chapter=chapter,
+        region=region,
+        initial_reason=initial_reason,
+        final_reason=final_reason,
+        backend=getattr(config, "TRANSLATOR_BACKEND", "ollama"),
+        model=getattr(config, "OLLAMA_TRANSLATE_MODEL", None),
+        attempts=2,
+    )
+    rid = region["region_id"]
+
+    if runtime.can_prompt:
+        decision = prompt_for_override(request)
+
+        if decision.action == "apply_region" and decision.translation:
+            translation_map[rid] = decision.translation
+            overrides_path = ws / getattr(config, "OVERRIDES_NAME", "overrides.json")
+            existing = _load_raw_overrides(overrides_path)
+            save_region_override(existing, request, decision.translation, overrides_path)
+            logger.info("[%s] Manual override (region): %s -> %r",
+                        _STAGE_NAME, rid, decision.translation)
+            return True
+
+        if decision.action == "apply_glossary" and decision.translation:
+            translation_map[rid] = decision.translation
+            glossary_terms = glossary.get("terms", [])
+            glossary_path = ws.parent / getattr(config, "GLOSSARY_NAME", "glossary.json")
+            try:
+                save_locked_glossary_entry(
+                    glossary_terms, request, decision.translation, glossary_path
+                )
+                logger.info("[%s] Manual override saved to locked glossary: %r -> %r",
+                            _STAGE_NAME, request.original_text, decision.translation)
+            except Exception as exc:
+                logger.warning("[%s] Could not save locked glossary: %s", _STAGE_NAME, exc)
+            return True
+
+        if decision.action == "abort":
+            raise RuntimeError(f"Translation aborted by user at region {rid}.")
+
+    store = OverrideRequestStore(ws)
+    store.upsert_pending(request)
+    logger.warning(
+        "[%s] MANUAL_OVERRIDE_DEFERRED: %s queued (%s)",
+        _STAGE_NAME, rid,
+        "user deferred" if runtime.can_prompt else "non-interactive runtime",
+    )
+    return False
+
+
+def _load_raw_overrides(path) -> dict:
+    """Load overrides.json as a raw dict."""
+    import json
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def run_translation(workspace: str, config, *, allow_prompt: bool = False) -> Path | None:
     """Run the Translation stage.
 
     Returns the path to translation.json on success, or None if awaiting
@@ -780,66 +857,32 @@ def run_translation(workspace: str, config) -> Path | None:
 
         # Manual override dispatch for remaining meaningful unresolved regions
         if substantial_missing:
-            runtime = default_runtime_policy(
-                batch=getattr(config, "BATCH_SUBPROCESS", False)
+            from manhua_pipeline.interaction import InteractionMode, RuntimePolicy
+
+            runtime = RuntimePolicy(
+                mode=InteractionMode.INTERACTIVE if allow_prompt else InteractionMode.NON_INTERACTIVE,
+                batch=not allow_prompt,
             )
-            request_store = OverrideRequestStore(ws)
-            chapter = ws.name
             run_id = getattr(config, "_run_id", "unknown")
-            backend_name_str = getattr(config, "TRANSLATOR_BACKEND", "ollama")
-            model_str = getattr(config, "OLLAMA_TRANSLATE_MODEL", None)
+            chapter = ws.name
             region_by_id = {r["region_id"]: r for r in usable}
 
             for rid in list(substantial_missing):
-                region = region_by_id.get(rid, {"region_id": rid})
-                original = orig_by_id.get(rid, "")
-                request = make_override_request(
-                    run_id=run_id,
-                    chapter=chapter,
+                region = region_by_id[rid]
+                resolved = _handle_unresolved_region(
                     region=region,
                     initial_reason="missing_after_batch",
                     final_reason="blank_after_contextual_retry",
-                    backend=backend_name_str,
-                    model=model_str,
-                    attempts=2,
+                    runtime=runtime,
+                    run_id=run_id,
+                    chapter=chapter,
+                    ws=ws,
+                    config=config,
+                    translation_map=translation_map,
+                    glossary=glossary,
                 )
-
-                if runtime.can_prompt:
-                    decision = prompt_for_override(request)
-                else:
-                    request_store.append_pending(request)
-                    logger.warning(
-                        "[%s] MANUAL_OVERRIDE_DEFERRED: %s queued (non-interactive runtime)",
-                        _STAGE_NAME, rid,
-                    )
-                    decision = ManualOverrideDecision("defer")
-
-                if decision.action == "apply_region" and decision.translation:
-                    translation_map[rid] = decision.translation
+                if resolved:
                     substantial_missing.remove(rid)
-                    logger.info(
-                        "[%s] Manual override applied (region): %s -> %r",
-                        _STAGE_NAME, rid, decision.translation,
-                    )
-                elif decision.action == "apply_glossary" and decision.translation:
-                    translation_map[rid] = decision.translation
-                    substantial_missing.remove(rid)
-                    glossary_terms = glossary.get("terms", [])
-                    glossary_path = ws.parent / getattr(config, "GLOSSARY_NAME", "glossary.json")
-                    try:
-                        save_locked_glossary_entry(
-                            glossary_terms, request, decision.translation, glossary_path
-                        )
-                        logger.info(
-                            "[%s] Manual override saved to locked glossary: %r -> %r",
-                            _STAGE_NAME, original, decision.translation,
-                        )
-                    except Exception as exc:
-                        logger.warning("[%s] Could not save locked glossary: %s", _STAGE_NAME, exc)
-                elif decision.action == "abort":
-                    raise RuntimeError(
-                        f"Translation aborted by user at region {rid}."
-                    )
 
         # Recalculate ratio after retries + manual overrides
         still_missing = [rid for rid in usable_ids if rid not in translation_map

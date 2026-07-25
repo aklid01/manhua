@@ -39,3 +39,14 @@ def default_runtime_policy(*, batch: bool = False) -> RuntimePolicy:
     if sys.stdin.isatty():
         return RuntimePolicy(mode=InteractionMode.INTERACTIVE, batch=False)
     return RuntimePolicy(mode=InteractionMode.NON_INTERACTIVE, batch=False)
+
+
+def can_prompt_now(*, batch: bool = False) -> bool:
+    """True only when a real interactive terminal is available."""
+    if batch:
+        return False
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (ValueError, OSError):
+        return False
+
