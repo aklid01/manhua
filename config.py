@@ -67,15 +67,30 @@ WATERMARK_REGEX = [re.compile(p, re.IGNORECASE) for p in WATERMARK_PATTERNS]
 # Matched case-insensitively against each OCR line.
 WATERMARK_FUZZY_TOKENS = (
     # site names + common OCR manglings
-    "包子漫", "包子",
-    "巴子",    # OCR misread of 包子 (包→巴, 漫→量 etc.)
-    "baozim", "baozi",
-    "漫画屋", "colamanga", "cola manga", "manhuagui",
-    "腾讯", "tencent",
+    "包子漫",
+    "包子",
+    "巴子",  # OCR misread of 包子 (包→巴, 漫→量 etc.)
+    "baozim",
+    "baozi",
+    "漫画屋",
+    "colamanga",
+    "cola manga",
+    "manhuagui",
+    "腾讯",
+    "tencent",
     # promo phrases (often truncated by OCR)
-    "最新免费", "免费漫", "最新连载", "免费阅读", "在线漫画",
+    "最新免费",
+    "免费漫",
+    "最新连载",
+    "免费阅读",
+    "在线漫画",
     # url-ish fragments (OCR drops chars: www -> ww, .com -> cnn/cm/etc.)
-    "www.", "ww.", ".com", ".net", ".cc", "http",
+    "www.",
+    "ww.",
+    ".com",
+    ".net",
+    ".cc",
+    "http",
 )
 
 # ---- Detection types (v0 handles the first two) ----
@@ -174,7 +189,9 @@ BUBBLE_WHITE_THRESHOLD = 220
 # --- Colored / non-white panel erasing ---
 BUBBLE_FILL_MODE = "dominant"  # "white" (legacy) | "dominant"
 BUBBLE_FILL_TOLERANCE = 42  # max per-channel-ish RGB distance to the fill color
-BUBBLE_FILL_MIN_COVERAGE = 0.40  # if dominant mask covers < this frac of crop, fall back
+BUBBLE_FILL_MIN_COVERAGE = (
+    0.40  # if dominant mask covers < this frac of crop, fall back
+)
 TEXT_ERASE_PADDING_PX = 12
 TEXT_LAYOUT_PADDING_PX = 8
 TEXT_ERASE_DILATION_PX = 5

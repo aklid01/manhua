@@ -344,8 +344,8 @@ Both Translation and Paraphrase share the same three-backend model. Set them ind
 in `config.py`:
 
 ```python
-TRANSLATOR_BACKEND = "ollama"   # "manual" | "mcp" | "ollama"
-PARAPHRASE_BACKEND = "mcp"      # "manual" | "mcp" | "ollama"
+TRANSLATOR_BACKEND = "ollama"  # "manual" | "mcp" | "ollama"
+PARAPHRASE_BACKEND = "mcp"  # "manual" | "mcp" | "ollama"
 ```
 
 | Backend      | How it works                                                                      | Best for                               |
@@ -357,9 +357,9 @@ PARAPHRASE_BACKEND = "mcp"      # "manual" | "mcp" | "ollama"
 **Ollama configuration** (`config.py`):
 
 ```python
-OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b-instruct"   # CJK-capable; fits a 6 GB GPU
-OLLAMA_HOST            = "http://localhost:11434"
-OLLAMA_BATCH_SIZE      = 8
+OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b-instruct"  # CJK-capable; fits a 6 GB GPU
+OLLAMA_HOST = "http://localhost:11434"
+OLLAMA_BATCH_SIZE = 8
 # Paraphrase uses its own OLLAMA_PARA_* knobs (higher temperature for natural phrasing)
 ```
 

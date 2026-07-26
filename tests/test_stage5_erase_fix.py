@@ -441,11 +441,12 @@ def test_component_near_text_wins_over_larger_background_component():
 
 def test_gold_panel_source_text_is_erased():
     from PIL import Image, ImageDraw
+
     from manhua_pipeline.stages.stage5_render import (
         Box,
-        erase_original_text,
         _dominant_fill_color,
         _get_bubble_mask,
+        erase_original_text,
     )
 
     class Cfg:
@@ -502,11 +503,12 @@ def test_gold_panel_source_text_is_erased():
 
 def test_white_bubble_still_erases_under_dominant_mode():
     from PIL import Image, ImageDraw
+
     from manhua_pipeline.stages.stage5_render import (
         Box,
-        erase_original_text,
         _dominant_fill_color,
         _get_bubble_mask,
+        erase_original_text,
     )
 
     class Cfg:
@@ -563,11 +565,12 @@ def test_white_bubble_still_erases_under_dominant_mode():
 
 def test_low_coverage_falls_back_to_solid_rect():
     from PIL import Image, ImageDraw
+
     from manhua_pipeline.stages.stage5_render import (
         Box,
-        erase_original_text,
         _dominant_fill_color,
         _get_bubble_mask,
+        erase_original_text,
     )
 
     class Cfg:

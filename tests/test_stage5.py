@@ -336,7 +336,8 @@ def test_text_color_for_bg():
 
 def test_dominant_fill_returns_pure_white_for_white_bubble():
     from PIL import Image
-    from manhua_pipeline.stages.stage5_render import _dominant_fill_color, Box
+
+    from manhua_pipeline.stages.stage5_render import Box, _dominant_fill_color
 
     crop = Image.new("RGB", (200, 120), (255, 255, 255))
     assert _dominant_fill_color(crop, Box(40, 40, 60, 30), object()) == (255, 255, 255)
@@ -344,7 +345,8 @@ def test_dominant_fill_returns_pure_white_for_white_bubble():
 
 def test_dominant_fill_keeps_gold():
     from PIL import Image
-    from manhua_pipeline.stages.stage5_render import _dominant_fill_color, Box
+
+    from manhua_pipeline.stages.stage5_render import Box, _dominant_fill_color
 
     crop = Image.new("RGB", (200, 120), (255, 200, 60))
     r, g, b = _dominant_fill_color(crop, Box(40, 40, 60, 30), object())
@@ -374,13 +376,14 @@ def test_expansion_does_not_overlap_sibling():
 
 def test_shared_parent_regions_do_not_stack(monkeypatch):
     from PIL import Image, ImageDraw, ImageFont
+
+    import config
     from manhua_pipeline.stages.stage5_render import (
         Box,
-        _plan_and_erase_region,
         _draw_region_plan,
         _finalize_plan,
+        _plan_and_erase_region,
     )
-    import config
 
     monkeypatch.setattr(
         "manhua_pipeline.stages.stage5_render._load_font",
@@ -450,8 +453,9 @@ def _region_pb(rid, x, y, w, h, *, pb=None):
 def test_two_overlapping_bubbles_neither_text_is_erased(tmp_path, monkeypatch):
     """Stacked figure-8 pair: after two-pass render, BOTH bubbles keep full text."""
     from PIL import ImageFont
-    from manhua_pipeline.stages import stage5_render
+
     import config
+    from manhua_pipeline.stages import stage5_render
 
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
@@ -498,8 +502,9 @@ def test_two_overlapping_bubbles_neither_text_is_erased(tmp_path, monkeypatch):
 def test_erase_all_happens_before_any_draw(tmp_path, monkeypatch):
     """Instrument: every erase call must precede every draw call on a page."""
     from PIL import ImageFont
-    from manhua_pipeline.stages import stage5_render
+
     import config
+    from manhua_pipeline.stages import stage5_render
 
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
@@ -563,8 +568,9 @@ def test_erase_all_happens_before_any_draw(tmp_path, monkeypatch):
 def test_single_bubble_two_pass_unchanged(tmp_path, monkeypatch):
     """A lone bubble renders correctly under two-pass (no regression)."""
     from PIL import ImageFont
-    from manhua_pipeline.stages import stage5_render
+
     import config
+    from manhua_pipeline.stages import stage5_render
 
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()

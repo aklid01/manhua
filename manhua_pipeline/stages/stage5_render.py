@@ -796,7 +796,9 @@ def _dominant_fill_color(
                 continue
             r, g, b = img.getpixel((px, py))[:3]
             if (r // 16, g // 16, b // 16) == (qr, qg, qb):
-                rs.append(r); gs.append(g); bs.append(b)
+                rs.append(r)
+                gs.append(g)
+                bs.append(b)
 
     if not rs:
         return (qr * 16 + 8, qg * 16 + 8, qb * 16 + 8)

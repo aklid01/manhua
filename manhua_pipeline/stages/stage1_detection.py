@@ -283,13 +283,25 @@ def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
     dropped: list = []
 
     for _type, group in by_type.items():
-        group_sorted = sorted(group, key=lambda r: r.get("confidence", r.get("conf", 0.0)), reverse=True)
+        group_sorted = sorted(
+            group, key=lambda r: r.get("confidence", r.get("conf", 0.0)), reverse=True
+        )
         survivors: list[dict] = []
         for r in group_sorted:
-            bbox_r = r.get("bbox") or {"x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"]}
+            bbox_r = r.get("bbox") or {
+                "x": r["x"],
+                "y": r["y"],
+                "w": r["w"],
+                "h": r["h"],
+            }
             is_dup = False
             for s in survivors:
-                bbox_s = s.get("bbox") or {"x": s["x"], "y": s["y"], "w": s["w"], "h": s["h"]}
+                bbox_s = s.get("bbox") or {
+                    "x": s["x"],
+                    "y": s["y"],
+                    "w": s["w"],
+                    "h": s["h"],
+                }
                 if _iou(bbox_r, bbox_s) >= iou_thresh:
                     is_dup = True
                     dropped.append(r)
@@ -301,7 +313,10 @@ def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
     if dropped:
         logger.info(
             "[%d/%d %s] Dedup removed %d duplicate raw box(es)",
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, len(dropped),
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            len(dropped),
         )
 
     return kept

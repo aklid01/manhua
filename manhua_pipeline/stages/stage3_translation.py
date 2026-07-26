@@ -209,10 +209,14 @@ def _partition_by_triage(
         elif res.reason == "trivial":
             hit = locked_index.get(res.effective_text)
             if hit:
-                hard_skipped.append(_translated_row(
-                    r, hit, source="glossary",
-                    glossary_terms=[res.effective_text],
-                ))
+                hard_skipped.append(
+                    _translated_row(
+                        r,
+                        hit,
+                        source="glossary",
+                        glossary_terms=[res.effective_text],
+                    )
+                )
             else:
                 trivial_fallback.append(r)
         else:
@@ -877,8 +881,12 @@ def run_translation(
     if triage_hard_skipped or trivial_fallback:
         logger.info(
             "[%d/%d %s] Triage: %d hard-skipped, %d trivial fallback, %d translatable",
-            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
-            len(triage_hard_skipped), len(trivial_fallback), len(translatable_results),
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            len(triage_hard_skipped),
+            len(trivial_fallback),
+            len(translatable_results),
         )
 
     # Combine override regions + translatable + trivial fallback for the existing partition

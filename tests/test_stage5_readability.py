@@ -6,10 +6,10 @@ from PIL import Image, ImageDraw
 
 from manhua_pipeline.stages.stage5_render import (
     Box,
-    _fit_text,
-    _plan_and_erase_region,
     _draw_region_plan,
     _finalize_plan,
+    _fit_text,
+    _plan_and_erase_region,
     bubble_interior_box,
     effective_max_pt,
     fit_and_place_text,
