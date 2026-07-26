@@ -4,6 +4,25 @@ All notable changes to the Manhua Pipeline project will be documented in this fi
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-26
+
+### Added
+- **Stage 3 - Unified Pre-Translation Triage**:
+  - Added deterministic classifier (`triage_region`, `_strip_watermarks`, `_partition_by_triage`) running before batching to categorize regions as `empty`, `watermark`, `no_cjk`, `trivial`, or `translatable`.
+  - Added `WATERMARK_FUZZY_TOKENS` in `config.py` for OCR-tolerant substring watermark matching (`ww.`, `最新免费`, `包子漫`, `巴子`, `colamanga`, etc.) to handle OCR manglings.
+  - Hard-skips pure watermarks and empty regions before sending to LLM backends, ensuring honest completion ratio gate evaluation.
+  - Trivial single-CJK regions check locked glossary first; on miss, fall back to non-blocking deferred handling.
+  - `_build_bundle` now sends watermark-stripped `effective_text` to translation backends.
+- **Stage 1 - Detection Deduplication**:
+  - Added IoU-based deduplication (`_dedupe_raw_boxes`) for same-class same-page bounding boxes before reading-order sorting and ID assignment (`DEDUP_IOU_THRESHOLD = 0.90`).
+
+### Fixed
+- **Stage 5 - Black Box on Dark / Low-Coverage Bubbles**:
+  - Scoped `_dominant_fill_color` sampling to a padded ring around the text box instead of the whole crop, preventing dark panel backgrounds from misidentifying white bubble fill.
+  - Raised `BUBBLE_FILL_MIN_COVERAGE` to `0.40` and added a dark-fill safety guard that falls back to white when fill is dark at low coverage.
+- **Stage 5 - Credits Page Stretch**:
+  - Ensured credits page renders at native template aspect ratio without vertical stretching (`CREDITS_MATCH_PAGE_SIZE = False`).
+
 ## [0.5.0] - 2026-07-25
 
 ### Added
