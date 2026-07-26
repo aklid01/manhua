@@ -11,6 +11,7 @@ DETECTION_MODEL = MODEL_DETECTION
 DETECTION_CONF = 0.35
 OVERLAY_ENABLED = True
 READING_ORDER_BAND_FRACTION = 0.02
+DEDUP_IOU_THRESHOLD = 0.90  # merge same-class same-page boxes above this IoU
 
 # ---- Detector backend ----
 DETECTOR_BACKEND = "rtdetr"  # "yolov8" (fallback) | "rtdetr"
@@ -158,9 +159,7 @@ BUBBLE_WHITE_THRESHOLD = 220
 # --- Colored / non-white panel erasing ---
 BUBBLE_FILL_MODE = "dominant"  # "white" (legacy) | "dominant"
 BUBBLE_FILL_TOLERANCE = 42  # max per-channel-ish RGB distance to the fill color
-BUBBLE_FILL_MIN_COVERAGE = (
-    0.15  # if dominant mask covers < this frac of crop, fall back
-)
+BUBBLE_FILL_MIN_COVERAGE = 0.40  # if dominant mask covers < this frac of crop, fall back
 TEXT_ERASE_PADDING_PX = 12
 TEXT_LAYOUT_PADDING_PX = 8
 TEXT_ERASE_DILATION_PX = 5
@@ -182,7 +181,7 @@ STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "
 # ---- Credits page ----
 CREDITS_DIR = "assets/credits"
 CREDITS_TEXT_FILL = (240, 236, 225)
-CREDITS_MATCH_PAGE_SIZE = True
+CREDITS_MATCH_PAGE_SIZE = False
 
 _CREDITS_3COL = [
     ("scanlator", 0.185, 0.852, "center", 34, 0.24, 0.030),

@@ -195,7 +195,8 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
                 best, best_area = b, area
         return best
 
-    # Sort all speech and narration regions in reading order
+    # Dedup then sort in reading order
+    raw_boxes = _dedupe_raw_boxes(raw_boxes, config)
     page_height = image.height
     band = page_height * config.READING_ORDER_BAND_FRACTION
     sorted_boxes = _reading_order_sort(raw_boxes, band)
@@ -250,6 +251,60 @@ def _reading_order_sort(boxes, band_height):
     """Sort boxes primarily top-to-bottom, then left-to-right within a vertical band."""
     bh = max(1.0, band_height)
     return sorted(boxes, key=lambda b: (round(b["y"] / bh), b["x"]))
+
+
+def _iou(a: dict, b: dict) -> float:
+    """Intersection-over-union of two {x, y, w, h} bbox dicts."""
+    ax0, ay0, ax1, ay1 = a["x"], a["y"], a["x"] + a["w"], a["y"] + a["h"]
+    bx0, by0, bx1, by1 = b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]
+    iw = max(0, min(ax1, bx1) - max(ax0, bx0))
+    ih = max(0, min(ay1, by1) - max(ay0, by0))
+    inter = iw * ih
+    if inter == 0:
+        return 0.0
+    union = a["w"] * a["h"] + b["w"] * b["h"] - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
+    """Drop near-duplicate detections of the same class on the same page.
+
+    Keeps the highest-confidence box in each duplicate cluster. Runs before
+    reading-order sort and ID assignment so IDs stay contiguous.
+    """
+    iou_thresh = float(getattr(config, "DEDUP_IOU_THRESHOLD", 0.90))
+
+    by_type: dict[str, list[dict]] = {}
+    for r in raw_boxes:
+        key = r.get("type", "")
+        by_type.setdefault(key, []).append(r)
+
+    kept: list[dict] = []
+    dropped: list = []
+
+    for _type, group in by_type.items():
+        group_sorted = sorted(group, key=lambda r: r.get("confidence", r.get("conf", 0.0)), reverse=True)
+        survivors: list[dict] = []
+        for r in group_sorted:
+            bbox_r = r.get("bbox") or {"x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"]}
+            is_dup = False
+            for s in survivors:
+                bbox_s = s.get("bbox") or {"x": s["x"], "y": s["y"], "w": s["w"], "h": s["h"]}
+                if _iou(bbox_r, bbox_s) >= iou_thresh:
+                    is_dup = True
+                    dropped.append(r)
+                    break
+            if not is_dup:
+                survivors.append(r)
+        kept.extend(survivors)
+
+    if dropped:
+        logger.info(
+            "[%d/%d %s] Dedup removed %d duplicate raw box(es)",
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, len(dropped),
+        )
+
+    return kept
 
 
 def _resolve_model(model_name_or_path: str, config) -> str:
@@ -382,6 +437,7 @@ def _detect_page_regions(
             page_width, page_height = tmp_im.size
 
     raw_boxes = _process_predictions(result, page_num, page_height)
+    raw_boxes = _dedupe_raw_boxes(raw_boxes, config)
     band = page_height * config.READING_ORDER_BAND_FRACTION
     sorted_boxes = _reading_order_sort(raw_boxes, band)
 

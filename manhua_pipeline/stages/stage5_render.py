@@ -746,17 +746,27 @@ def _dominant_fill_color(
 ) -> tuple[int, int, int]:
     """Estimate the panel's flat background color.
 
-    Samples a coarse grid over the crop, EXCLUDES the text-glyph area, and
-    returns the most common quantized color. Works for white bubbles (returns
-    ~white) and colored panels (returns the panel color).
+    Samples a coarse grid over a padded ring AROUND the text box (the balloon
+    interior near the glyphs), excluding the glyph area itself. Falls back to
+    whole-crop sampling when no text box is given. This avoids dark background
+    pixels dominating when a small white bubble sits inside a large bounding box.
     """
     img = bubble_crop.convert("RGB")
     w, h = img.size
     if w == 0 or h == 0:
         return (255, 255, 255)
 
-    step_x = max(1, w // 40)
-    step_y = max(1, h // 40)
+    if local_text_box is not None:
+        pad = max(6, min(local_text_box.w, local_text_box.h) // 4)
+        sx0 = max(0, local_text_box.x - pad)
+        sy0 = max(0, local_text_box.y - pad)
+        sx1 = min(w, local_text_box.x2 + pad)
+        sy1 = min(h, local_text_box.y2 + pad)
+    else:
+        sx0, sy0, sx1, sy1 = 0, 0, w, h
+
+    step_x = max(1, (sx1 - sx0) // 40)
+    step_y = max(1, (sy1 - sy0) // 40)
 
     tx0 = tx1 = ty0 = ty1 = -1
     if local_text_box is not None:
@@ -767,12 +777,11 @@ def _dominant_fill_color(
         return tx0 <= px < tx1 and ty0 <= py < ty1
 
     counter: Counter = Counter()
-    for py in range(0, h, step_y):
-        for px in range(0, w, step_x):
+    for py in range(sy0, sy1, step_y):
+        for px in range(sx0, sx1, step_x):
             if _in_text(px, py):
                 continue
             r, g, b = img.getpixel((px, py))[:3]
-            # Quantize to 16-level buckets to group near-identical fills.
             counter[(r // 16, g // 16, b // 16)] += 1
 
     if not counter:
@@ -780,18 +789,14 @@ def _dominant_fill_color(
 
     (qr, qg, qb), _ = counter.most_common(1)[0]
 
-    # Average the ACTUAL pixels in the winning bucket (bucket-center
-    # dequantization is what turned white into off-white).
     rs, gs, bs = [], [], []
-    for py in range(0, h, step_y):
-        for px in range(0, w, step_x):
+    for py in range(sy0, sy1, step_y):
+        for px in range(sx0, sx1, step_x):
             if _in_text(px, py):
                 continue
             r, g, b = img.getpixel((px, py))[:3]
             if (r // 16, g // 16, b // 16) == (qr, qg, qb):
-                rs.append(r)
-                gs.append(g)
-                bs.append(b)
+                rs.append(r); gs.append(g); bs.append(b)
 
     if not rs:
         return (qr * 16 + 8, qg * 16 + 8, qb * 16 + 8)
@@ -800,7 +805,6 @@ def _dominant_fill_color(
     g = round(sum(gs) / len(gs))
     b = round(sum(bs) / len(bs))
 
-    # Snap near-pure so ordinary white bubbles are byte-identical to the old output.
     if r >= 248 and g >= 248 and b >= 248:
         return (255, 255, 255)
     if r <= 6 and g <= 6 and b <= 6:
@@ -1171,12 +1175,13 @@ def _plan_and_erase_region(
         sibling_text_boxes=sibling_text_boxes,
     )
 
-    # Coverage guard: fall back to solid rect mask if fill mask is too sparse.
-    min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.15))
+    min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.40))
     mask_hist = bubble_mask.histogram()
     mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
     crop_area = max(1, bubble_box.w * bubble_box.h)
-    if (mask_pixels / crop_area) < min_cov:
+    coverage = mask_pixels / crop_area
+
+    if coverage < min_cov:
         logger.warning(
             "[%d/%d %s] Page %d %s -> low fill-mask coverage (%.3f); "
             "falling back to padded text-box erase.",
@@ -1185,9 +1190,26 @@ def _plan_and_erase_region(
             _STAGE_NAME,
             page_num,
             rid,
-            mask_pixels / crop_area,
+            coverage,
         )
         bubble_mask = _solid_rect_mask(bubble_box, erase_box)
+
+    def _is_dark(c: tuple[int, int, int]) -> bool:
+        return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] < 96
+
+    if fill_color is not None and _is_dark(fill_color) and coverage < min_cov:
+        logger.warning(
+            "[%d/%d %s] Page %d %s -> dark fill %s at low coverage %.2f; "
+            "falling back to white.",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            page_num,
+            rid,
+            fill_color,
+            coverage,
+        )
+        fill_color = (255, 255, 255)
 
     debug_dir = (render_dir / "debug") if render_dir else None
     do_debug = debug_dir and should_debug_region(rid, config)

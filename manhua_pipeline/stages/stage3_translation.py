@@ -96,6 +96,130 @@ def _is_trivial_region(original_text: str, config) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Pre-translation triage
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TriageResult:
+    reason: str  # empty | watermark | no_cjk | trivial | translatable
+    effective_text: str
+
+
+def _strip_watermarks(text: str, config) -> str:
+    """Remove watermark lines; keep real dialogue lines."""
+    if not text:
+        return ""
+    norm = re.sub(r"\\(?:r\\n|n|r)", "\n", text, flags=re.IGNORECASE)
+    patterns = getattr(config, "WATERMARK_REGEX", [])
+    kept = []
+    for ln in norm.split("\n"):
+        s = ln.strip()
+        if not s:
+            continue
+        is_wm = any(p.search(s) for p in patterns)
+        if not is_wm:
+            kept.append(ln)
+    return "\n".join(kept).strip()
+
+
+def _cjk_count(text: str) -> int:
+    return len(_CJK_RE.findall(text or ""))
+
+
+def triage_region(original_text: str, config) -> TriageResult:
+    """Classify a region BEFORE batching. Deterministic; no side effects."""
+    raw = (original_text or "").strip()
+
+    if not raw:
+        return TriageResult("empty", "")
+
+    effective = _strip_watermarks(raw, config)
+
+    if not effective:
+        return TriageResult("watermark", "")
+
+    if _cjk_count(effective) == 0:
+        return TriageResult("no_cjk", effective)
+
+    trivial_max = int(getattr(config, "OLLAMA_TRIVIAL_CJK_CHARS", 1))
+    if _cjk_count(effective) <= trivial_max:
+        return TriageResult("trivial", effective)
+
+    return TriageResult("translatable", effective)
+
+
+def _skip_row(r: dict, skip_reason: str) -> dict:
+    return {
+        "region_id": r["region_id"],
+        "page_number": r.get("page_number"),
+        "original_text": r.get("original_text", ""),
+        "effective_text": r.get("effective_text", ""),
+        "literal_translation": "",
+        "translated": False,
+        "skip_reason": skip_reason,
+        "glossary_terms_applied": [],
+        "glossary_conflict": False,
+        "translation_source": None,
+    }
+
+
+def _translated_row(r: dict, text: str, *, source: str, glossary_terms: list) -> dict:
+    return {
+        "region_id": r["region_id"],
+        "page_number": r.get("page_number"),
+        "original_text": r.get("original_text", ""),
+        "effective_text": r.get("effective_text", ""),
+        "literal_translation": text,
+        "translated": True,
+        "skip_reason": None,
+        "glossary_terms_applied": glossary_terms,
+        "glossary_conflict": False,
+        "translation_source": source,
+    }
+
+
+def _partition_by_triage(
+    regions: list[dict], config, locked_index: dict[str, str]
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Classify every region up front before batching.
+
+    Returns:
+        translatable: regions to send to qwen (effective_text set)
+        hard_skipped: finished result rows for empty/watermark/no_cjk
+        trivial_fallback: single-CJK that missed glossary -> existing behavior
+    """
+    translatable: list[dict] = []
+    hard_skipped: list[dict] = []
+    trivial_fallback: list[dict] = []
+
+    for r in regions:
+        raw = r.get("original_text", "")
+        res = triage_region(raw, config)
+        r["effective_text"] = res.effective_text
+
+        if res.reason == "empty":
+            hard_skipped.append(_skip_row(r, "no_usable_text"))
+        elif res.reason == "watermark":
+            hard_skipped.append(_skip_row(r, "watermark"))
+        elif res.reason == "no_cjk":
+            trivial_fallback.append(r)
+        elif res.reason == "trivial":
+            hit = locked_index.get(res.effective_text)
+            if hit:
+                hard_skipped.append(_translated_row(
+                    r, hit, source="glossary",
+                    glossary_terms=[res.effective_text],
+                ))
+            else:
+                trivial_fallback.append(r)
+        else:
+            translatable.append(r)
+
+    return translatable, hard_skipped, trivial_fallback
+
+
+# ---------------------------------------------------------------------------
 # Backend protocol
 # ---------------------------------------------------------------------------
 
@@ -460,7 +584,10 @@ def _build_bundle(usable: list[dict], locked: list[dict]) -> dict:
         for t in locked
     ]
     regions = [
-        {"region_id": r["region_id"], "original_text": r["original_text"]}
+        {
+            "region_id": r["region_id"],
+            "original_text": r.get("effective_text") or r["original_text"],
+        }
         for r in usable
     ]
     return {
@@ -734,9 +861,32 @@ def run_translation(
     )
 
     all_results = ocr_data.get("results", [])
-    overridden_regions, usable, skipped = _partition_regions_translation(
-        all_results, overrides, config
+
+    # Pre-translation triage: classify regions before batching.
+    # Hard-skip watermark/empty/no_cjk; resolve trivial glossary hits up front.
+    # Override regions bypass triage entirely - overrides always win.
+    locked_index_pre = _build_locked_index(_locked_terms(glossary))
+    non_override_results = [r for r in all_results if r["region_id"] not in overrides]
+    override_results = [r for r in all_results if r["region_id"] in overrides]
+
+    translatable_results, triage_hard_skipped, trivial_fallback = _partition_by_triage(
+        non_override_results, config, locked_index_pre
     )
+    if triage_hard_skipped or trivial_fallback:
+        logger.info(
+            "[%d/%d %s] Triage: %d hard-skipped, %d trivial fallback, %d translatable",
+            _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME,
+            len(triage_hard_skipped), len(trivial_fallback), len(translatable_results),
+        )
+
+    # Combine override regions + translatable + trivial fallback for the existing partition
+    regions_for_partition = override_results + translatable_results + trivial_fallback
+    overridden_regions, usable, skipped = _partition_regions_translation(
+        regions_for_partition, overrides, config
+    )
+    # Append triage hard-skips and glossary-resolved rows into skipped so
+    # _write_output can emit them with their skip_reason/translation_source.
+    skipped = list(skipped) + triage_hard_skipped
 
     # Short-circuit: nothing to translate via LLM
     if not usable:
@@ -1148,21 +1298,39 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
 
     # Skipped regions
     for region in skipped:
-        note = region.get("note") or ""
-        skip_reason = "ocr_error" if "ocr_error" in note else "no_usable_text"
-        results.append(
-            {
-                "region_id": region["region_id"],
-                "page_number": region["page_number"],
-                "original_text": region["original_text"],
-                "literal_translation": "",
-                "translated": False,
-                "skip_reason": skip_reason,
-                "glossary_terms_applied": [],
-                "glossary_conflict": False,
-                "translation_source": None,
-            }
-        )
+        if "skip_reason" in region and "translated" in region:
+            # Pre-computed row from triage (watermark/no_cjk/glossary hit) - emit as-is.
+            results.append(
+                {
+                    "region_id": region["region_id"],
+                    "page_number": region.get("page_number"),
+                    "original_text": region.get("original_text", ""),
+                    "literal_translation": region.get("literal_translation", ""),
+                    "translated": region["translated"],
+                    "skip_reason": region["skip_reason"],
+                    "glossary_terms_applied": region.get("glossary_terms_applied", []),
+                    "glossary_conflict": region.get("glossary_conflict", False),
+                    "translation_source": region.get("translation_source"),
+                }
+            )
+            if region["translated"]:
+                translated_count += 1
+        else:
+            note = region.get("note") or ""
+            skip_reason = "ocr_error" if "ocr_error" in note else "no_usable_text"
+            results.append(
+                {
+                    "region_id": region["region_id"],
+                    "page_number": region["page_number"],
+                    "original_text": region["original_text"],
+                    "literal_translation": "",
+                    "translated": False,
+                    "skip_reason": skip_reason,
+                    "glossary_terms_applied": [],
+                    "glossary_conflict": False,
+                    "translation_source": None,
+                }
+            )
 
     glossary_version = glossary.get("version", "v1")
     output = {
