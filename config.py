@@ -68,6 +68,7 @@ WATERMARK_REGEX = [re.compile(p, re.IGNORECASE) for p in WATERMARK_PATTERNS]
 WATERMARK_FUZZY_TOKENS = (
     # site names + common OCR manglings
     "包子漫", "包子",
+    "巴子",    # OCR misread of 包子 (包→巴, 漫→量 etc.)
     "baozim", "baozi",
     "漫画屋", "colamanga", "cola manga", "manhuagui",
     "腾讯", "tencent",
