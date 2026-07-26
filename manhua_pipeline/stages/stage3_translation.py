@@ -112,12 +112,14 @@ def _strip_watermarks(text: str, config) -> str:
         return ""
     norm = re.sub(r"\\(?:r\\n|n|r)", "\n", text, flags=re.IGNORECASE)
     patterns = getattr(config, "WATERMARK_REGEX", [])
+    fuzzy = getattr(config, "WATERMARK_FUZZY_TOKENS", ())
     kept = []
     for ln in norm.split("\n"):
         s = ln.strip()
         if not s:
             continue
-        is_wm = any(p.search(s) for p in patterns)
+        sl = s.lower()
+        is_wm = any(p.search(s) for p in patterns) or any(tok in sl for tok in fuzzy)
         if not is_wm:
             kept.append(ln)
     return "\n".join(kept).strip()

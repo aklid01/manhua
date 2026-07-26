@@ -63,6 +63,20 @@ WATERMARK_PATTERNS = [
 ]
 WATERMARK_REGEX = [re.compile(p, re.IGNORECASE) for p in WATERMARK_PATTERNS]
 
+# Fuzzy substring tokens for OCR-mangled watermark variants the regex misses.
+# Matched case-insensitively against each OCR line.
+WATERMARK_FUZZY_TOKENS = (
+    # site names + common OCR manglings
+    "包子漫", "包子",
+    "baozim", "baozi",
+    "漫画屋", "colamanga", "cola manga", "manhuagui",
+    "腾讯", "tencent",
+    # promo phrases (often truncated by OCR)
+    "最新免费", "免费漫", "最新连载", "免费阅读", "在线漫画",
+    # url-ish fragments (OCR drops chars: www -> ww, .com -> cnn/cm/etc.)
+    "www.", "ww.", ".com", ".net", ".cc", "http",
+)
+
 # ---- Detection types (v0 handles the first two) ----
 TYPE_SPEECH = "speech_bubble"
 TYPE_NARRATION = "narration"
