@@ -376,11 +376,12 @@ def test_detection_rtdetr_backend(mock_resolve, tmp_path):
     for r in regs:
         assert expected_keys.issubset(r)
         assert r["erase_mask"]["type"] == "rect"
+        target_box = r["parent_bubble"] or r["bbox"]
         assert r["erase_mask"]["coords"] == [
-            r["bbox"]["x"],
-            r["bbox"]["y"],
-            r["bbox"]["w"],
-            r["bbox"]["h"],
+            target_box["x"],
+            target_box["y"],
+            target_box["w"],
+            target_box["h"],
         ]
 
     # Verify visual debug overlay is written
@@ -483,4 +484,3 @@ def test_ios_does_not_merge_across_classes():
     ]
     kept = _dedupe_raw_boxes(regions, _Cfg())
     assert len(kept) == 2
-

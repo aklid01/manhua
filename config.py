@@ -12,8 +12,8 @@ DETECTION_CONF = 0.35
 OVERLAY_ENABLED = True
 READING_ORDER_BAND_FRACTION = 0.02
 DEDUP_IOU_THRESHOLD = 0.90  # merge same-class same-page boxes above this IoU
-DEDUP_IOS_THRESHOLD = 0.85   # merge same-class same-page boxes when the smaller
-                             # is >=85% contained in the other (catches offset/size dups)
+DEDUP_IOS_THRESHOLD = 0.85  # merge same-class same-page boxes when the smaller
+# is >=85% contained in the other (catches offset/size dups)
 
 # ---- Detector backend ----
 DETECTOR_BACKEND = "rtdetr"  # "yolov8" (fallback) | "rtdetr"

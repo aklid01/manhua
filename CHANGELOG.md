@@ -4,6 +4,10 @@ All notable changes to the Manhua Pipeline project will be documented in this fi
 
 ## [Unreleased]
 
+### Fixed
+- **Stage 1 - Detection Deduplication IoS**:
+  - Added IoS (Intersection over Smaller) containment metric (`_ios`) alongside IoU in `_dedupe_raw_boxes` to catch offset and size mismatch duplicate detections (`DEDUP_IOS_THRESHOLD = 0.85`).
+
 ## [0.6.0] - 2026-07-26
 
 ### Added
