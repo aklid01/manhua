@@ -266,6 +266,27 @@ def _iou(a: dict, b: dict) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def _ios(a: dict, b: dict) -> float:
+    """Intersection over the SMALLER box's area.
+
+    Catches near-duplicate detections that IoU misses when the two boxes
+    differ in size or are offset (e.g. one detection slightly smaller/shifted
+    than the other of the same panel).
+    """
+    ax0, ay0, ax1, ay1 = a["x"], a["y"], a["x"] + a["w"], a["y"] + a["h"]
+    bx0, by0, bx1, by1 = b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]
+
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    iw, ih = max(0, ix1 - ix0), max(0, iy1 - iy0)
+    inter = iw * ih
+    if inter == 0:
+        return 0.0
+
+    smaller = min(a["w"] * a["h"], b["w"] * b["h"])
+    return inter / smaller if smaller > 0 else 0.0
+
+
 def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
     """Drop near-duplicate detections of the same class on the same page.
 
@@ -273,6 +294,7 @@ def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
     reading-order sort and ID assignment so IDs stay contiguous.
     """
     iou_thresh = float(getattr(config, "DEDUP_IOU_THRESHOLD", 0.90))
+    ios_thresh = float(getattr(config, "DEDUP_IOS_THRESHOLD", 0.85))
 
     by_type: dict[str, list[dict]] = {}
     for r in raw_boxes:
@@ -302,9 +324,21 @@ def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
                     "w": s["w"],
                     "h": s["h"],
                 }
-                if _iou(bbox_r, bbox_s) >= iou_thresh:
+                iou = _iou(bbox_r, bbox_s)
+                ios = _ios(bbox_r, bbox_s)
+                if iou >= iou_thresh or ios >= ios_thresh:
                     is_dup = True
                     dropped.append(r)
+                    logger.info(
+                        "[%d/%d %s] Dedup drop %s (dup of %s) IoU=%.3f IoS=%.3f",
+                        _STAGE_INDEX,
+                        _TOTAL_STAGES,
+                        _STAGE_NAME,
+                        r.get("region_id", "?"),
+                        s.get("region_id", "?"),
+                        iou,
+                        ios,
+                    )
                     break
             if not is_dup:
                 survivors.append(r)

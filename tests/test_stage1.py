@@ -386,3 +386,101 @@ def test_detection_rtdetr_backend(mock_resolve, tmp_path):
     # Verify visual debug overlay is written
     overlay = ws / "stage1_detection" / "overlays" / "001_overlay.png"
     assert overlay.exists()
+
+
+def test_ios_catches_offset_size_mismatch_duplicate():
+    from manhua_pipeline.stages.stage1_detection import _ios, _iou
+
+    a = {"x": 76, "y": 1042, "w": 926, "h": 610}
+    b = {"x": 85, "y": 1043, "w": 813, "h": 617}
+    assert _iou(a, b) < 0.90
+    assert _ios(a, b) >= 0.85
+
+
+def test_dedupe_drops_lower_confidence_ios_duplicate():
+    from manhua_pipeline.stages.stage1_detection import _dedupe_raw_boxes
+
+    class _Cfg:
+        DEDUP_IOU_THRESHOLD = 0.90
+        DEDUP_IOS_THRESHOLD = 0.85
+
+    regions = [
+        {
+            "region_id": "P006_R002",
+            "page_number": 6,
+            "type": "speech_bubble",
+            "bbox": {"x": 76, "y": 1042, "w": 926, "h": 610},
+            "confidence": 0.73,
+            "reading_order": 2,
+        },
+        {
+            "region_id": "P006_R004",
+            "page_number": 6,
+            "type": "speech_bubble",
+            "bbox": {"x": 85, "y": 1043, "w": 813, "h": 617},
+            "confidence": 0.33,
+            "reading_order": 4,
+        },
+    ]
+    kept = _dedupe_raw_boxes(regions, _Cfg())
+    assert len(kept) == 1
+    assert kept[0]["region_id"] == "P006_R002"
+
+
+def test_ios_does_not_merge_distinct_bubbles():
+    from manhua_pipeline.stages.stage1_detection import _dedupe_raw_boxes
+
+    class _Cfg:
+        DEDUP_IOU_THRESHOLD = 0.90
+        DEDUP_IOS_THRESHOLD = 0.85
+
+    regions = [
+        {
+            "region_id": "P010_R001",
+            "page_number": 10,
+            "type": "speech_bubble",
+            "bbox": {"x": 95, "y": 420, "w": 482, "h": 184},
+            "confidence": 0.95,
+            "reading_order": 1,
+        },
+        {
+            "region_id": "P010_R002",
+            "page_number": 10,
+            "type": "speech_bubble",
+            "bbox": {"x": 344, "y": 1336, "w": 628, "h": 429},
+            "confidence": 0.97,
+            "reading_order": 2,
+        },
+    ]
+    kept = _dedupe_raw_boxes(regions, _Cfg())
+    assert len(kept) == 2
+
+
+def test_ios_does_not_merge_across_classes():
+    from manhua_pipeline.stages.stage1_detection import _dedupe_raw_boxes
+
+    class _Cfg:
+        DEDUP_IOU_THRESHOLD = 0.90
+        DEDUP_IOS_THRESHOLD = 0.85
+
+    regions = [
+        {
+            "region_id": "A",
+            "page_number": 6,
+            "type": "speech_bubble",
+            "bbox": {"x": 76, "y": 1042, "w": 926, "h": 610},
+            "confidence": 0.7,
+            "reading_order": 2,
+        },
+        {
+            "region_id": "B",
+            "page_number": 6,
+            "type": "narration",
+            "bbox": {"x": 76, "y": 1042, "w": 926, "h": 610},
+            "confidence": 0.55,
+            "reading_order": 3,
+        },
+    ]
+    kept = _dedupe_raw_boxes(regions, _Cfg())
+    assert len(kept) == 2
+
