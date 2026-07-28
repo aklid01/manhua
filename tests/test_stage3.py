@@ -315,3 +315,39 @@ def test_cjk_char_count_and_is_trivial_region():
     assert _is_trivial_region("一", config) is True
     assert _is_trivial_region("你好", config) is False
     assert _is_trivial_region("ABC", config) is False
+
+
+def test_short_cjk_dialogue_triage():
+    """Short CJK dialogue with a signal must NOT be skipped as trivial noise.
+
+    Regression guard for the "诶？" ("Huh?") speech-bubble case: a single CJK
+    char + dialogue punctuation is real dialogue and must reach the backend.
+    """
+    from manhua_pipeline.stages.stage3_translation import triage_region
+
+    # Real short dialogue -> translatable
+    assert (
+        triage_region("诶？", config).reason == "translatable"
+    )  # interjection + fullwidth ?
+    assert triage_region("诶?", config).reason == "translatable"  # ASCII ?
+    assert triage_region("啊！", config).reason == "translatable"  # interjection + !
+    assert (
+        triage_region("嗯", config).reason == "translatable"
+    )  # bare known interjection
+
+    # Genuine debris / non-dialogue single chars -> still trivial (skipped)
+    assert triage_region("一", config).reason == "trivial"  # numeral one, no signal
+    assert triage_region("王", config).reason == "trivial"  # lone char, no signal
+
+    # Controls unchanged
+    assert triage_region("滚吧！", config).reason == "translatable"
+    assert triage_region("", config).reason == "empty"
+    assert triage_region("Hello", config).reason == "no_cjk"
+
+
+def test_short_cjk_dialogue_toggle_off(monkeypatch):
+    """TRANSLATE_SHORT_CJK_DIALOGUE=False restores the strict skip."""
+    from manhua_pipeline.stages.stage3_translation import triage_region
+
+    monkeypatch.setattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", False, raising=False)
+    assert triage_region("诶？", config).reason == "trivial"

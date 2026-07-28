@@ -129,6 +129,36 @@ def _cjk_count(text: str) -> int:
     return len(_CJK_RE.findall(text or ""))
 
 
+# Emotive / sentence punctuation that marks a short region as real dialogue
+# rather than OCR debris (e.g. "诶？", "啊！", "嗯…"). Both fullwidth and ASCII.
+_DIALOGUE_SIGNAL_PUNCT = frozenset("?？!！~～…。．⁈⁇‼♥♡")
+
+# Common standalone Chinese interjections/reactions. A single-char region that
+# matches one of these is dialogue even without punctuation (e.g. bare "嗯").
+# Why is this necessary? Because my dumbass past self thought it was a good idea
+# to implement this as "Trivial means no-text", and then realized later that it was
+# a bad idea.
+_CJK_INTERJECTIONS = frozenset(
+    "诶欸嗯唔呒啊阿哈呵嘿嘻咦哦噢喔唉哎呃哼呀呐喂嘛啦"
+    "咧哇呜咳嘶啧哟唷嚯嗝嗬嘞嚄"
+    "嘘呸嗤吖呦啐切"
+)
+
+
+def _has_dialogue_signal(effective: str) -> bool:
+    """True if a short CJK region carries a real-dialogue signal.
+
+    Two cheap, deterministic checks so genuine one/two-character dialogue
+    ("诶？", "嗯", "啊！") is NOT dropped as trivial noise:
+      1. contains emotive/sentence punctuation, or
+      2. its CJK core is a known standalone interjection.
+    """
+    if any(ch in _DIALOGUE_SIGNAL_PUNCT for ch in effective):
+        return True
+    cjk_core = "".join(ch for ch in effective if _contains_cjk(ch))
+    return cjk_core in _CJK_INTERJECTIONS
+
+
 def triage_region(original_text: str, config) -> TriageResult:
     """Classify a region BEFORE batching. Deterministic; no side effects."""
     raw = (original_text or "").strip()
@@ -146,6 +176,15 @@ def triage_region(original_text: str, config) -> TriageResult:
 
     trivial_max = int(getattr(config, "OLLAMA_TRIVIAL_CJK_CHARS", 1))
     if _cjk_count(effective) <= trivial_max:
+        # A short CJK region is still real dialogue if it carries a dialogue
+        # signal (punctuation or a known interjection). Only treat it as
+        # trivial noise when it has no such signal. Set
+        # TRANSLATE_SHORT_CJK_DIALOGUE=False to restore the strict skip, or
+        # OLLAMA_TRIVIAL_CJK_CHARS=0 to translate ALL short CJK.
+        if getattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", True) and (
+            _has_dialogue_signal(effective)
+        ):
+            return TriageResult("translatable", effective)
         return TriageResult("trivial", effective)
 
     return TriageResult("translatable", effective)
@@ -205,7 +244,10 @@ def _partition_by_triage(
         elif res.reason == "watermark":
             hard_skipped.append(_skip_row(r, "watermark"))
         elif res.reason == "no_cjk":
-            trivial_fallback.append(r)
+            if getattr(config, "TRANSLATE_NON_CJK_DIALOGUE", False):
+                trivial_fallback.append(r)  # legacy behaviour, opt-in
+            else:
+                hard_skipped.append(_skip_row(r, "no_cjk"))
         elif res.reason == "trivial":
             hit = locked_index.get(res.effective_text)
             if hit:
@@ -217,8 +259,10 @@ def _partition_by_triage(
                         glossary_terms=[res.effective_text],
                     )
                 )
+            elif getattr(config, "TRANSLATE_TRIVIAL_WITH_LLM", False):
+                trivial_fallback.append(r)  # legacy behaviour, opt-in
             else:
-                trivial_fallback.append(r)
+                hard_skipped.append(_skip_row(r, "trivial_manual_review"))
         else:
             translatable.append(r)
 
@@ -286,6 +330,8 @@ class OllamaBackend:
         self.temperature = s.temperature
         self.max_retries = s.max_retries
         self.backoff = s.backoff
+        self.keep_alive = s.keep_alive
+        self.num_ctx = s.num_ctx
         self.system_prompt = bundle.get("READ_FIRST", "")
         glossary = bundle.get("glossary", [])
         self.gloss_txt = "\n".join(
@@ -383,7 +429,10 @@ class OllamaBackend:
     def _build_user_prompt(self, chunk, strict: bool) -> str:
         payload = json.dumps(
             [
-                {"region_id": r["region_id"], "original_text": r["original_text"]}
+                {
+                    "region_id": r["region_id"],
+                    "original_text": r.get("effective_text") or r["original_text"],
+                }
                 for r in chunk
             ],
             ensure_ascii=False,
@@ -413,6 +462,8 @@ class OllamaBackend:
             temperature=self.temperature,
             max_retries=self.max_retries,
             backoff=self.backoff,
+            num_ctx=getattr(self, "num_ctx", 2048),
+            keep_alive=getattr(self, "keep_alive", "0"),
         )
         return be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
 

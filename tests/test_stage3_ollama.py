@@ -168,9 +168,9 @@ def test_multiple_batches_all_regions_once(tmp_path, ollama_config, monkeypatch)
     _setup(
         ws,
         [
-            _ocr_entry("P001_R001", "a"),
-            _ocr_entry("P001_R002", "b"),
-            _ocr_entry("P001_R003", "c"),
+            _ocr_entry("P001_R001", "你好呀"),
+            _ocr_entry("P001_R002", "早上好"),
+            _ocr_entry("P001_R003", "再见了"),
         ],
     )
     run_translation(str(ws), ollama_config)
@@ -194,7 +194,7 @@ def test_code_fenced_json_parses(tmp_path, ollama_config, monkeypatch):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
-    _setup(ws, [_ocr_entry("P001_R001", "x")])
+    _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
     run_translation(str(ws), ollama_config)
 
     tr = _read_translation(ws)
@@ -233,7 +233,7 @@ def test_invalid_json_recovers_via_retry(tmp_path, ollama_config, monkeypatch):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
-    _setup(ws, [_ocr_entry("P001_R001", "a"), _ocr_entry("P001_R002", "b")])
+    _setup(ws, [_ocr_entry("P001_R001", "你好呀"), _ocr_entry("P001_R002", "早上好")])
     out = run_translation(str(ws), ollama_config)
 
     assert out is not None
@@ -325,7 +325,7 @@ def test_connectivity_failure_raises_clear(tmp_path, ollama_config, monkeypatch)
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
-    _setup(ws, [_ocr_entry("P001_R001", "a")])
+    _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
 
     with pytest.raises(RuntimeError) as exc:
         run_translation(str(ws), ollama_config)
@@ -392,7 +392,7 @@ def test_zero_translations_raises(tmp_path, ollama_config, monkeypatch):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
-    _setup(ws, [_ocr_entry("P001_R001", "a")])
+    _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
     with pytest.raises(ValueError):
         run_translation(str(ws), ollama_config)
 
@@ -458,7 +458,7 @@ def test_provenance_metadata_recorded(tmp_path, ollama_config, monkeypatch):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
-    _setup(ws, [_ocr_entry("P001_R001", "a")])
+    _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
     run_translation(str(ws), ollama_config)
 
     tr = _read_translation(ws)

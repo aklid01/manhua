@@ -702,12 +702,22 @@ def _run_all_from(  # noqa: C901
 
     interactive = allow_prompt and can_prompt_now(batch=False)
     use_subprocess_default = bool(getattr(config, "BATCH_SUBPROCESS", False))
+    subprocess_stages = getattr(config, "SUBPROCESS_STAGES", None)
 
     for name in order[start_idx:]:
         logger.info("=" * 60)
 
         prompt_stage = name in PROMPT_CAPABLE_STAGES
-        use_subprocess = use_subprocess_default and not (prompt_stage and interactive)
+        # SUBPROCESS_STAGES only NARROWS existing subprocessing; it never
+        # introduces it. If BATCH_SUBPROCESS is False, behaviour is unchanged.
+        if use_subprocess_default and subprocess_stages is not None:
+            use_subprocess = name in subprocess_stages and not (
+                prompt_stage and interactive
+            )
+        else:
+            use_subprocess = use_subprocess_default and not (
+                prompt_stage and interactive
+            )
 
         if use_subprocess:
             rc = _run_stage_subprocess(

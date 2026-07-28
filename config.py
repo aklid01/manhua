@@ -141,8 +141,18 @@ OLLAMA_MIN_COMPLETION_RATIO = 0.95
 OLLAMA_MAX_MISSING = 2
 OLLAMA_TRIVIAL_CJK_CHARS = 1
 OLLAMA_NUM_CTX = 2048
-OLLAMA_KEEP_ALIVE = "0"
+OLLAMA_KEEP_ALIVE = "15m"  # keep qwen resident across batches/retries/paraphrase
 OLLAMA_PROMPT_VERSION = "translation-v2"
+
+# ---- Translation triage (keep noise out of the LLM) ----
+TRANSLATE_NON_CJK_DIALOGUE = False  # True restores legacy: send no-CJK regions to qwen
+# Short CJK dialogue (1-2 chars): translate when it carries a dialogue signal
+# (punctuation like ？！… or a known interjection). Set False to skip all short
+# CJK; set OLLAMA_TRIVIAL_CJK_CHARS=0 to translate every short CJK region.
+TRANSLATE_SHORT_CJK_DIALOGUE = True
+TRANSLATE_TRIVIAL_WITH_LLM = (
+    False  # True restores legacy: send single-CJK misses to qwen
+)
 
 # ---- Paraphrase ----
 PARAPHRASE_BACKEND = "mcp"  # "manual" | "mcp" | "ollama"  (keep mcp default until you trust local output)
@@ -172,7 +182,7 @@ OLLAMA_PARA_MAX_RETRIES = 3
 OLLAMA_PARA_RETRY_BACKOFF = 1.0
 OLLAMA_PARA_MIN_COMPLETION_RATIO = 0.80
 OLLAMA_PARA_NUM_CTX = 2048
-OLLAMA_PARA_KEEP_ALIVE = "0"
+OLLAMA_PARA_KEEP_ALIVE = "15m"  # share the warm model with translation
 OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
 
 # ---- Rendering ----
@@ -211,6 +221,10 @@ LAYOUT_MIN_ANCHOR_OVERLAP = 0.5  # expanded box must still cover >=50% of text b
 
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
+
+# Stage process isolation. If defined, overrides BATCH_SUBPROCESS: only these
+# stages run in a fresh interpreter (detect/ocr need CUDA/DLL isolation).
+SUBPROCESS_STAGES = {"import", "detect", "ocr"}
 
 # ---- Credits page ----
 CREDITS_DIR = "assets/credits"
