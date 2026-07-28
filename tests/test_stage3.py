@@ -314,7 +314,9 @@ def test_cjk_char_count_and_is_trivial_region():
 
     assert _is_trivial_region("一", config) is True
     assert _is_trivial_region("你好", config) is False
-    assert _is_trivial_region("ABC", config) is False
+    # Non-CJK (Latin) text is trivial: triage hard-skips it upstream, so it
+    # is correctly non-blocking here. (Was stale: expected False.)
+    assert _is_trivial_region("ABC", config) is True
 
 
 def test_short_cjk_dialogue_triage():
@@ -351,3 +353,38 @@ def test_short_cjk_dialogue_toggle_off(monkeypatch):
 
     monkeypatch.setattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", False, raising=False)
     assert triage_region("诶？", config).reason == "trivial"
+
+
+def test_punct_only_region_passthrough():
+    """Punctuation-only bubbles ("？") render deterministically, no LLM call.
+
+    Regression guard for P022_R002: PaddleOCR dropped "诶" leaving "？".
+    Rendering "?" is still correct; it must NOT be dropped as no_cjk noise.
+    """
+    from manhua_pipeline.stages.stage3_translation import (
+        _partition_by_triage,
+        triage_region,
+    )
+
+    for t in ("？", "?", "！？", "?!", "……"):
+        assert triage_region(t, config).reason == "punct_only", t
+    assert triage_region("，", config).reason == "no_cjk"  # lone comma, no signal
+    assert triage_region("Hello?", config).reason == "no_cjk"  # has letters
+    assert triage_region("一", config).reason == "trivial"  # CJK numeral
+
+    region = {"region_id": "P022_R002", "page_number": 22, "original_text": "？"}
+    translatable, hard_skipped, trivial_fallback = _partition_by_triage(
+        [region], config, {}
+    )
+    assert translatable == []
+    row = hard_skipped[0]
+    assert row["translated"] is True
+    assert row["literal_translation"] == "?"
+    assert row["translation_source"] == "punct_passthrough"
+
+
+def test_punct_only_toggle_off(monkeypatch):
+    from manhua_pipeline.stages.stage3_translation import triage_region
+
+    monkeypatch.setattr(config, "RENDER_PUNCT_ONLY_REGIONS", False, raising=False)
+    assert triage_region("？", config).reason == "no_cjk"

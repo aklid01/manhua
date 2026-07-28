@@ -130,6 +130,24 @@ def _analyze_single_region(
             }
         )
 
+    # ocr_review (informational): a dialogue bubble PaddleOCR couldn't read
+    # (punct-only/empty). Rendered fallback shown; queued in ocr_review.json.
+    # Info severity => listed but does NOT affect SUCCESS/REVIEW/FAILED verdict.
+    if ocr_r.get("ocr_review"):
+        warnings.append(
+            {
+                "region_id": rid,
+                "page_number": page_num,
+                "category": "ocr_review",
+                "severity": "info",
+                "message": (
+                    "Dialogue bubble OCR'd to "
+                    f"{ocr_r.get('ocr_review_reason') or 'no words'}; "
+                    "queued for manual OCR correction (see ocr_review.json)."
+                ),
+            }
+        )
+
     # missing_translation
     if ocr_r.get("has_usable_text") and (
         rid not in tr_map or not tr_r.get("translated")
@@ -225,6 +243,7 @@ def _process_region_analysis(
     needs_attention = []
     category_counts = {
         "low_ocr_confidence": 0,
+        "ocr_review": 0,
         "missing_translation": 0,
         "missing_paraphrase": 0,
         "overflow": 0,
@@ -414,6 +433,9 @@ def run_qa(workspace: str, config) -> Path:
     summary_drawn = sum(1 for r in render_results if r.get("rendered"))
     summary_left = sum(1 for r in render_results if not r.get("rendered"))
     summary_overflow = sum(1 for r in render_results if r.get("overflow"))
+    ocr_review_regions = [
+        r.get("region_id") for r in ocr_data.get("results", []) if r.get("ocr_review")
+    ]
 
     qa_dir = ws / config.STAGE_FOLDERS["qa"]
     qa_dir.mkdir(parents=True, exist_ok=True)
@@ -439,6 +461,13 @@ def run_qa(workspace: str, config) -> Path:
             "drawn": summary_drawn,
             "left": summary_left,
             "overflow": summary_overflow,
+            "ocr_review_count": len(ocr_review_regions),
+            "ocr_review_regions": ocr_review_regions,
+            "ocr_review_file": (
+                f"{config.STAGE_FOLDERS['ocr']}/ocr_review.json"
+                if ocr_review_regions
+                else None
+            ),
         },
     }
 

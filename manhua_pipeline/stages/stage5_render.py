@@ -593,8 +593,9 @@ def _load_font(
     if not p.exists():
         if getattr(config, "FONT_MISSING_HARD_ERROR", True):
             raise FileNotFoundError(
-                f"Font file not found at {font_path}. Place ComicNeue-Regular.ttf in assets/fonts/ "
-                "or set FONT_MISSING_HARD_ERROR = False in config.py to use PIL default font."
+                f"Font file not found at {font_path}. Place {Path(font_path).name} "
+                "in assets/fonts/ (bundled with the repo) or set "
+                "FONT_MISSING_HARD_ERROR = False in config.py to use the PIL default font."
             )
         else:
             logger.warning(
@@ -1325,7 +1326,7 @@ def _plan_and_erase_region(
         text_to_draw = final_text.upper()
 
     # 5. Fit (compute placements; DO NOT draw)
-    font_path = getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Regular.ttf")
+    font_path = getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Bold.ttf")
     font, lines, font_size, overflow, placements = fit_and_place_text(
         draw=draw,
         final_text=text_to_draw,
@@ -1838,7 +1839,7 @@ def run_render(workspace: str, config, run_id: str | None = None) -> Path:
         _STAGE_INDEX,
         _TOTAL_STAGES,
         _STAGE_NAME,
-        getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Regular.ttf"),
+        getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Bold.ttf"),
     )
 
     # Joins
@@ -1880,7 +1881,7 @@ def run_render(workspace: str, config, run_id: str | None = None) -> Path:
         "chapter_id": manifest.get("chapter_id", "unknown"),
         "stage": "render",
         "generated_at": now,
-        "font": getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Regular.ttf"),
+        "font": str(getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Bold.ttf")),
         "results": render_results,
         "pages": page_reports,
     }

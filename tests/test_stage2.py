@@ -384,3 +384,177 @@ def test_ocr_close_clears_singleton():
     assert stage2_ocr._OCR_ENGINE is None
     mock_engine.close.assert_called_once()
     mock_inner.close.assert_called_once()
+
+
+def test_ocr_suspicious_detector():
+    """Conservative detector: only punct-only/empty text with no real words."""
+    from manhua_pipeline.stages.stage2_ocr import _has_cjk, _is_punct_or_empty
+
+    assert _is_punct_or_empty("？") is True
+    assert _is_punct_or_empty("") is True
+    assert _is_punct_or_empty("！？") is True
+    assert _is_punct_or_empty("   ") is True
+    assert _is_punct_or_empty("诶？") is False  # has CJK
+    assert _is_punct_or_empty("诶") is False  # has CJK
+    assert _is_punct_or_empty("hi") is False  # has letters
+    assert _has_cjk("诶") is True
+    assert _has_cjk("？") is False
+
+
+def test_ocr_review_flow(tmp_path, monkeypatch):
+    """End-to-end: punct-only speech bubble is flagged, review file + crop
+    written, and a manual correction is applied on re-run (non-blocking)."""
+    import json
+
+    from PIL import Image
+
+    import config
+    from manhua_pipeline.stages import stage2_ocr as s2
+
+    ws = tmp_path / "series" / "ch1"
+    (ws / "pages").mkdir(parents=True)
+    (ws / "stage1_detection").mkdir(parents=True)
+    Image.new("RGB", (1100, 1800), (255, 255, 255)).save(ws / "pages" / "022.png")
+    (ws / "manifest.json").write_text(
+        json.dumps(
+            {
+                "chapter_id": "ch1",
+                "pages": [{"page_number": 22, "filename": "022.png", "skip": False}],
+                "completed_stages": ["import", "detect"],
+                "current_stage": "ocr",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(
+            {
+                "regions": [
+                    {
+                        "region_id": "P022_R002",
+                        "page_number": 22,
+                        "type": "speech_bubble",
+                        "read_region": {"x": 840, "y": 1571, "w": 131, "h": 93},
+                        "bbox": {"x": 840, "y": 1571, "w": 131, "h": 93},
+                        "is_free_text": False,
+                    },
+                    {
+                        "region_id": "P022_R003",
+                        "page_number": 22,
+                        "type": "speech_bubble",
+                        "read_region": {"x": 100, "y": 100, "w": 200, "h": 80},
+                        "bbox": {"x": 100, "y": 100, "w": 200, "h": 80},
+                        "is_free_text": False,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_read_best(engine, crop_im, cfg):
+        return (
+            ("？", 0.95, 0.95, False)
+            if crop_im.width < 160
+            else ("你好呀", 0.92, 0.9, False)
+        )
+
+    monkeypatch.setattr(s2, "_read_best", fake_read_best)
+    monkeypatch.setattr(
+        s2, "_read_forced_ladder", lambda e, c, cfg: ("？", 0.95, 0.95, False)
+    )
+    monkeypatch.setattr(s2, "_get_ocr", lambda cfg: object())
+    monkeypatch.setattr(s2, "_close_ocr", lambda: None)
+
+    # RUN 1: fresh -> flag + review file + crop
+    s2.run_ocr(str(ws), config)
+    ocr = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))
+    by = {r["region_id"]: r for r in ocr["results"]}
+    assert by["P022_R002"]["ocr_review"] is True
+    assert by["P022_R002"]["ocr_review_reason"] == "punct_only"
+    assert by["P022_R003"]["ocr_review"] is False  # real text, not flagged
+    rev = json.loads(
+        (ws / "stage2_ocr" / "ocr_review.json").read_text(encoding="utf-8")
+    )
+    assert "P022_R002" in rev["regions"]
+    assert "P022_R003" not in rev["regions"]
+    assert (ws / "stage2_ocr" / "review_crops" / "P022_R002.png").exists()
+
+    # RUN 2: user fills corrected_text -> applied, flag cleared
+    rev["regions"]["P022_R002"]["corrected_text"] = "诶？"
+    (ws / "stage2_ocr" / "ocr_review.json").write_text(
+        json.dumps(rev, ensure_ascii=False), encoding="utf-8"
+    )
+    s2.run_ocr(str(ws), config)
+    ocr = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))
+    by = {r["region_id"]: r for r in ocr["results"]}
+    assert by["P022_R002"]["original_text"] == "诶？"
+    assert by["P022_R002"]["status"] == "manual_review"
+    assert by["P022_R002"]["ocr_review"] is False
+
+
+def test_ocr_review_toggle_off(tmp_path, monkeypatch):
+    """OCR_REVIEW_ENABLED=False disables flagging entirely."""
+    import json
+
+    from PIL import Image
+
+    import config
+    from manhua_pipeline.stages import stage2_ocr as s2
+
+    monkeypatch.setattr(config, "OCR_REVIEW_ENABLED", False, raising=False)
+    ws = tmp_path / "series" / "ch1"
+    (ws / "pages").mkdir(parents=True)
+    (ws / "stage1_detection").mkdir(parents=True)
+    Image.new("RGB", (1100, 1800), (255, 255, 255)).save(ws / "pages" / "022.png")
+    (ws / "manifest.json").write_text(
+        json.dumps(
+            {
+                "chapter_id": "ch1",
+                "pages": [{"page_number": 22, "filename": "022.png", "skip": False}],
+                "completed_stages": ["import", "detect"],
+                "current_stage": "ocr",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(
+            {
+                "regions": [
+                    {
+                        "region_id": "P022_R002",
+                        "page_number": 22,
+                        "type": "speech_bubble",
+                        "read_region": {"x": 840, "y": 1571, "w": 131, "h": 93},
+                        "bbox": {"x": 840, "y": 1571, "w": 131, "h": 93},
+                        "is_free_text": False,
+                    },
+                    {
+                        "region_id": "P022_R003",
+                        "page_number": 22,
+                        "type": "speech_bubble",
+                        "read_region": {"x": 100, "y": 100, "w": 200, "h": 80},
+                        "bbox": {"x": 100, "y": 100, "w": 200, "h": 80},
+                        "is_free_text": False,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        s2,
+        "_read_best",
+        lambda e, c, cfg: (
+            ("？", 0.95, 0.95, False) if c.width < 160 else ("你好", 0.9, 0.9, False)
+        ),
+    )
+    monkeypatch.setattr(s2, "_get_ocr", lambda cfg: object())
+    monkeypatch.setattr(s2, "_close_ocr", lambda: None)
+
+    s2.run_ocr(str(ws), config)
+    ocr = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))
+    by = {r["region_id"]: r for r in ocr["results"]}
+    assert by["P022_R002"]["ocr_review"] is False
+    assert not (ws / "stage2_ocr" / "ocr_review.json").exists()

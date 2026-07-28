@@ -159,6 +159,19 @@ def _has_dialogue_signal(effective: str) -> bool:
     return cjk_core in _CJK_INTERJECTIONS
 
 
+def _is_punct_only(effective: str) -> bool:
+    """True if the region is entirely punctuation/symbols (no letters, no CJK).
+
+    e.g. "？", "！？", "…", "?!" - universal dialogue that needs no
+    translation, only normalization + rendering. Usually the visible symptom of
+    an OCR drop (e.g. "诶？" -> "？"), but rendering the "?" is still correct.
+    """
+    core = "".join(ch for ch in effective if not ch.isspace())
+    if not core:
+        return False
+    return not any(ch.isalnum() or _contains_cjk(ch) for ch in core)
+
+
 def triage_region(original_text: str, config) -> TriageResult:
     """Classify a region BEFORE batching. Deterministic; no side effects."""
     raw = (original_text or "").strip()
@@ -172,6 +185,15 @@ def triage_region(original_text: str, config) -> TriageResult:
         return TriageResult("watermark", "")
 
     if _cjk_count(effective) == 0:
+        # Punctuation-only bubbles ("？", "！？", "…") are universal dialogue -
+        # normalize + render them, no LLM call, and do NOT drop as no_cjk noise.
+        # Set RENDER_PUNCT_ONLY_REGIONS=False to restore the strict skip.
+        if (
+            getattr(config, "RENDER_PUNCT_ONLY_REGIONS", True)
+            and _is_punct_only(effective)
+            and _has_dialogue_signal(effective)
+        ):
+            return TriageResult("punct_only", effective)
         return TriageResult("no_cjk", effective)
 
     trivial_max = int(getattr(config, "OLLAMA_TRIVIAL_CJK_CHARS", 1))
@@ -241,6 +263,17 @@ def _partition_by_triage(
 
         if res.reason == "empty":
             hard_skipped.append(_skip_row(r, "no_usable_text"))
+        elif res.reason == "punct_only":
+            # Universal punctuation ("？" -> "?"): deterministic passthrough,
+            # normalized, no LLM call. Renders as-is downstream.
+            hard_skipped.append(
+                _translated_row(
+                    r,
+                    _normalize_punct(res.effective_text),
+                    source="punct_passthrough",
+                    glossary_terms=[],
+                )
+            )
         elif res.reason == "watermark":
             hard_skipped.append(_skip_row(r, "watermark"))
         elif res.reason == "no_cjk":

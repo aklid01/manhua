@@ -495,3 +495,136 @@ def test_qa_marks_complete(tmp_path):
     m = json.loads((ws / "manifest.json").read_text())
     assert m["current_stage"] == "complete"
     assert "qa" in m["completed_stages"]
+
+
+def test_qa_ocr_review_informational(tmp_path):
+    """A flagged ocr_review region is LISTED (info) but does NOT affect the
+    SUCCESS/REVIEW/FAILED verdict, and its ids/file are surfaced in summary.
+
+    Mirrors the P022_R002 "诶？"->"？" case: OCR dropped a char, patch #4 rendered
+    "?" (translated via punct_passthrough), Stage 2 queued it for manual review.
+    """
+    from manhua_pipeline.stages.stage6_qa import run_qa
+
+    ws = tmp_path / "workspace"
+    _setup(
+        ws,
+        ocr={
+            "results": [
+                {
+                    "region_id": "P022_R002",
+                    "page_number": 1,
+                    "original_text": "？",
+                    "has_usable_text": True,
+                    "ocr_confidence": 0.95,
+                    "needs_correction": False,
+                    "edge_touching": False,
+                    "ocr_review": True,
+                    "ocr_review_reason": "punct_only",
+                }
+            ]
+        },
+        tr={
+            "results": [
+                {
+                    "region_id": "P022_R002",
+                    "translated": True,
+                    "translation_source": "punct_passthrough",
+                    "glossary_conflict": False,
+                }
+            ]
+        },
+        para={
+            "results": [
+                {
+                    "region_id": "P022_R002",
+                    "paraphrased": True,
+                    "glossary_conflict": False,
+                }
+            ]
+        },
+        render={
+            "results": [
+                {
+                    "region_id": "P022_R002",
+                    "rendered": True,
+                    "action": "drew",
+                    "overflow": False,
+                }
+            ],
+            "outputs": [{"page_number": 1, "output_file": "001_render.png"}],
+        },
+    )
+    run_qa(str(ws), config)
+    qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
+
+    # Verdict stays clean (info does not count as a warning)
+    assert qa["status"] == "SUCCESS"
+    assert qa["total_warnings"] == 0
+
+    # Listed as an info warning under the ocr_review category
+    ocr_rev = [w for w in qa["warnings"] if w["category"] == "ocr_review"]
+    assert len(ocr_rev) == 1
+    assert ocr_rev[0]["severity"] == "info"
+    assert ocr_rev[0]["region_id"] == "P022_R002"
+
+    # Surfaced in summary with a pointer to the review file
+    assert qa["summary"]["ocr_review_count"] == 1
+    assert qa["summary"]["ocr_review_regions"] == ["P022_R002"]
+    assert qa["summary"]["ocr_review_file"].endswith("ocr_review.json")
+
+
+def test_qa_no_ocr_review_when_none_flagged(tmp_path):
+    """When nothing is flagged, summary count is 0 and file pointer is None."""
+    from manhua_pipeline.stages.stage6_qa import run_qa
+
+    ws = tmp_path / "workspace"
+    _setup(
+        ws,
+        ocr={
+            "results": [
+                {
+                    "region_id": "P001_R001",
+                    "page_number": 1,
+                    "has_usable_text": True,
+                    "needs_correction": False,
+                    "edge_touching": False,
+                    "ocr_review": False,
+                }
+            ]
+        },
+        tr={
+            "results": [
+                {
+                    "region_id": "P001_R001",
+                    "translated": True,
+                    "glossary_conflict": False,
+                }
+            ]
+        },
+        para={
+            "results": [
+                {
+                    "region_id": "P001_R001",
+                    "paraphrased": True,
+                    "glossary_conflict": False,
+                }
+            ]
+        },
+        render={
+            "results": [
+                {
+                    "region_id": "P001_R001",
+                    "rendered": True,
+                    "action": "drew",
+                    "overflow": False,
+                }
+            ],
+            "outputs": [{"page_number": 1, "output_file": "001_render.png"}],
+        },
+    )
+    run_qa(str(ws), config)
+    qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
+    assert qa["summary"]["ocr_review_count"] == 0
+    assert qa["summary"]["ocr_review_file"] is None
+    assert not [w for w in qa["warnings"] if w["category"] == "ocr_review"]

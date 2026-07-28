@@ -121,10 +121,10 @@ Every arrow is a JSON file on disk. Stop anywhere, inspect it, edit it, rerun fr
 > [!TIP]
 > **The sweet spot: local translation, agent-assisted refinement.**
 >
-> | Stage           | Backend                                                            | Why                                                                                                                                                           |
-> | --------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Stage           | Backend                                                                | Why                                                                                                                                                           |
+> | --------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 > | **Translation** | `ollama` - a strong Chinese→English model (e.g. `qwen2.5:3b-instruct`) | Literal translation is a low-creativity task a small local model handles well - free and fully automated.                                                     |
-> | **Refinement**  | `mcp` via Antigravity - Gemini 3.1 Pro / 3.5 Flash                 | Turning literal English into natural dialogue needs real language skill; a capable model shines here, and Antigravity's free tier keeps credit use near zero. |
+> | **Refinement**  | `mcp` via Antigravity - Gemini 3.1 Pro / 3.5 Flash                     | Turning literal English into natural dialogue needs real language skill; a capable model shines here, and Antigravity's free tier keeps credit use near zero. |
 >
 > This split gives you excellent quality while minimizing AI-credit spend - the local model
 > does the bulk work, the strong model does only the part that needs judgment.
@@ -191,18 +191,23 @@ pip install -r requirements.txt
 
 **Core dependencies** (`requirements.txt`):
 
-| Package                      | Role                                              |
-| ---------------------------- | ------------------------------------------------- |
-| `transformers`               | RT-DETR text & bubble detector + HF OCR model     |
-| `ultralytics`                | YOLOv8 speech-bubble detection (fallback)        |
-| `paddleocr` / `paddlepaddle` | Chinese OCR engine                                |
-| `pillow`                     | Image handling & rendering                        |
-| `numpy`                      | Array ops for OCR/detection                       |
-| `fastmcp`                    | MCP server for agent-driven backends              |
+| Package                      | Role                                          |
+| ---------------------------- | --------------------------------------------- |
+| `transformers`               | RT-DETR text & bubble detector + HF OCR model |
+| `ultralytics`                | YOLOv8 speech-bubble detection (fallback)     |
+| `paddleocr` / `paddlepaddle` | Chinese OCR engine                            |
+| `pillow`                     | Image handling & rendering                    |
+| `numpy`                      | Array ops for OCR/detection                   |
+| `fastmcp`                    | MCP server for agent-driven backends          |
 
 > [!NOTE]
 > The detection model (`ogkalu/comic-text-and-bubble-detector` for RT-DETR or `ogkalu/comic-speech-bubble-detector-yolov8m` for YOLOv8) downloads
 > automatically on first detection run and is cached by Hugging Face thereafter.
+
+> [!NOTE]
+> The render font (`assets/fonts/ComicNeue-Bold.ttf`, OFL-licensed) ships with the
+> repo, so rendering works out of the box. To use a different font, set `FONT_PATH`
+> in `config.py`.
 
 ---
 
@@ -269,21 +274,21 @@ python pipeline.py package --chapter chapter_001 --package zip,cbz,tar,pdf
 
 ### Common flags
 
-| Flag               | Applies to                | Purpose                                                                |
-| ------------------ | ------------------------- | ---------------------------------------------------------------------- |
-| `--input`          | import / run-all / batch  | Source CBZ/ZIP/folder (import, run-all) or folder of chapters (batch). |
-| `--chapter`        | most stages               | Target an existing chapter by name.                                    |
-| `--workspace`      | most stages               | Target a chapter by workspace path (relative or absolute).             |
-| `--fresh`          | import / run-all          | Wipe prior stage outputs before importing.                             |
-| `--skip-last`      | import / run-all / batch  | Skip the last N pages (promo/ad/credits pages at chapter end).         |
-| `--from-stage`     | run-all                   | Resume from a given stage.                                             |
-| `--package`        | run-all / batch / package | Comma-separated formats: `zip,cbz,tar,pdf`.                            |
-| `--title-romanized`| import / run-all          | Set romanized series/chapter title metadata.                           |
-| `--title-en`       | import / run-all          | Set English series/chapter title metadata.                             |
-| `--source`         | import / run-all          | Set source URL/provenance metadata.                                    |
-| `--no-resume`      | batch                     | Skip any existing chapter folder instead of resuming pending ones.     |
-| `--clear-delay`    | batch                     | Seconds a completed chapter's output stays on screen before clearing.  |
-| `--set-output-dir` | (top level)               | Persist your series base directory and exit.                           |
+| Flag                | Applies to                | Purpose                                                                |
+| ------------------- | ------------------------- | ---------------------------------------------------------------------- |
+| `--input`           | import / run-all / batch  | Source CBZ/ZIP/folder (import, run-all) or folder of chapters (batch). |
+| `--chapter`         | most stages               | Target an existing chapter by name.                                    |
+| `--workspace`       | most stages               | Target a chapter by workspace path (relative or absolute).             |
+| `--fresh`           | import / run-all          | Wipe prior stage outputs before importing.                             |
+| `--skip-last`       | import / run-all / batch  | Skip the last N pages (promo/ad/credits pages at chapter end).         |
+| `--from-stage`      | run-all                   | Resume from a given stage.                                             |
+| `--package`         | run-all / batch / package | Comma-separated formats: `zip,cbz,tar,pdf`.                            |
+| `--title-romanized` | import / run-all          | Set romanized series/chapter title metadata.                           |
+| `--title-en`        | import / run-all          | Set English series/chapter title metadata.                             |
+| `--source`          | import / run-all          | Set source URL/provenance metadata.                                    |
+| `--no-resume`       | batch                     | Skip any existing chapter folder instead of resuming pending ones.     |
+| `--clear-delay`     | batch                     | Seconds a completed chapter's output stays on screen before clearing.  |
+| `--set-output-dir`  | (top level)               | Persist your series base directory and exit.                           |
 
 ---
 
@@ -425,18 +430,18 @@ automate.
 
 All tunables live in `config.py`. Highlights:
 
-| Area                    | Keys                                                                      |
-| ----------------------- | ------------------------------------------------------------------------- |
-| **Backends**            | `TRANSLATOR_BACKEND`, `PARAPHRASE_BACKEND`                                |
+| Area                    | Keys                                                                                                              |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Backends**            | `TRANSLATOR_BACKEND`, `PARAPHRASE_BACKEND`                                                                        |
 | **Ollama (translate)**  | `OLLAMA_*` - host, model, batch size, retries, completion gate (`OLLAMA_MAX_MISSING`, `OLLAMA_TRIVIAL_CJK_CHARS`) |
-| **Ollama (paraphrase)** | `OLLAMA_PARA_*` - same knobs, tuned for natural phrasing                  |
-| **OCR**                 | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`, `OCR_RETRY_ENABLED`, `OCR_RETRY_MAX` |
-| **Detection**           | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `RTDETR_CONF`, `RTDETR_SKIP_TEXT_FREE`, `DETECTOR_USE_GPU` |
-| **Rendering**           | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`, adaptive text fill on dark bubbles |
-| **Credits**             | `CREDITS_TEMPLATES`, `CREDITS_DIR` (+ `credits` block in `settings.json`) |
-| **Stitching**           | `STITCH_ENABLED`, `STITCH_EDGE_EPS`, `STITCH_MIN_X_OVERLAP`, `STITCH_TEXT_MIN_CONF` |
-| **Packaging**           | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                             |
-| **QA**                  | `SUCCESS_MAX`, `REVIEW_MAX` warning thresholds                            |
+| **Ollama (paraphrase)** | `OLLAMA_PARA_*` - same knobs, tuned for natural phrasing                                                          |
+| **OCR**                 | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`, `OCR_RETRY_ENABLED`, `OCR_RETRY_MAX`      |
+| **Detection**           | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `RTDETR_CONF`, `RTDETR_SKIP_TEXT_FREE`, `DETECTOR_USE_GPU`  |
+| **Rendering**           | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`, adaptive text fill on dark bubbles                     |
+| **Credits**             | `CREDITS_TEMPLATES`, `CREDITS_DIR` (+ `credits` block in `settings.json`)                                         |
+| **Stitching**           | `STITCH_ENABLED`, `STITCH_EDGE_EPS`, `STITCH_MIN_X_OVERLAP`, `STITCH_TEXT_MIN_CONF`                               |
+| **Packaging**           | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                                                                     |
+| **QA**                  | `SUCCESS_MAX`, `REVIEW_MAX` warning thresholds                                                                    |
 
 Per-chapter **overrides** (`overrides.json`) let you hand-set any region's final text, and
 the series **glossary** (`glossary.json`) locks names/terms across every chapter.

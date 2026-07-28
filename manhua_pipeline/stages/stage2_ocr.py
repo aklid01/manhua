@@ -248,6 +248,120 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
     )
 
 
+def _has_cjk(text: str) -> bool:
+    return any(
+        ("\u3400" <= ch <= "\u9fff") or ("\uf900" <= ch <= "\ufaff")
+        for ch in (text or "")
+    )
+
+
+def _is_punct_or_empty(text: str) -> bool:
+    """True if OCR output has no real words (only punctuation/symbols, or empty)."""
+    core = "".join(ch for ch in (text or "") if not ch.isspace())
+    if not core:
+        return True
+    return not any(ch.isalnum() or _has_cjk(ch) for ch in core)
+
+
+def _review_types(config) -> tuple:
+    return tuple(getattr(config, "OCR_REVIEW_TYPES", ("speech_bubble", "narration")))
+
+
+def _read_forced_ladder(ocr_engine, crop_im, config):
+    """Run the escalating preprocessing variants UNCONDITIONALLY (the normal
+    _read_best ladder is confidence-gated and never fires on a high-confidence
+    punct-only read). Return the attempt with the most real text.
+    """
+    best = None
+    best_score = -1.0
+    for attempt in range(1, getattr(config, "OCR_RETRY_MAX", 2) + 1):
+        cand = _read_crop(ocr_engine, _preprocess_variant(crop_im, attempt), config)
+        has_real = 0 if _is_punct_or_empty(cand[0]) else 1
+        score = has_real * 10 + float(cand[1])
+        if score > best_score:
+            best, best_score = cand, score
+    return best
+
+
+def _dump_review_crop(ws, ocr_dir, config, region_det, pages_map):
+    """Save a cropped PNG of a flagged bubble so the user can read it quickly."""
+    from PIL import Image as _Image
+
+    page = pages_map.get(region_det.get("page_number"))
+    if not page or not page.get("filename"):
+        return None
+    img_path = ws / config.STAGE_FOLDERS["pages"] / page["filename"]
+    if not img_path.exists():
+        return None
+    box = region_det.get("read_region") or region_det.get("bbox")
+    if not box:
+        return None
+    crops_dir = ocr_dir / "review_crops"
+    crops_dir.mkdir(parents=True, exist_ok=True)
+    out = crops_dir / f"{region_det['region_id']}.png"
+    try:
+        with _Image.open(img_path) as im:
+            W, H = im.size
+            x, y, w, h = box["x"], box["y"], box["w"], box["h"]
+            im.crop((max(0, x), max(0, y), min(W, x + w), min(H, y + h))).save(
+                out, "PNG"
+            )
+    except Exception:
+        return None
+    return f"{config.STAGE_FOLDERS['ocr']}/review_crops/{out.name}"
+
+
+def _write_ocr_review(ws, ocr_dir, config, results, pages_map, region_by_id, prior):
+    """Write ocr_review.json for flagged regions (+ crop dumps). Non-blocking."""
+    if not getattr(config, "OCR_REVIEW_ENABLED", True):
+        return 0
+    flagged = [r for r in results if r.get("ocr_review")]
+    if not flagged:
+        return 0
+    entries = {}
+    for r in flagged:
+        rid = r["region_id"]
+        prior_entry = prior.get(rid, {}) if isinstance(prior, dict) else {}
+        crop_rel = None
+        if getattr(config, "OCR_REVIEW_DUMP_CROPS", True):
+            det = region_by_id.get(rid)
+            if det is not None:
+                det = dict(det)
+                det.setdefault("page_number", r.get("page_number"))
+                crop_rel = _dump_review_crop(ws, ocr_dir, config, det, pages_map)
+        entries[rid] = {
+            "page": r.get("page_number"),
+            "ocr_text": r.get("original_text", ""),
+            "reason": r.get("ocr_review_reason"),
+            "crop": crop_rel,
+            "corrected_text": (
+                prior_entry.get("corrected_text", "")
+                if isinstance(prior_entry, dict)
+                else ""
+            ),
+        }
+    payload = {
+        "_README": (
+            "OCR flagged these dialogue regions as likely dropped-character "
+            "failures. Open the matching image under 'crop', type the Chinese "
+            "you see into 'corrected_text', then re-run OCR. Leave blank to "
+            "accept the rendered fallback. Non-blocking."
+        ),
+        "regions": entries,
+    }
+    review_path = ocr_dir / "ocr_review.json"
+    with review_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+    logger.warning(
+        "[%s] %d region(s) flagged for OCR review -> %s "
+        "(non-blocking; fill corrected_text and re-run).",
+        _STAGE_NAME,
+        len(flagged),
+        review_path,
+    )
+    return len(flagged)
+
+
 def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
     """Run OCR on a single region and return the mapped result dictionary."""
     page_num = region["page_number"]
@@ -284,6 +398,18 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
             original_text, mean_conf, min_conf, watermark_filtered = _read_best(
                 ocr_engine, crop_im, config
             )
+            # Suspicious dialogue bubble (punct-only/empty) -> force the
+            # preprocessing ladder before giving up (normal retry is
+            # confidence-gated and will not fire here).
+            if (
+                getattr(config, "OCR_REVIEW_ENABLED", True)
+                and region.get("type") in _review_types(config)
+                and not watermark_filtered
+                and _is_punct_or_empty(original_text)
+            ):
+                forced = _read_forced_ladder(ocr_engine, crop_im, config)
+                if forced is not None and not _is_punct_or_empty(forced[0]):
+                    original_text, mean_conf, min_conf, watermark_filtered = forced
             if not original_text.strip():
                 if watermark_filtered:
                     status = "watermark_only"
@@ -312,6 +438,20 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
         edge_touching and not has_usable_text
     )
 
+    # Conservative OCR-review flag: a real dialogue bubble that came back with
+    # no actual words (punct-only or empty), not a watermark, not a split-edge
+    # region. Very likely a PaddleOCR dropped-character failure.
+    ocr_review = (
+        getattr(config, "OCR_REVIEW_ENABLED", True)
+        and region.get("type") in _review_types(config)
+        and not watermark_filtered
+        and not edge_touching
+        and _is_punct_or_empty(original_text)
+    )
+    ocr_review_reason = None
+    if ocr_review:
+        ocr_review_reason = "empty" if not original_text.strip() else "punct_only"
+
     notes = []
     if edge_touching and not has_usable_text:
         notes.append("possible split bubble; low/no text — render should not erase")
@@ -336,6 +476,8 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
         "note": note,
         "watermark_filtered": watermark_filtered,
         "status": status,
+        "ocr_review": ocr_review,
+        "ocr_review_reason": ocr_review_reason,
     }
 
 
@@ -412,6 +554,8 @@ def _process_single_region_ocr(
             "note": "ocr_error",
             "watermark_filtered": False,
             "status": status,
+            "ocr_review": False,
+            "ocr_review_reason": None,
         }
         return fallback, True
 
@@ -448,6 +592,26 @@ def run_ocr(workspace: str, config) -> Path:
     ocr_dir = ws / config.STAGE_FOLDERS["ocr"]
     ocr_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load any manual OCR corrections from a prior review pass (resumable).
+    review_path = ocr_dir / "ocr_review.json"
+    prior_review = {}
+    ocr_corrections = {}
+    if review_path.exists():
+        try:
+            with review_path.open("r", encoding="utf-8") as fh:
+                _raw = json.load(fh)
+            prior_review = _raw.get("regions", _raw) if isinstance(_raw, dict) else {}
+            for _rid, _entry in prior_review.items():
+                _ct = (_entry or {}).get("corrected_text", "")
+                if isinstance(_ct, str) and _ct.strip():
+                    ocr_corrections[_rid] = _ct.strip()
+        except Exception:
+            logger.warning(
+                "[%s] Could not parse %s; ignoring corrections.",
+                _STAGE_NAME,
+                review_path,
+            )
+
     logger.info(
         "[%d/%d %s] Initializing PaddleOCR (lang=%s, gpu=%s)",
         _STAGE_INDEX,
@@ -465,6 +629,7 @@ def run_ocr(workspace: str, config) -> Path:
 
     # Group by page for clear page-based logging
     pages_map = {p["page_number"]: p for p in manifest.get("pages", [])}
+    region_by_id = {r["region_id"]: r for r in detection.get("regions", [])}
 
     for region in detection.get("regions", []):
         page_num = region["page_number"]
@@ -485,6 +650,20 @@ def run_ocr(workspace: str, config) -> Path:
         res, is_warning = _process_single_region_ocr(
             region, page, ocr_engine, config, ws
         )
+        if res["region_id"] in ocr_corrections:
+            res["original_text"] = ocr_corrections[res["region_id"]]
+            res["status"] = "manual_review"
+            res["ocr_source"] = "manual_review"
+            res["ocr_review"] = False
+            res["ocr_review_reason"] = None
+            res["has_usable_text"] = True
+            res["needs_correction"] = False
+            is_warning = False
+            logger.info(
+                "[%s] %s: applied manual OCR correction.",
+                _STAGE_NAME,
+                res["region_id"],
+            )
         results.append(res)
 
         if is_warning:
@@ -540,6 +719,10 @@ def run_ocr(workspace: str, config) -> Path:
     if "ocr" not in completed:
         completed.append("ocr")
     manifest["completed_stages"] = completed
+    _write_ocr_review(
+        ws, ocr_dir, config, results, pages_map, region_by_id, prior_review
+    )
+
     manifest["current_stage"] = "translate"
     manifest["updated_at"] = now
     save_manifest(workspace, config, manifest)

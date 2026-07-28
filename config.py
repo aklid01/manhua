@@ -1,6 +1,11 @@
 """Central configuration and constants for the manhua translation pipeline."""
 
 import re
+from pathlib import Path
+
+# Repository root, so asset paths resolve no matter the current working dir.
+PROJECT_ROOT = Path(__file__).resolve().parent
+ASSETS_DIR = PROJECT_ROOT / "assets"
 
 # ---- Models ----
 MODEL_DETECTION = "ogkalu/comic-speech-bubble-detector-yolov8m"
@@ -51,6 +56,16 @@ BATCH_SUBPROCESS = True  # use subprocesses for batch flag
 OCR_RETRY_ENABLED = True
 OCR_RETRY_MAX = 2  # extra attempts after the base pass (up to 3 total reads)
 OCR_RETRY_FLOOR = 0.30  # below this, don't retry (probably not text)
+
+# ---- OCR review fallback (suspicious dialogue bubbles) ----
+# A speech_bubble/narration region that OCRs to punctuation-only or empty
+# is very likely a dropped-character failure (e.g. PaddleOCR '诶？' -> '？').
+# Stage 2 forces the preprocessing ladder; if it still has no real words it
+# renders the fallback AND writes ocr_review.json (+ a cropped PNG) for
+# optional manual correction. Fill 'corrected_text' and re-run. Non-blocking.
+OCR_REVIEW_ENABLED = True
+OCR_REVIEW_TYPES = ("speech_bubble", "narration")
+OCR_REVIEW_DUMP_CROPS = True
 
 WATERMARK_PATTERNS = [
     r"w\s*w\s*w\s*\.",
@@ -150,6 +165,9 @@ TRANSLATE_NON_CJK_DIALOGUE = False  # True restores legacy: send no-CJK regions 
 # (punctuation like ？！… or a known interjection). Set False to skip all short
 # CJK; set OLLAMA_TRIVIAL_CJK_CHARS=0 to translate every short CJK region.
 TRANSLATE_SHORT_CJK_DIALOGUE = True
+# Punctuation-only bubbles ("？", "！？", "…") are universal dialogue: normalize
+# and render them without an LLM call. Set False to skip them as noise.
+RENDER_PUNCT_ONLY_REGIONS = True
 TRANSLATE_TRIVIAL_WITH_LLM = (
     False  # True restores legacy: send single-CJK misses to qwen
 )
@@ -186,7 +204,7 @@ OLLAMA_PARA_KEEP_ALIVE = "15m"  # share the warm model with translation
 OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
 
 # ---- Rendering ----
-FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
+FONT_PATH = ASSETS_DIR / "fonts" / "ComicNeue-Bold.ttf"
 FONT_MAX_PT = 40
 FONT_MAX_PAGE_FRAC = 0.045  # ceiling as a fraction of page WIDTH (~4.5%)
 FONT_MIN_PT = 12  # readable target floor (raised from 9)
@@ -227,7 +245,7 @@ STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "
 SUBPROCESS_STAGES = {"import", "detect", "ocr"}
 
 # ---- Credits page ----
-CREDITS_DIR = "assets/credits"
+CREDITS_DIR = ASSETS_DIR / "credits"
 CREDITS_TEXT_FILL = (240, 236, 225)
 CREDITS_MATCH_PAGE_SIZE = False
 
