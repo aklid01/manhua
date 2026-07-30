@@ -254,8 +254,12 @@ def grow_layout_box(
     config,
     siblings: list[Box] | None = None,
 ) -> Box:
-    """Expand the tight text box toward the eroded bubble interior,
-    bounded by a growth cap and clipped to the interior and image.
+    """Expand the tight text box to fill the MEASURED bubble interior.
+
+    The layout box is bounded by the eroded interior mask (ground truth from
+    the artwork), not by a fixed multiple of the tight text box, so a short
+    line can fill a large balloon. Anchor-overlap and sibling clipping remain
+    the only guards; no per-series growth constant is consulted.
     """
     layout_padding = int(getattr(config, "TEXT_LAYOUT_PADDING_PX", 8))
 
@@ -278,17 +282,8 @@ def grow_layout_box(
     )
     candidate = intersect_boxes(union, interior_box) or base
 
-    # Enforce growth cap vs. the original text area.
-    max_factor = float(getattr(config, "LAYOUT_MAX_GROWTH_FACTOR", 3.0))
-    text_area = max(1, text_box.w * text_box.h)
-    if (candidate.w * candidate.h) > max_factor * text_area:
-        candidate = _shrink_box_around_center(
-            candidate,
-            target_area=int(max_factor * text_area),
-            anchor=text_box,
-        )
-
-    # NEW: never expand into another render region's text box.
+    # The eroded interior IS the bound; no arbitrary growth cap.
+    # Never expand into another render region's text box.
     if siblings:
         candidate = _shrink_box_away_from_siblings(candidate, text_box, siblings)
 
@@ -302,25 +297,6 @@ def grow_layout_box(
         return base  # anchor safety: do not drift off the source text
 
     return clip_box(candidate, image_size)
-
-
-def _shrink_box_around_center(box: Box, target_area: int, anchor: Box) -> Box:
-    """Shrink a box toward the anchor center to respect an area cap."""
-    if box.w * box.h <= target_area:
-        return box
-    import math
-
-    scale = math.sqrt(target_area / float(box.w * box.h))
-    new_w = max(5, int(box.w * scale))
-    new_h = max(5, int(box.h * scale))
-    cx = anchor.x + anchor.w // 2
-    cy = anchor.y + anchor.h // 2
-    return Box(
-        x=cx - new_w // 2,
-        y=cy - new_h // 2,
-        w=new_w,
-        h=new_h,
-    )
 
 
 def select_render_geometry(
