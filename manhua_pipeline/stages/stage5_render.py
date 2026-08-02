@@ -487,11 +487,22 @@ def fit_and_place_text(
     layout_box: Box,
     config,
     page_width: int | None = None,
+    bubble_mask: Image.Image | None = None,
+    bubble_box: Box | None = None,
 ) -> tuple[ImageFont.ImageFont, list[str], int, bool, list[dict]]:
     resolved_max_pt = effective_max_pt(config, page_width)
     min_pt = getattr(config, "FONT_MIN_PT", 9)
     step_pt = getattr(config, "FONT_STEP_PT", 1)
     line_spacing = getattr(config, "LINE_SPACING", 1.15)
+
+    eroded_mask = None
+    if bubble_mask is not None:
+        erode_px = int(getattr(config, "LAYOUT_INTERIOR_ERODE_PX", 10))
+        if erode_px > 0:
+            k = erode_px * 2 + 1
+            eroded_mask = bubble_mask.filter(ImageFilter.MinFilter(k))
+        else:
+            eroded_mask = bubble_mask
 
     font, lines, font_size, overflow = _fit_text(
         text=final_text,
@@ -504,6 +515,10 @@ def fit_and_place_text(
         line_spacing=line_spacing,
         config=config,
         use_padding=False,
+        layout_box=layout_box,
+        eroded_mask=eroded_mask,
+        bubble_box=bubble_box,
+        draw=draw,
     )
 
     line_heights = []
@@ -1067,10 +1082,76 @@ def _line_ink_width(line: str, font: ImageFont.ImageFont) -> int:
     return max(0, right - left)
 
 
+def _get_available_width_at_y(
+    eroded_mask: Image.Image,
+    bubble_box: Box,
+    sample_y_page: int,
+) -> int:
+    mask_w, mask_h = eroded_mask.size
+    mask_y = max(0, min(mask_h - 1, sample_y_page - bubble_box.y))
+    mask_pixels = eroded_mask.load()
+    threshold = 128
+
+    left_mask = None
+    right_mask = None
+    for mx in range(mask_w):
+        if mask_pixels[mx, mask_y] >= threshold:
+            if left_mask is None:
+                left_mask = mx
+            right_mask = mx
+
+    if left_mask is None:
+        return 0
+
+    left_page = bubble_box.x + left_mask
+    right_page = bubble_box.x + right_mask + 1
+    return max(0, right_page - left_page)
+
+
 def _any_line_overflows(
-    lines: list[str], font: ImageFont.ImageFont, target_w: int
+    lines: list[str],
+    font: ImageFont.ImageFont,
+    target_w: int,
+    layout_box: Box | None = None,
+    eroded_mask: Image.Image | None = None,
+    bubble_box: Box | None = None,
+    line_spacing: float = 1.15,
+    draw: ImageDraw.ImageDraw | None = None,
 ) -> bool:
-    return any(_line_ink_width(line, font) > target_w for line in lines)
+    if any(_line_ink_width(line, font) > target_w for line in lines):
+        return True
+
+    if eroded_mask is not None and bubble_box is not None and layout_box is not None:
+        font_size = getattr(font, "size", 12)
+        line_heights = []
+        line_widths = []
+        for line in lines:
+            if draw is not None:
+                left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
+                line_widths.append(right - left)
+                line_heights.append(bottom - top)
+            else:
+                w = _line_ink_width(line, font)
+                bbox = font.getbbox("Hg")
+                h = bbox[3] - bbox[1] if bbox else font_size
+                line_widths.append(w)
+                line_heights.append(h)
+
+        spacing_px = max(1, int(font_size * (line_spacing - 1.0)))
+        block_height = sum(line_heights)
+        if len(lines) > 1:
+            block_height += spacing_px * (len(lines) - 1)
+
+        cursor_y = layout_box.y + max(0, (layout_box.h - block_height) // 2)
+
+        for line_w, line_h in zip(line_widths, line_heights):
+            sample_y_page = cursor_y + line_h // 2
+            avail_w = _get_available_width_at_y(eroded_mask, bubble_box, sample_y_page)
+            if line_w > avail_w:
+                return True
+            cursor_y += line_h + spacing_px
+
+    return False
 
 
 def _fit_text(
@@ -1084,6 +1165,10 @@ def _fit_text(
     line_spacing: float,
     config,
     use_padding: bool = True,
+    layout_box: Box | None = None,
+    eroded_mask: Image.Image | None = None,
+    bubble_box: Box | None = None,
+    draw: ImageDraw.ImageDraw | None = None,
 ) -> tuple[ImageFont.ImageFont, list[str], int, bool]:
     """Fits text using the overflow ladder sizing step-down technique with ratio wrapping search."""
     padding = getattr(config, "TEXT_PADDING_PX", 8) if use_padding else 0
@@ -1102,7 +1187,16 @@ def _fit_text(
             w_limit = max(5, int(target_w * ratio))
             lines = _wrap_text(text, font, w_limit)
             h = _block_height(lines, font, line_spacing)
-            if h <= target_h and not _any_line_overflows(lines, font, target_w):
+            if h <= target_h and not _any_line_overflows(
+                lines,
+                font,
+                target_w,
+                layout_box=layout_box,
+                eroded_mask=eroded_mask,
+                bubble_box=bubble_box,
+                line_spacing=line_spacing,
+                draw=draw,
+            ):
                 # overflow means "below the readable target", not "below hard floor"
                 overflow_flag = pt < readable_min
                 return font, lines, pt, overflow_flag
@@ -1379,6 +1473,8 @@ def _plan_and_erase_region(
         layout_box=layout_box,
         config=config,
         page_width=page_img.width,
+        bubble_mask=bubble_mask,
+        bubble_box=bubble_box,
     )
 
     # 6. Per-line mask clamp: re-center each line within the actual bubble width

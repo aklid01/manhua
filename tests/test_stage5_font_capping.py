@@ -315,3 +315,74 @@ def test_oval_bubble_clamps_lines_to_curved_wall():
             # Clamper left-aligns at the inner edge - just check it moved toward center.
             assert p["x"] >= left_wall, f"line starts left of inner wall edge: {p}"
 
+
+def test_shape_aware_fit_text_in_oval_bubble():
+    """fit_and_place_text must size text down so lines fit inside oval wall at top/bottom.
+
+    Regression guard for 'SO THE RUMORS ARE TRUE!...': fit_and_place_text with
+    oval bubble_mask must reduce font size / wrap text so top line doesn't exceed
+    eroded mask width at line 1's Y position.
+    """
+    import os
+
+    cfg = _RenderConfig()
+    if not os.path.exists(cfg.FONT_PATH):
+        import pytest
+
+        pytest.skip("ComicNeue-Bold.ttf not present")
+
+    bw, bh = 350, 200
+    bubble_box = Box(50, 50, bw, bh)
+    mask = Image.new("L", (bw, bh), 0)
+    md = ImageDraw.Draw(mask)
+    md.ellipse([0, 0, bw - 1, bh - 1], fill=255)
+
+    _text_box, _bubble, _erase, layout_box = select_render_geometry(
+        {
+            "region_id": "P001_R001",
+            "bbox": {"x": 50, "y": 50, "w": bw, "h": bh},
+            "parent_bubble": {"x": 50, "y": 50, "w": bw, "h": bh},
+        },
+        image_size=(500, 500),
+        config=cfg,
+        bubble_mask=mask,
+        bubble_box=bubble_box,
+    )
+
+    img = Image.new("RGB", (500, 500), "white")
+    draw = ImageDraw.Draw(img)
+
+    long_text = "SO THE RUMORS ARE TRUE! BUT RAW TALENT ALONE DOESN'T MAKE YOU QUALIFIED TO TEACH!"
+
+    _font, _lines, font_size, overflow, placements = fit_and_place_text(
+        draw=draw,
+        final_text=long_text,
+        font_path=cfg.FONT_PATH,
+        layout_box=layout_box,
+        config=cfg,
+        page_width=500,
+        bubble_mask=mask,
+        bubble_box=bubble_box,
+    )
+
+    assert placements, "expected placements"
+    from PIL import ImageFilter as _IF
+
+    k = cfg.LAYOUT_INTERIOR_ERODE_PX * 2 + 1
+    eroded = mask.filter(_IF.MinFilter(k))
+
+    top_placement = placements[0]
+    sample_y = top_placement["y"] + top_placement["h"] // 2
+    mask_y = max(0, min(bh - 1, sample_y - bubble_box.y))
+    row = [eroded.getpixel((mx, mask_y)) for mx in range(bw)]
+    whites = [i for i, v in enumerate(row) if v >= 128]
+    assert whites, "eroded mask should have white pixels"
+    left_wall = bubble_box.x + whites[0]
+    right_wall = bubble_box.x + whites[-1] + 1
+    avail_w = right_wall - left_wall
+
+    assert top_placement["w"] <= avail_w, (
+        f"Top line width {top_placement['w']} exceeds available mask width {avail_w} at y={sample_y}"
+    )
+
+
