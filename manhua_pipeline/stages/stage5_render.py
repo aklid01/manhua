@@ -523,11 +523,14 @@ def fit_and_place_text(
 
     for line, width, height in zip(lines, line_widths, line_heights):
         cursor_x = layout_box.x + max(0, (layout_box.w - width) // 2)
+        # Hard clamp: keep text inside layout_box even on the hard-floor fallback path.
+        cursor_x = max(layout_box.x, min(cursor_x, max(layout_box.x, layout_box.x2 - width)))
+        cursor_y_clamped = max(layout_box.y, min(cursor_y, max(layout_box.y, layout_box.y2 - height)))
         placements.append(
             {
                 "text": line,
                 "x": cursor_x,
-                "y": cursor_y,
+                "y": cursor_y_clamped,
                 "w": width,
                 "h": height,
             }
@@ -968,7 +971,8 @@ def _wrap_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str
         current_line = []
         for word in words:
             test_line = " ".join(current_line + [word])
-            width = font.getlength(test_line)
+            left, _top, right, _bottom = font.getbbox(test_line)
+            width = max(0, right - left)
             if width <= max_width or not current_line:
                 current_line.append(word)
             else:
@@ -998,10 +1002,16 @@ def _block_height(
     return total_h
 
 
+def _line_ink_width(line: str, font: ImageFont.ImageFont) -> int:
+    """Actual rendered ink width including glyph overhang, not pen advance."""
+    left, _top, right, _bottom = font.getbbox(line)
+    return max(0, right - left)
+
+
 def _any_line_overflows(
     lines: list[str], font: ImageFont.ImageFont, target_w: int
 ) -> bool:
-    return any(font.getlength(line) > target_w for line in lines)
+    return any(_line_ink_width(line, font) > target_w for line in lines)
 
 
 def _fit_text(

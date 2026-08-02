@@ -174,3 +174,63 @@ def test_rendered_text_stays_inside_bubble_interior():
         assert p["y"] >= interior.y, f"line spills past TOP edge: {p}"
         assert p["x"] + p["w"] <= interior.x2, f"line spills past RIGHT edge: {p}"
         assert p["y"] + p["h"] <= interior.y2, f"line spills past BOTTOM edge: {p}"
+
+
+def test_uppercase_allcaps_stays_inside_layout_box():
+    """All-caps text (EMPHASIS_UPPERCASE path) must not spill outside layout_box.
+
+    Capital letters have wider ink bounds than their pen advance, so getlength()
+    under-estimates actual rendered width. This test catches the regression where
+    _any_line_overflows and _wrap_text used getlength while fit_and_place_text
+    measured with textbbox, letting glyphs escape the bubble boundary.
+
+    Mirrors the real failure in pic 2: long all-caps lines in a medium bubble.
+    """
+    import os
+
+    cfg = _RenderConfig()
+    if not os.path.exists(cfg.FONT_PATH):
+        import pytest
+
+        pytest.skip("ComicNeue-Bold.ttf not present")
+
+    bubble_box = Box(10, 10, 400, 250)
+    region = {
+        "region_id": "P001_R001",
+        "bbox": {"x": 50, "y": 50, "w": 320, "h": 180},
+        "read_region": {"x": 50, "y": 50, "w": 320, "h": 180},
+        "parent_bubble": bubble_box.as_dict(),
+        "render": True,
+        "has_usable_text": True,
+    }
+    mask = Image.new("L", (bubble_box.w, bubble_box.h), 255)
+
+    _text_box, _bubble, _erase, layout_box = select_render_geometry(
+        region,
+        image_size=(500, 500),
+        config=cfg,
+        bubble_mask=mask,
+        bubble_box=bubble_box,
+    )
+
+    img = Image.new("RGB", (500, 500), "white")
+    draw = ImageDraw.Draw(img)
+
+    # Mirrors the style_hint="spiky"/register="rude" uppercase path in the renderer
+    allcaps_text = "THAT'S... THE GUARD BUREAU'S BLUE SEA MEDAL! IS GENERAL HU AWARDING IT TO NING YU?!"
+    _font, _lines, _pt, _overflow, placements = fit_and_place_text(
+        draw=draw,
+        final_text=allcaps_text,
+        font_path=cfg.FONT_PATH,
+        layout_box=layout_box,
+        config=cfg,
+        page_width=500,
+    )
+
+    assert placements, "expected at least one placed line"
+    for p in placements:
+        assert p["x"] >= layout_box.x, f"line spills past LEFT edge of layout_box: {p}"
+        assert p["x"] + p["w"] <= layout_box.x2, f"line spills past RIGHT edge of layout_box: {p}"
+        assert p["y"] >= layout_box.y, f"line spills past TOP edge of layout_box: {p}"
+        assert p["y"] + p["h"] <= layout_box.y2, f"line spills past BOTTOM edge of layout_box: {p}"
+
