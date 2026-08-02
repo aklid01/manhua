@@ -540,6 +540,65 @@ def fit_and_place_text(
     return font, lines, font_size, overflow, placements
 
 
+def _clamp_placements_to_mask(
+    placements: list[dict],
+    bubble_mask: "Image.Image",
+    bubble_box: Box,
+    erode_px: int = 10,
+) -> list[dict]:
+    """Re-center each text line within the actual available bubble width at its Y.
+
+    The layout_box is the rectangular bounding box of the eroded interior, which
+    equals the bubble's WIDEST point. For oval/curved bubbles, rows near the top
+    and bottom are narrower - text centered on the full width spills past the wall.
+
+    For each placed line we sample the eroded mask at the glyph midline, find the
+    leftmost and rightmost white pixel, and re-center the line within that span.
+    Lines wider than the available span are left-aligned at the inner edge.
+    """
+    if erode_px > 0:
+        k = erode_px * 2 + 1
+        mask = bubble_mask.filter(ImageFilter.MinFilter(k))
+    else:
+        mask = bubble_mask
+
+    mask_w, mask_h = mask.size
+    mask_pixels = mask.load()
+    threshold = 128
+
+    result = []
+    for p in placements:
+        # Sample at the vertical midpoint of the glyph.
+        sample_y_page = p["y"] + p["h"] // 2
+        mask_y = max(0, min(mask_h - 1, sample_y_page - bubble_box.y))
+
+        # Find leftmost / rightmost white pixel in this mask row.
+        left_mask = None
+        right_mask = None
+        for mx in range(mask_w):
+            if mask_pixels[mx, mask_y] >= threshold:
+                if left_mask is None:
+                    left_mask = mx
+                right_mask = mx
+
+        if left_mask is None:
+            result.append(p)
+            continue
+
+        left_page = bubble_box.x + left_mask
+        right_page = bubble_box.x + right_mask + 1  # exclusive
+        available_w = right_page - left_page
+        line_w = p["w"]
+
+        if available_w >= line_w:
+            new_x = left_page + (available_w - line_w) // 2
+        else:
+            new_x = left_page
+
+        result.append({**p, "x": new_x})
+
+    return result
+
 def should_debug_region(region_id: str, config) -> bool:
     if not getattr(config, "RENDER_DEBUG_ARTIFACTS", False):
         return False
@@ -1320,6 +1379,14 @@ def _plan_and_erase_region(
         layout_box=layout_box,
         config=config,
         page_width=page_img.width,
+    )
+
+    # 6. Per-line mask clamp: re-center each line within the actual bubble width
+    # at its Y position. Fixes oval/curved bubbles where the bounding box is
+    # wider than the curved wall near the top and bottom.
+    erode_px = int(getattr(config, "LAYOUT_INTERIOR_ERODE_PX", 10))
+    placements = _clamp_placements_to_mask(
+        placements, bubble_mask, bubble_box, erode_px=erode_px
     )
 
     plan.font = font
