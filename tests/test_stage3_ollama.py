@@ -253,7 +253,7 @@ def test_missing_region_flagged(tmp_path, ollama_config, monkeypatch):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
-    _setup(ws, [_ocr_entry("P001_R001", "a"), _ocr_entry("P001_R002", "b")])
+    _setup(ws, [_ocr_entry("P001_R001", "你好啊"), _ocr_entry("P001_R002", "我知道")])
     out = run_translation(str(ws), ollama_config)
 
     tr = _read_translation(ws)
@@ -374,9 +374,9 @@ def test_below_threshold_does_not_advance(tmp_path, ollama_config, monkeypatch):
     _setup(
         ws,
         [
-            _ocr_entry("P001_R001", "a"),
-            _ocr_entry("P001_R002", "b"),
-            _ocr_entry("P001_R003", "c"),
+            _ocr_entry("P001_R001", "你好啊"),
+            _ocr_entry("P001_R002", "我知道"),
+            _ocr_entry("P001_R003", "没问题"),
         ],
     )
     out = run_translation(str(ws), ollama_config)

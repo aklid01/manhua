@@ -973,14 +973,40 @@ def run_translation(
             len(translatable_results),
         )
 
-    # Combine override regions + translatable + trivial fallback for the existing partition
-    regions_for_partition = override_results + translatable_results + trivial_fallback
-    overridden_regions, usable, skipped = _partition_regions_translation(
-        regions_for_partition, overrides, config
+    # Triage already determined every non-override region's fate. Trust it.
+    # Calling _partition_regions_translation here would re-gate on has_usable_text
+    # (a raw OCR confidence field), silently dropping regions like "啊……" that have
+    # low OCR confidence but are real dialogue that triage correctly classified as
+    # translatable. The has_usable_text gate is correct only for the un-triaged raw
+    # OCR path used by build_translation_bundle / write_translation_response.
+    overridden_regions = override_results
+    usable = translatable_results + trivial_fallback
+    skipped: list[dict] = triage_hard_skipped
+
+    # Warn about override keys that don't map to any known region.
+    all_ids = {r["region_id"] for r in all_results}
+    for k in overrides:
+        if k not in all_ids:
+            logger.warning(
+                "[%s] override for unknown region %s ignored", _STAGE_NAME, k
+            )
+
+    logger.info(
+        "[%d/%d %s] Backend: %s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        getattr(config, "TRANSLATOR_BACKEND", "manual"),
     )
-    # Append triage hard-skips and glossary-resolved rows into skipped so
-    # _write_output can emit them with their skip_reason/translation_source.
-    skipped = list(skipped) + triage_hard_skipped
+    logger.info(
+        "[%d/%d %s] %d usable regions, %d overridden, %d skipped",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        len(usable),
+        len(overridden_regions),
+        len(skipped),
+    )
 
     # Short-circuit: nothing to translate via LLM
     if not usable:

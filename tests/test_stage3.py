@@ -388,3 +388,47 @@ def test_punct_only_toggle_off(monkeypatch):
 
     monkeypatch.setattr(config, "RENDER_PUNCT_ONLY_REGIONS", False, raising=False)
     assert triage_region("？", config).reason == "no_cjk"
+
+
+def test_low_confidence_real_dialogue_not_dropped(tmp_path):
+    """Regions with real CJK dialogue and has_usable_text=False (low OCR confidence)
+    must still reach the translation prompt.
+
+    Regression guard for the "啊……" case: OCR read one CJK char at low confidence,
+    so has_usable_text=False. The old code re-gated on has_usable_text AFTER triage
+    already classified the region as translatable, silently dropping it. Triage
+    must win over the raw OCR confidence gate.
+    """
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    # has_usable_text=False simulates low OCR confidence (mean_conf < OCR_MIN_TEXT_CONF).
+    # The text itself is real dialogue: one CJK interjection + ellipsis.
+    low_conf_entry = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "type": "speech_bubble",
+        "original_text": "\u554a\u2026\u2026",
+        "text_direction": "horizontal",
+        "ocr_confidence": 0.15,
+        "ocr_confidence_min": 0.15,
+        "has_usable_text": False,
+        "do_not_render": False,
+        "needs_correction": True,
+        "edge_touching": False,
+        "edge": "none",
+        "note": None,
+        "watermark_filtered": False,
+    }
+    _setup(ws, [low_conf_entry])
+    run_translation(str(ws), config)
+
+    prompt_path = ws / "stage3_translation" / "translation_prompt.json"
+    assert prompt_path.exists(), "translation_prompt.json must be written for real dialogue"
+    bundle = json.loads(prompt_path.read_text(encoding="utf-8"))
+    ids = [item["region_id"] for item in bundle["regions"]]
+    assert "P001_R001" in ids, (
+        "Low-confidence real dialogue was silently dropped — "
+        "has_usable_text=False must not override triage's 'translatable' verdict"
+    )
+
