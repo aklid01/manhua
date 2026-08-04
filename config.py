@@ -14,7 +14,7 @@ OCR_ENGINE = "transformers"
 # ---- Detection ----
 DETECTION_MODEL = MODEL_DETECTION
 DETECTION_CONF = 0.35
-OVERLAY_ENABLED = True
+OVERLAY_ENABLED = False
 READING_ORDER_BAND_FRACTION = 0.02
 DEDUP_IOU_THRESHOLD = 0.90  # merge same-class same-page boxes above this IoU
 DEDUP_IOS_THRESHOLD = 0.85  # merge same-class same-page boxes when the smaller
@@ -188,6 +188,24 @@ PARAPHRASE_RUDE_MARKERS = [
     "screw",
     "bastard",
     "hell",
+    # 18+ comic markers
+    "pussy",
+    "boobs",
+    "dick",
+    "cock",
+    "asshole",
+    "motherfucker",
+    "cunt",
+    "vagina",
+    "penis",
+    "nipples",
+    "breast",
+    "cum",
+    "ejaculate",
+    "rape",
+    "blowjob",
+    "handjob",
+    "cumming"
 ]
 
 # ---- Ollama (local paraphrase backend) ----
