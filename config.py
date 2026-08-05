@@ -205,7 +205,7 @@ PARAPHRASE_RUDE_MARKERS = [
     "rape",
     "blowjob",
     "handjob",
-    "cumming"
+    "cumming",
 ]
 
 # ---- Ollama (local paraphrase backend) ----

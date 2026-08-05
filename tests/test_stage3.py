@@ -424,11 +424,12 @@ def test_low_confidence_real_dialogue_not_dropped(tmp_path):
     run_translation(str(ws), config)
 
     prompt_path = ws / "stage3_translation" / "translation_prompt.json"
-    assert prompt_path.exists(), "translation_prompt.json must be written for real dialogue"
+    assert prompt_path.exists(), (
+        "translation_prompt.json must be written for real dialogue"
+    )
     bundle = json.loads(prompt_path.read_text(encoding="utf-8"))
     ids = [item["region_id"] for item in bundle["regions"]]
     assert "P001_R001" in ids, (
         "Low-confidence real dialogue was silently dropped — "
         "has_usable_text=False must not override triage's 'translatable' verdict"
     )
-

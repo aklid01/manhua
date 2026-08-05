@@ -14,10 +14,9 @@ from manhua_pipeline.stages.stage5_render import (
     geometry,
     inpainting,
     planner,
-    typography,
     types,
+    typography,
 )
-
 from manhua_pipeline.stages.stage5_render.credits import (
     _fit_font,
     _render_credits_page,
@@ -63,6 +62,7 @@ from manhua_pipeline.stages.stage5_render.planner import (
     _finalize_plan,
     _plan_and_erase_region,
 )
+from manhua_pipeline.stages.stage5_render.types import Box, RenderPlan
 from manhua_pipeline.stages.stage5_render.typography import (
     _any_line_overflows,
     _block_height,
@@ -77,7 +77,6 @@ from manhua_pipeline.stages.stage5_render.typography import (
     fit_and_place_text,
     normalize_escaped_newlines,
 )
-from manhua_pipeline.stages.stage5_render.types import Box, RenderPlan
 
 _SUBMODULE_MAP = {
     "_font_cache": typography,

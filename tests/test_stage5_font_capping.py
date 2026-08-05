@@ -230,9 +230,13 @@ def test_uppercase_allcaps_stays_inside_layout_box():
     assert placements, "expected at least one placed line"
     for p in placements:
         assert p["x"] >= layout_box.x, f"line spills past LEFT edge of layout_box: {p}"
-        assert p["x"] + p["w"] <= layout_box.x2, f"line spills past RIGHT edge of layout_box: {p}"
+        assert p["x"] + p["w"] <= layout_box.x2, (
+            f"line spills past RIGHT edge of layout_box: {p}"
+        )
         assert p["y"] >= layout_box.y, f"line spills past TOP edge of layout_box: {p}"
-        assert p["y"] + p["h"] <= layout_box.y2, f"line spills past BOTTOM edge of layout_box: {p}"
+        assert p["y"] + p["h"] <= layout_box.y2, (
+            f"line spills past BOTTOM edge of layout_box: {p}"
+        )
 
 
 def test_oval_bubble_clamps_lines_to_curved_wall():
@@ -274,8 +278,20 @@ def test_oval_bubble_clamps_lines_to_curved_wall():
     line_w = interior.w  # full width - intentionally aggressive
     placements_in = [
         {"text": "line1", "x": interior.x, "y": interior.y, "w": line_w, "h": line_h},
-        {"text": "line2", "x": interior.x, "y": interior.y + line_h + 5, "w": line_w // 2, "h": line_h},
-        {"text": "line3", "x": interior.x, "y": interior.y2 - line_h, "w": line_w, "h": line_h},
+        {
+            "text": "line2",
+            "x": interior.x,
+            "y": interior.y + line_h + 5,
+            "w": line_w // 2,
+            "h": line_h,
+        },
+        {
+            "text": "line3",
+            "x": interior.x,
+            "y": interior.y2 - line_h,
+            "w": line_w,
+            "h": line_h,
+        },
     ]
 
     clamped = _clamp_placements_to_mask(
@@ -384,5 +400,3 @@ def test_shape_aware_fit_text_in_oval_bubble():
     assert top_placement["w"] <= avail_w, (
         f"Top line width {top_placement['w']} exceeds available mask width {avail_w} at y={sample_y}"
     )
-
-

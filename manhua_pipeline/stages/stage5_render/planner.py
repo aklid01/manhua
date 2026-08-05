@@ -83,7 +83,9 @@ def _plan_and_erase_region(
     bubble_crop = page_img.crop(bubble_box.as_xyxy())
 
     if getattr(config, "BUBBLE_FILL_MODE", "white") == "dominant":
-        fill_color = inpainting._dominant_fill_color(bubble_crop, local_text_box, config)
+        fill_color = inpainting._dominant_fill_color(
+            bubble_crop, local_text_box, config
+        )
     else:
         fill_color = None
 
@@ -253,7 +255,9 @@ def _plan_and_erase_region(
     plan.bubble_mask_area = mask_area
     plan.bubble_mask_coverage = (mask_px / mask_area) if mask_area else 0.0
 
-    text_bg = fill_color or inpainting.estimate_text_background(page_img, text_box, bubble_box)
+    text_bg = fill_color or inpainting.estimate_text_background(
+        page_img, text_box, bubble_box
+    )
     plan.text_fill = inpainting._text_color_for_bg(text_bg)
     plan.text_bg = text_bg
 
