@@ -539,8 +539,12 @@ def fit_and_place_text(
     for line, width, height in zip(lines, line_widths, line_heights):
         cursor_x = layout_box.x + max(0, (layout_box.w - width) // 2)
         # Hard clamp: keep text inside layout_box even on the hard-floor fallback path.
-        cursor_x = max(layout_box.x, min(cursor_x, max(layout_box.x, layout_box.x2 - width)))
-        cursor_y_clamped = max(layout_box.y, min(cursor_y, max(layout_box.y, layout_box.y2 - height)))
+        cursor_x = max(
+            layout_box.x, min(cursor_x, max(layout_box.x, layout_box.x2 - width))
+        )
+        cursor_y_clamped = max(
+            layout_box.y, min(cursor_y, max(layout_box.y, layout_box.y2 - height))
+        )
         placements.append(
             {
                 "text": line,
@@ -613,6 +617,7 @@ def _clamp_placements_to_mask(
         result.append({**p, "x": new_x})
 
     return result
+
 
 def should_debug_region(region_id: str, config) -> bool:
     if not getattr(config, "RENDER_DEBUG_ARTIFACTS", False):

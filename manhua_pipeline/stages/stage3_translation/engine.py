@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from manhua_pipeline.io.glossary_series import append_glossary_term, load_series_glossary
+from manhua_pipeline.io.glossary_series import (
+    append_glossary_term,
+    load_series_glossary,
+)
 from manhua_pipeline.io.overrides import load_overrides
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_stage
@@ -451,7 +454,9 @@ def run_translation(
 
     all_results = ocr_data.get("results", [])
 
-    locked_index_pre = glossary._build_locked_index(glossary._locked_terms(glossary_data))
+    locked_index_pre = glossary._build_locked_index(
+        glossary._locked_terms(glossary_data)
+    )
     non_override_results = [r for r in all_results if r["region_id"] not in overrides]
     override_results = [r for r in all_results if r["region_id"] in overrides]
 
@@ -536,7 +541,9 @@ def run_translation(
 
     bundle_data = bundle._build_bundle(usable_for_backend, locked)
     backend = backends._get_backend(config)
-    raw_response = backend.request(bundle_data, ws, config) if usable_for_backend else {}
+    raw_response = (
+        backend.request(bundle_data, ws, config) if usable_for_backend else {}
+    )
 
     if raw_response is None:
         return None

@@ -134,7 +134,9 @@ class OllamaBackend:
 
         retry_chunk = [r for r in chunk if r["region_id"] in missing]
         raw = self._call_ollama(self._build_user_prompt(retry_chunk, strict=True))
-        acc2, missing, _ = self._validate_batch(self._parse_json(raw, self), set(missing))
+        acc2, missing, _ = self._validate_batch(
+            self._parse_json(raw, self), set(missing)
+        )
         accepted.update(acc2)
         if not missing:
             return accepted
