@@ -1,0 +1,293 @@
+import json
+import time
+from pathlib import Path
+from typing import Protocol
+
+from manhua_pipeline.logging_setup import get_logger
+from manhua_pipeline.stages import _backends as be
+from manhua_pipeline.translation_validation import validate_expected_regions
+
+logger = get_logger(__name__)
+
+_STAGE_INDEX = 3
+_TOTAL_STAGES = 7
+_STAGE_NAME = "Translation"
+
+
+class TranslatorBackend(Protocol):
+    def request(self, bundle: dict, ws: Path, config) -> dict | None:
+        """Return {region_id: english} mapping, or None if awaiting manual input."""
+
+
+class ManualBackend:
+    def request(self, bundle: dict, ws: Path, config) -> dict | None:
+        paths = be.BackendPaths(
+            "translation",
+            config.TRANSLATION_PROMPT_NAME,
+            config.TRANSLATION_RESPONSE_NAME,
+        )
+        return be.manual_request(
+            bundle, ws, config, paths, logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
+        )
+
+
+class McpBackend:
+    def request(self, bundle: dict, ws: Path, config) -> dict | None:
+        paths = be.BackendPaths(
+            "translation",
+            config.TRANSLATION_PROMPT_NAME,
+            config.TRANSLATION_RESPONSE_NAME,
+        )
+        return be.mcp_request(
+            bundle, ws, config, paths, logger, _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME
+        )
+
+
+class OllamaBackend:
+    """Inline local translation via Ollama, with retries, batch validation,
+    and malformed-output recovery. Returns {region_id: english}."""
+
+    def request(self, bundle: dict, ws: Path, config) -> dict | None:
+        s = be.OllamaSettings.from_config(config, prefix="OLLAMA")
+        be.validate_ollama_settings(s, "OLLAMA")
+
+        paths = be.BackendPaths(
+            "translation",
+            config.TRANSLATION_PROMPT_NAME,
+            config.TRANSLATION_RESPONSE_NAME,
+        )
+        be.write_bundle(bundle, ws, config, paths)
+
+        regions = bundle.get("regions", [])
+        if not regions:
+            return {}
+
+        self.ws = ws
+        self.config = config
+        self.host = s.host
+        self.model = s.model
+        self.timeout = s.timeout
+        self.temperature = s.temperature
+        self.max_retries = s.max_retries
+        self.backoff = s.backoff
+        self.keep_alive = s.keep_alive
+        self.num_ctx = s.num_ctx
+        self.system_prompt = bundle.get("READ_FIRST", "")
+        glossary = bundle.get("glossary", [])
+        self.gloss_txt = "\n".join(
+            f"{t['source_term']} = {t['target_term']}" for t in glossary
+        )
+
+        batch_size = getattr(config, "OLLAMA_BATCH_SIZE", 15)
+        total = len(regions)
+        n_batches = (total + batch_size - 1) // batch_size
+        logger.info(
+            "[%d/%d %s] Ollama: %d regions, %d batch(es), model=%s",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            total,
+            n_batches,
+            self.model,
+        )
+
+        merged: dict = {}
+        for bi in range(n_batches):
+            chunk = regions[bi * batch_size : (bi + 1) * batch_size]
+            t_batch = time.monotonic()
+            accepted = self._translate_batch(chunk, depth=0)
+            merged.update(accepted)
+            expected = len(chunk)
+            missing = expected - len(accepted)
+            logger.info(
+                "[%d/%d %s] Batch %d/%d: expected %d, accepted %d, missing %d (%.1fs)",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                bi + 1,
+                n_batches,
+                expected,
+                len(accepted),
+                missing,
+                time.monotonic() - t_batch,
+            )
+
+        trans_dir = ws / config.STAGE_FOLDERS["translation"]
+        response_path = trans_dir / config.TRANSLATION_RESPONSE_NAME
+        with response_path.open("w", encoding="utf-8") as fh:
+            json.dump(merged, fh, ensure_ascii=False, indent=2)
+        return merged
+
+    def _translate_batch(self, chunk, depth: int) -> dict:
+        expected_ids = {r["region_id"] for r in chunk}
+
+        raw = self._call_ollama(self._build_user_prompt(chunk, strict=False))
+        accepted, missing, unexpected = self._validate_batch(
+            self._parse_json(raw, self), expected_ids
+        )
+        if unexpected:
+            logger.warning(
+                "[%s] Rejected %d unexpected IDs", _STAGE_NAME, len(unexpected)
+            )
+        if not missing:
+            return accepted
+
+        retry_chunk = [r for r in chunk if r["region_id"] in missing]
+        raw = self._call_ollama(self._build_user_prompt(retry_chunk, strict=True))
+        acc2, missing, _ = self._validate_batch(self._parse_json(raw, self), set(missing))
+        accepted.update(acc2)
+        if not missing:
+            return accepted
+
+        if len(retry_chunk) <= 1 or depth >= 4:
+            single_max = getattr(self, "single_retry_max", 3)
+            for _attempt in range(single_max):
+                if not missing:
+                    break
+                still = [r for r in chunk if r["region_id"] in missing]
+                raw = self._call_ollama(self._build_user_prompt(still, strict=True))
+                acc_n, missing, _ = self._validate_batch(
+                    self._parse_json(raw, self), set(missing)
+                )
+                accepted.update(acc_n)
+            if missing:
+                logger.warning(
+                    "[%s] Giving up on %d region(s) after recovery: %s | last raw output: %r",
+                    _STAGE_NAME,
+                    len(missing),
+                    sorted(missing),
+                    raw[:300],
+                )
+            return accepted
+
+        still = [r for r in retry_chunk if r["region_id"] in missing]
+        mid = len(still) // 2
+        accepted.update(self._translate_batch(still[:mid], depth + 1))
+        accepted.update(self._translate_batch(still[mid:], depth + 1))
+        return accepted
+
+    def _build_user_prompt(self, chunk, strict: bool) -> str:
+        payload = json.dumps(
+            [
+                {
+                    "region_id": r["region_id"],
+                    "original_text": r.get("effective_text") or r["original_text"],
+                }
+                for r in chunk
+            ],
+            ensure_ascii=False,
+        )
+        strict_note = (
+            "\nSTRICT: Return ONLY a valid JSON object. No prose, no code fences. "
+            "One key per region_id. Do not merge or omit any region."
+            if strict
+            else ""
+        )
+        gloss = (
+            ("GLOSSARY (keep exactly):\n" + self.gloss_txt + "\n\n")
+            if self.gloss_txt
+            else ""
+        )
+        return (
+            gloss
+            + "Translate each object's original_text. Return a JSON object mapping "
+            "region_id -> english. REGIONS:\n" + payload + strict_note
+        )
+
+    def _call_ollama(self, user_prompt: str) -> str:
+        s = be.OllamaSettings(
+            host=self.host,
+            model=self.model,
+            timeout=self.timeout,
+            temperature=self.temperature,
+            max_retries=self.max_retries,
+            backoff=self.backoff,
+            num_ctx=getattr(self, "num_ctx", 2048),
+            keep_alive=getattr(self, "keep_alive", "0"),
+        )
+        return be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
+
+    @staticmethod
+    def _validate_batch(parsed: dict, expected_ids: set) -> tuple[dict, list, list]:
+        unexpected = [k for k in parsed if k not in expected_ids]
+        if unexpected:
+            for k in unexpected:
+                logger.debug(
+                    "[%s] Unexpected region_id in response (ignored): %r",
+                    _STAGE_NAME,
+                    k,
+                )
+
+        issues = validate_expected_regions(
+            {k: v for k, v in parsed.items() if k in expected_ids},
+            expected_ids,
+        )
+        accepted = {
+            rid: issue.accepted_text
+            for rid, issue in issues.items()
+            if issue.status == "accepted"
+        }
+        for rid, issue in issues.items():
+            if issue.status != "accepted":
+                logger.debug(
+                    "[%s] Region %r rejected: reason=%s",
+                    _STAGE_NAME,
+                    rid,
+                    issue.reason,
+                )
+        missing = [rid for rid, issue in issues.items() if issue.status != "accepted"]
+        return accepted, missing, unexpected
+
+    @staticmethod
+    def _parse_json(text: str, self_obj=None) -> dict:
+        from manhua_pipeline.events import (
+            BACKEND_JSON_INVALID,
+            BACKEND_JSON_NON_OBJECT,
+            BACKEND_RESPONSE_BLANK,
+            PipelineEvent,
+        )
+        from manhua_pipeline.io.parse_result import parse_json_result
+
+        result = parse_json_result(text)
+        if result.status == "success":
+            return result.value
+
+        event_by_status = {
+            "blank": BACKEND_RESPONSE_BLANK,
+            "invalid_json": BACKEND_JSON_INVALID,
+            "non_object": BACKEND_JSON_NON_OBJECT,
+        }
+        event_name = event_by_status.get(result.status)
+        ws = getattr(self_obj, "ws", None) if self_obj else None
+        cfg = getattr(self_obj, "config", None) if self_obj else None
+        if event_name and ws and cfg:
+            from manhua_pipeline.io.event_emitter import get_event_emitter
+
+            run_id = getattr(cfg, "_run_id", "unknown")
+            chapter = ws.name if isinstance(ws, Path) else "unknown"
+            get_event_emitter(ws, cfg, logger=logger).emit(
+                PipelineEvent(
+                    event=event_name,
+                    run_id=run_id,
+                    stage=_STAGE_NAME.lower(),
+                    chapter=chapter,
+                    reason=result.error or result.status,
+                    backend="ollama",
+                    model=getattr(self_obj, "model", None),
+                    metadata={"raw_length": result.raw_length},
+                )
+            )
+        return {}
+
+
+def _get_backend(config) -> TranslatorBackend:
+    name = getattr(config, "TRANSLATOR_BACKEND", "manual")
+    if name == "manual":
+        return ManualBackend()
+    if name == "mcp":
+        return McpBackend()
+    if name == "ollama":
+        return OllamaBackend()
+    raise ValueError(
+        f"Unknown TRANSLATOR_BACKEND: {name!r}. Use 'manual', 'mcp', or 'ollama'."
+    )
