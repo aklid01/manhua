@@ -15,7 +15,6 @@ from manhua_pipeline.stages.stage3_translation import (
     glossary,
     triage,
 )
-
 from manhua_pipeline.stages.stage3_translation.backends import (
     ManualBackend,
     McpBackend,
