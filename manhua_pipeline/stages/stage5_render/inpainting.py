@@ -11,6 +11,30 @@ from manhua_pipeline.stages.stage5_render.geometry import (
 from manhua_pipeline.stages.stage5_render.types import Box
 
 
+def _is_dark(c: tuple[int, int, int]) -> bool:
+    return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] < 96
+
+
+def _sanitize_dark_fill(
+    fill: tuple[int, int, int],
+    page_img: Image.Image,
+    text_box: Box,
+) -> tuple[int, int, int]:
+    if _is_dark(fill):
+        tb = clip_box(text_box, page_img.size)
+        if tb.w > 0 and tb.h > 0:
+            tb_crop = page_img.crop(tb.as_xyxy())
+            bright_count = sum(
+                1
+                for p in tb_crop.getdata()
+                if (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) > 180
+            )
+            total = tb_crop.width * tb_crop.height
+            if total > 0 and (bright_count / total) > 0.40:
+                return (255, 255, 255)
+    return fill
+
+
 def estimate_text_background(
     image: Image.Image,
     text_box: Box,
@@ -47,7 +71,8 @@ def estimate_text_background(
     if not points:
         return (255, 255, 255)
 
-    return tuple(int(median(channel)) for channel in zip(*points))
+    raw_fill = tuple(int(median(channel)) for channel in zip(*points))
+    return _sanitize_dark_fill(raw_fill, image, text_box)
 
 
 def _count_mask_pixels(mask: Image.Image) -> int:
@@ -266,11 +291,15 @@ def _dominant_fill_color(
         return tx0 <= px < tx1 and ty0 <= py < ty1
 
     counter: Counter = Counter()
+    samples: list[tuple[int, int, int]] = []
+
     for py in range(sy0, sy1, step_y):
         for px in range(sx0, sx1, step_x):
             if _in_text(px, py):
                 continue
             r, g, b = img.getpixel((px, py))[:3]
+            c = (r, g, b)
+            samples.append(c)
             counter[(r // 16, g // 16, b // 16)] += 1
 
     if not counter:
@@ -278,29 +307,34 @@ def _dominant_fill_color(
 
     (qr, qg, qb), _ = counter.most_common(1)[0]
 
-    rs, gs, bs = [], [], []
-    for py in range(sy0, sy1, step_y):
-        for px in range(sx0, sx1, step_x):
-            if _in_text(px, py):
-                continue
-            r, g, b = img.getpixel((px, py))[:3]
-            if (r // 16, g // 16, b // 16) == (qr, qg, qb):
-                rs.append(r)
-                gs.append(g)
-                bs.append(b)
+    matching = [
+        c for c in samples if (c[0] // 16, c[1] // 16, c[2] // 16) == (qr, qg, qb)
+    ]
+    if not matching:
+        raw_fill = (qr * 16 + 8, qg * 16 + 8, qb * 16 + 8)
+    else:
+        r = round(sum(c[0] for c in matching) / len(matching))
+        g = round(sum(c[1] for c in matching) / len(matching))
+        b = round(sum(c[2] for c in matching) / len(matching))
 
-    if not rs:
-        return (qr * 16 + 8, qg * 16 + 8, qb * 16 + 8)
+        if r >= 248 and g >= 248 and b >= 248:
+            return (255, 255, 255)
+        if r <= 6 and g <= 6 and b <= 6:
+            raw_fill = (0, 0, 0)
+        else:
+            raw_fill = (r, g, b)
 
-    r = round(sum(rs) / len(rs))
-    g = round(sum(gs) / len(gs))
-    b = round(sum(bs) / len(bs))
+    if local_text_box is not None and _is_dark(raw_fill):
+        tb_crop = img.crop(local_text_box.as_xyxy())
+        bright_count = sum(
+            1 for p in tb_crop.getdata()
+            if (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) > 180
+        )
+        total = tb_crop.width * tb_crop.height
+        if total > 0 and (bright_count / total) > 0.40:
+            return (255, 255, 255)
 
-    if r >= 248 and g >= 248 and b >= 248:
-        return (255, 255, 255)
-    if r <= 6 and g <= 6 and b <= 6:
-        return (0, 0, 0)
-    return (r, g, b)
+    return raw_fill
 
 
 def _color_close_mask(arr, fill_color: tuple[int, int, int], tol: int):

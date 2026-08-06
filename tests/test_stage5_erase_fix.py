@@ -765,4 +765,21 @@ def test_clamp_placements_preserves_layout_x_alignment():
     assert clamped_right[0]["x"] == 500, f"Expected x=500, got {clamped_right[0]['x']}"
 
 
+def test_sanitize_dark_fill_prevents_false_black_box():
+    """When a dark fill color is estimated (e.g. from outer black margins/stroke),
+    _sanitize_dark_fill must correct it to white if the text_box is white."""
+    from manhua_pipeline.stages.stage5_render.inpainting import _sanitize_dark_fill
+    from manhua_pipeline.stages.stage5_render.types import Box
+    from PIL import Image
+
+    # White page image with a white text_box
+    image = Image.new("RGB", (400, 300), (255, 255, 255))
+    text_box = Box(x=50, y=50, w=200, h=100)
+
+    dark_fill = (0, 0, 0)
+    sanitized = _sanitize_dark_fill(dark_fill, image, text_box)
+    assert sanitized == (255, 255, 255), f"Expected (255, 255, 255), got {sanitized}"
+
+
+
 
