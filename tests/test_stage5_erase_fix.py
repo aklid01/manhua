@@ -744,3 +744,25 @@ def test_low_overlap_fallback_erases_text_area(tmp_path, monkeypatch):
     )
 
 
+def test_clamp_placements_preserves_layout_x_alignment():
+    """_clamp_placements_to_mask must clamp placements within mask bounds without
+    forcibly recentering off-center placements to the middle of the bubble mask."""
+    from manhua_pipeline.stages.stage5_render.typography import _clamp_placements_to_mask
+    from manhua_pipeline.stages.stage5_render.types import Box
+    from PIL import Image
+
+    mask = Image.new("L", (800, 200), 255)
+    bubble_box = Box(x=0, y=0, w=800, h=200)
+
+    # Left-aligned placement (e.g. region 1 on the left side of a wide speech bubble)
+    left_p = [{"text": "Hey!", "x": 100, "y": 80, "w": 120, "h": 40}]
+    clamped_left = _clamp_placements_to_mask(left_p, mask, bubble_box, erode_px=0)
+    assert clamped_left[0]["x"] == 100, f"Expected x=100, got {clamped_left[0]['x']}"
+
+    # Right-aligned placement (e.g. region 2 on the right side of a wide speech bubble)
+    right_p = [{"text": "Wait up!", "x": 500, "y": 80, "w": 200, "h": 40}]
+    clamped_right = _clamp_placements_to_mask(right_p, mask, bubble_box, erode_px=0)
+    assert clamped_right[0]["x"] == 500, f"Expected x=500, got {clamped_right[0]['x']}"
+
+
+

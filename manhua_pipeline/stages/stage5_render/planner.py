@@ -139,6 +139,7 @@ def _plan_and_erase_region(
             coverage,
         )
         bubble_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
+        fill_color = (255, 255, 255)
 
     def _is_dark(c: tuple[int, int, int]) -> bool:
         return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] < 96
@@ -218,7 +219,7 @@ def _plan_and_erase_region(
             erase_box=erase_box,
             bubble_mask=fallback_mask,
             config=config,
-            fill_color=fill_color,
+            fill_color=fill_color or (255, 255, 255),
         )
 
     if do_debug:
