@@ -661,3 +661,86 @@ def test_normalize_escaped_newlines_is_case_insensitive():
     assert normalize_escaped_newlines(r"A\R\NB") == "A\nB"
     assert normalize_escaped_newlines(r"A\r\nB") == "A\nB"
     assert normalize_escaped_newlines("plain") == "plain"
+
+
+def test_low_overlap_fallback_erases_text_area(tmp_path, monkeypatch):
+    """When the bubble mask has good overall coverage but clips most of the
+    erase rectangle (low_overlap), the planner must retry with a solid rect
+    mask so original glyphs are fully cleared before English text is drawn."""
+    from manhua_pipeline.stages.stage5_render import planner, inpainting
+    from manhua_pipeline.stages.stage5_render.types import Box
+
+    class _Cfg:
+        FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
+        FONT_MAX_PT = 20
+        FONT_MAX_PAGE_FRAC = 0.0
+        FONT_MIN_PT = 12
+        FONT_ABS_MIN_PT = 9
+        FONT_STEP_PT = 1
+        LINE_SPACING = 1.15
+        TEXT_PADDING_PX = 4
+        TEXT_LAYOUT_PADDING_PX = 4
+        TEXT_ERASE_PADDING_PX = 4
+        TEXT_ERASE_DILATION_PX = 0
+        TEXT_ERASE_MIN_RETENTION = 0.65
+        TEXT_ERASE_PARENT_MARGIN_PX = 8
+        BUBBLE_FILL_MODE = "white"
+        BUBBLE_WHITE_THRESHOLD = 220
+        BUBBLE_FILL_MIN_COVERAGE = 0.40
+        LAYOUT_EXPAND_ENABLED = False
+        LAYOUT_INTERIOR_ERODE_PX = 0
+        LAYOUT_MAX_GROWTH_FACTOR = 1.0
+        LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
+        FONT_MISSING_HARD_ERROR = True
+        EMPHASIS_UPPERCASE = True
+        BUBBLE_FILL_TOLERANCE = 42
+
+    cfg = _Cfg()
+
+    img_w, img_h = 400, 200
+    bubble_box = Box(x=0, y=0, w=img_w, h=img_h)
+    text_box = Box(x=100, y=80, w=200, h=40)
+
+    img = Image.new("RGB", (img_w, img_h), (255, 255, 255))
+    img.paste((30, 30, 30), (text_box.x, text_box.y, text_box.x2, text_box.y2))
+
+    white_top_mask = Image.new("L", (img_w, img_h), 0)
+    white_top_mask.paste(255, (0, 0, img_w, 60))
+
+    def _patched_get_bubble_mask(*args, **kwargs):
+        return white_top_mask
+
+    monkeypatch.setattr(inpainting, "_get_bubble_mask", _patched_get_bubble_mask)
+
+    draw = ImageDraw.Draw(img)
+    region = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "bbox": {"x": text_box.x, "y": text_box.y, "w": text_box.w, "h": text_box.h},
+        "read_region": {"x": text_box.x, "y": text_box.y, "w": text_box.w, "h": text_box.h},
+        "parent_bubble": {"x": bubble_box.x, "y": bubble_box.y, "w": bubble_box.w, "h": bubble_box.h},
+        "render": True,
+        "has_usable_text": True,
+        "final_text": "Wait up!",
+        "register": "neutral",
+        "glossary_conflict": False,
+        "style_hint": "round",
+    }
+
+    plan = planner._plan_and_erase_region(
+        region, img, draw, page_num=1, config=cfg, render_dir=None
+    )
+
+    assert plan.rendered, "expected plan to render"
+
+    erase_box = Box(**plan.erase_box)
+    crop = img.crop(erase_box.as_xyxy())
+    pixels = list(crop.getdata())
+    white_count = sum(1 for p in pixels if p[0] >= 200 and p[1] >= 200 and p[2] >= 200)
+    total = len(pixels)
+    assert white_count == total, (
+        f"Expected erase zone to be fully erased after low_overlap fallback; "
+        f"{total - white_count}/{total} non-white pixels remain"
+    )
+
+

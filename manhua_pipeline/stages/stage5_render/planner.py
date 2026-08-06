@@ -198,6 +198,29 @@ def _plan_and_erase_region(
         fill_color=fill_color,
     )
 
+    if erase_meta.get("low_overlap"):
+        logger.warning(
+            "[%d/%d %s] Page %d %s -> erase mask low overlap (%.2f); "
+            "retrying with solid rect fallback.",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            page_num,
+            rid,
+            erase_meta.get("clip_retention_ratio", 0.0),
+        )
+        fallback_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
+        erase_meta = inpainting.erase_original_text(
+            page_img=page_img,
+            draw=draw,
+            text_box=text_box,
+            bubble_box=bubble_box,
+            erase_box=erase_box,
+            bubble_mask=fallback_mask,
+            config=config,
+            fill_color=fill_color,
+        )
+
     if do_debug:
         debug_paths["text_mask"] = str(
             debug.save_render_debug_image(
