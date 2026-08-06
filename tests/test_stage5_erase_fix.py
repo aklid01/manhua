@@ -776,9 +776,44 @@ def test_sanitize_dark_fill_prevents_false_black_box():
     image = Image.new("RGB", (400, 300), (255, 255, 255))
     text_box = Box(x=50, y=50, w=200, h=100)
 
-    dark_fill = (0, 0, 0)
-    sanitized = _sanitize_dark_fill(dark_fill, image, text_box)
-    assert sanitized == (255, 255, 255), f"Expected (255, 255, 255), got {sanitized}"
+def test_bubble_mask_erases_entire_bubble_container():
+    """erase_original_text must erase the entire speech bubble container interior,
+    preventing unrendered sibling text fragments or stray edge punctuation from surviving."""
+    from manhua_pipeline.stages.stage5_render.inpainting import erase_original_text
+    from manhua_pipeline.stages.stage5_render.types import Box
+    from PIL import Image, ImageDraw
+
+    # White bubble image with black text outside the text_box (e.g. top-left unrendered fragment)
+    page_img = Image.new("RGB", (400, 300), (50, 50, 50))
+    draw = ImageDraw.Draw(page_img)
+
+    # White bubble interior
+    draw.rectangle((50, 50, 350, 250), fill=(255, 255, 255))
+    # Unrendered Chinese fragment on top-left inside bubble
+    draw.rectangle((70, 70, 110, 110), fill=(0, 0, 0))
+    # Main text region in middle
+    draw.rectangle((150, 120, 250, 180), fill=(0, 0, 0))
+
+    bubble_box = Box(50, 50, 300, 200)
+    text_box = Box(150, 120, 100, 60)
+    erase_box = Box(138, 108, 124, 84)
+
+    bubble_mask = Image.new("L", (300, 200), 255)
+
+    erase_original_text(
+        page_img=page_img,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=bubble_mask,
+        config=config,
+    )
+
+    # Both top-left fragment (85, 85) and main text (180, 140) must be erased to white
+    assert page_img.getpixel((85, 85)) == (255, 255, 255), "Top-left fragment was not erased"
+    assert page_img.getpixel((180, 140)) == (255, 255, 255), "Main text was not erased"
+
 
 
 

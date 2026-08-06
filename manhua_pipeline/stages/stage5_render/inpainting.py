@@ -117,7 +117,9 @@ def erase_original_text(
             dilation += 1
         text_mask = text_mask.filter(ImageFilter.MaxFilter(dilation))
 
-    erase_mask = ImageChops.multiply(text_mask, bubble_mask)
+    # Use bubble_mask directly to clean the entire speech bubble container interior,
+    # preventing stray Chinese characters, unrendered sibling fragments, or edge punctuation from surviving.
+    erase_mask = bubble_mask
 
     fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
     page_img.paste(
