@@ -221,11 +221,16 @@ def _import_folder(
         dest = pages_dir / dest_name
         try:
             with Image.open(src_file) as im:
+                im = im.convert("RGB")
                 w, h = im.size
+                max_w = getattr(config, "IMPORT_MAX_WIDTH", 0)
+                if max_w and w > max_w:
+                    im.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
+                    w, h = im.size
                 ratio = h / w if w else 1.0
                 if ratio > _STRIP_RATIO:
                     strip_count += 1
-                im.convert("RGB").save(dest, "PNG")
+                im.save(dest, "PNG")
             log_page(
                 logger,
                 _STAGE_INDEX,
