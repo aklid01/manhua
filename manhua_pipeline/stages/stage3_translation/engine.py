@@ -623,7 +623,7 @@ def run_translation(
                 retry_prompt = bundle._build_contextual_retry_prompt(region, locked)
                 try:
                     retry_raw = backend_inst._call_ollama(retry_prompt)
-                    retry_parsed = be.parse_json(retry_raw)
+                    retry_parsed = backend_inst._parse_json(retry_raw)
                     retry_issues = validate_expected_regions(
                         retry_parsed, {rid}, attempt=2
                     )
