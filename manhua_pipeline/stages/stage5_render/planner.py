@@ -44,7 +44,8 @@ def _plan_and_erase_region(
             page_height=page_img.height,
         )
 
-    if not render_flag:
+    erase_only = bool(region.get("erase_only"))
+    if not render_flag and not erase_only:
         return _left("left_original_not_render_type")
     if not has_usable:
         logger.info(
@@ -246,6 +247,24 @@ def _plan_and_erase_region(
                 region_id=rid,
                 suffix="after_erase",
             )
+        )
+
+    if erase_only:
+        return RenderPlan(
+            region_id=rid,
+            page_number=page_num,
+            rendered=False,
+            action=region.get("render_skip_reason") or "erase_only",
+            register=register,
+            style_hint=style_hint,
+            glossary_conflict=glossary_conflict,
+            page_width=page_img.width,
+            page_height=page_img.height,
+            text_box=text_box.as_dict(),
+            erase_box=erase_box.as_dict(),
+            bubble_box=bubble_box.as_dict(),
+            erase_strategy=erase_meta.get("erase_strategy", ""),
+            debug_paths=debug_paths,
         )
 
     plan = RenderPlan(

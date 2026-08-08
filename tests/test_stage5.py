@@ -127,6 +127,49 @@ def test_render_text_gated_erase(tmp_path, monkeypatch):
     assert by_id["P001_R002"]["action"] == "left_original_no_text"
 
 
+def test_render_suppresses_duplicate_overlapping_bubble_regions(tmp_path, monkeypatch):
+    from PIL import ImageFont
+
+    from manhua_pipeline.stages import stage5_render
+
+    monkeypatch.setattr(
+        stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
+    )
+    ws = tmp_path / "workspace"
+    primary = _region("P001_R001", 90, 85, 200, 220)
+    primary["parent_bubble"] = {"x": 25, "y": 26, "w": 300, "h": 280}
+    secondary = _region("P001_R002", 130, 170, 230, 100)
+    secondary["parent_bubble"] = {"x": 36, "y": 150, "w": 330, "h": 170}
+    det = _det([primary, secondary])
+    ocr = {
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "has_usable_text": True,
+                "original_text": "商业触角透各行各",
+            },
+            {
+                "region_id": "P001_R002",
+                "has_usable_text": True,
+                "original_text": "商业触角渗透各行各业，",
+            },
+        ]
+    }
+    para = {
+        "results": [
+            {"region_id": "P001_R001", "final_text": "The complete dialogue."},
+            {"region_id": "P001_R002", "final_text": "The duplicate dialogue."},
+        ]
+    }
+    _setup(ws, det=det, ocr=ocr, para=para)
+    stage5_render.run_render(str(ws), config)
+    rep = json.loads((ws / "stage5_render" / "render.json").read_text(encoding="utf-8"))
+    by_id = {r["region_id"]: r for r in rep["results"]}
+    assert by_id["P001_R001"]["rendered"] is True
+    assert by_id["P001_R002"]["rendered"] is False
+    assert by_id["P001_R002"]["action"] == "overlapping_duplicate"
+
+
 def test_render_overflow_flagged(tmp_path, monkeypatch):
     from PIL import ImageFont
 
@@ -651,17 +694,18 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
         "confidence": 0.95,
         "render": True,
     }
-    # R002: second-half bubble that starts at stitch_y + 20
+    # R002: second-half text whose parent bubble starts before the seam.
+    # Ownership must follow the text box, not the parent bubble's top edge.
     r002 = {
         "region_id": "P001_R002",
         "page_number": 1,
         "type": "speech_bubble",
         "bbox": {"x": 50, "y": stitch_y + 20, "w": 150, "h": 80},
         "read_region": {"x": 50, "y": stitch_y + 20, "w": 150, "h": 80},
-        "parent_bubble": {"x": 20, "y": stitch_y + 10, "w": 200, "h": 120},
+        "parent_bubble": {"x": 20, "y": stitch_y - 10, "w": 200, "h": 120},
         "erase_mask": {
             "type": "rect",
-            "coords": [20, stitch_y + 10, 200, 120],
+            "coords": [20, stitch_y - 10, 200, 120],
         },
         "reading_order": 2,
         "style_hint": "round",

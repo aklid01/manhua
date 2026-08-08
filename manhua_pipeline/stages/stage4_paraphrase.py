@@ -41,12 +41,14 @@ def _cjk_ratio(text: str) -> float:
 
 _PROMPT_INSTRUCTIONS = (
     "Rewrite each literal English line as natural, casual, SPOKEN US English for a "
-    "comic speech bubble. Preserve meaning and emotional register (including crude/rude "
-    "tone - do NOT sanitize). Rewrite AGGRESSIVELY: prefer idiomatic phrasing, "
-    "contractions, and varied sentence structure over line-by-line literal wording. "
+    "comic speech bubble. Preserve every factual claim, relationship, and sentence "
+    "from the source; do not summarize, shorten away details, or omit a clause. "
+    "Preserve meaning and emotional register (including crude/rude tone - do NOT sanitize). "
+    "Use idiomatic phrasing, contractions, and varied sentence structure where natural, "
+    "but keep the complete content. "
     "NEVER soften, censor, or euphemize profanity or insults; keep the same intensity. "
     "Do NOT copy the source line verbatim UNLESS it is a proper noun, brand/watermark, "
-    "or fixed label. Keep names and glossary terms exactly. Prefer SHORT, punchy lines. "
+    "or fixed label. Keep names and glossary terms exactly. Keep dialogue punchy, but complete. "
     "If a line is a watermark / site tag / logo (baozimh, tencent, colamanga, www., .com, etc.), "
     "return an empty string - never rewrite or keep watermark text. "
     "If a line mixes dialogue with a watermark, keep only the dialogue.\n"
@@ -392,13 +394,40 @@ def _build_bundle(usable: list[dict], locked: list[dict], config) -> dict:
             "PARAPHRASE_TONE_DIRECTIVE",
             "preserve crude/rude register; casual US English",
         ),
-        "shorten_hint": f"Target length: under {getattr(config, 'PARAPHRASE_MAX_CHARS', 90)} characters",
+        "shorten_hint": (
+            "Do not shorten or summarize if that would omit any factual detail; "
+            "content completeness takes priority over bubble length."
+        ),
         "glossary": compact_glossary,
         "regions": regions,
     }
 
 
-def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
+def _looks_truncated(
+    literal: str, paraphrase: str, config=None
+) -> bool:
+    """Detect a likely summary that dropped content from a long bubble."""
+    min_chars = int(
+        getattr(config, "PARAPHRASE_MIN_TEXT_LENGTH_CHARS", 80)
+        if config is not None
+        else 80
+    )
+    min_ratio = float(
+        getattr(config, "PARAPHRASE_MIN_TEXT_LENGTH_RATIO", 0.45)
+        if config is not None
+        else 0.45
+    )
+    source_len = len(re.sub(r"\s+", "", literal or ""))
+    result_len = len(re.sub(r"\s+", "", paraphrase or ""))
+    return source_len >= min_chars and result_len < source_len * min_ratio
+
+
+def _validate_response(
+    raw,
+    usable_ids: list[str],
+    config=None,
+    literals: dict[str, str] | None = None,
+) -> tuple[dict, list[str]]:
     """Validate raw response dict; return (clean_map, warnings)."""
     warnings = []
     if not isinstance(raw, dict):
@@ -407,6 +436,7 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
         )
 
     clean = {}
+    literals = literals or {}
     for rid, val in raw.items():
         if rid not in usable_ids:
             warnings.append(f"Unexpected region_id in response (ignored): {rid!r}")
@@ -419,7 +449,15 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
                 f"Residual CJK in paraphrase for {rid!r} - treated as missing."
             )
             continue
-        clean[rid] = val.strip()
+        value = val.strip()
+        literal = literals.get(rid, "")
+        if _looks_truncated(literal, value, config):
+            warnings.append(
+                f"Paraphrase for {rid!r} is suspiciously short compared with its "
+                "literal translation - treated as missing."
+            )
+            continue
+        clean[rid] = value
 
     for rid in usable_ids:
         if rid not in clean:
@@ -578,7 +616,10 @@ def run_paraphrase(
     # Validate
     usable_ids = [r["region_id"] for r in usable]
     try:
-        paraphrase_map, val_warnings = _validate_response(raw_response, usable_ids)
+        literals = {r["region_id"]: r.get("literal_translation", "") for r in usable}
+        paraphrase_map, val_warnings = _validate_response(
+            raw_response, usable_ids, config=config, literals=literals
+        )
     except ValueError as exc:
         raise ValueError(
             f"paraphrase_response.json is malformed: {exc}. "
@@ -889,7 +930,10 @@ def write_paraphrase_response(
     )
 
     usable_ids = [r["region_id"] for r in usable]
-    clean_map, warnings = _validate_response(mapping, usable_ids)
+    literals = {r["region_id"]: r.get("literal_translation", "") for r in usable}
+    clean_map, warnings = _validate_response(
+        mapping, usable_ids, config=config, literals=literals
+    )
 
     para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
     para_dir.mkdir(parents=True, exist_ok=True)

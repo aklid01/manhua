@@ -220,6 +220,10 @@ OLLAMA_PARA_MIN_COMPLETION_RATIO = 0.80
 OLLAMA_PARA_NUM_CTX = 2048
 OLLAMA_PARA_KEEP_ALIVE = "15m"  # share the warm model with translation
 OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
+# Reject paraphrases that are suspiciously shorter than the literal translation.
+# A short response can silently drop an entire sentence or factual clause.
+PARAPHRASE_MIN_TEXT_LENGTH_RATIO = 0.45
+PARAPHRASE_MIN_TEXT_LENGTH_CHARS = 80
 
 # ---- Rendering ----
 FONT_PATH = ASSETS_DIR / "fonts" / "ComicNeue-Bold.ttf"

@@ -208,7 +208,7 @@ def test_paraphrase_bundle_includes_glossary(tmp_path):
     assert any(t["target_term"] == "Manager" for t in bundle["glossary"])
 
 
-def test_paraphrase_prompt_has_aggressive_clause(tmp_path):
+def test_paraphrase_prompt_requires_complete_content(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
@@ -220,8 +220,26 @@ def test_paraphrase_prompt_has_aggressive_clause(tmp_path):
         )
     )
     instr = bundle["READ_FIRST"].lower()
-    assert "aggressively" in instr
+    assert "every factual claim" in instr
+    assert "do not summarize" in instr
     assert "verbatim" in instr
+
+
+def test_truncated_paraphrase_falls_back_to_literal():
+    from manhua_pipeline.stages.stage4_paraphrase import _validate_response
+
+    literal = (
+        "She's called Jiu, a Palaan person. She works as a security guard at a "
+        "local enterprise in Huan City, an immigrant worker with a work permit."
+    )
+    clean, warnings = _validate_response(
+        {"P001_R001": "Her name's Jiu."},
+        ["P001_R001"],
+        config=config,
+        literals={"P001_R001": literal},
+    )
+    assert clean == {}
+    assert any("suspiciously short" in warning for warning in warnings)
 
 
 def test_paraphrase_missing_falls_back_to_literal(tmp_path):

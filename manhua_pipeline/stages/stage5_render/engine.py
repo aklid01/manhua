@@ -2,6 +2,7 @@ import copy
 import json
 import time
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -16,6 +17,104 @@ logger = get_logger(__name__)
 _STAGE_INDEX = 5
 _TOTAL_STAGES = 7
 _STAGE_NAME = "Render"
+
+
+def _box_overlap_ratio(a: dict | None, b: dict | None) -> float:
+    """Return intersection / area of the smaller box."""
+    if not a or not b:
+        return 0.0
+    ax0, ay0 = int(a.get("x", 0)), int(a.get("y", 0))
+    ax1, ay1 = ax0 + int(a.get("w", 0)), ay0 + int(a.get("h", 0))
+    bx0, by0 = int(b.get("x", 0)), int(b.get("y", 0))
+    bx1, by1 = bx0 + int(b.get("w", 0)), by0 + int(b.get("h", 0))
+    intersection = max(0, min(ax1, bx1) - max(ax0, bx0)) * max(
+        0, min(ay1, by1) - max(ay0, by0)
+    )
+    smaller = min(
+        max(0, int(a.get("w", 0)) * int(a.get("h", 0))),
+        max(0, int(b.get("w", 0)) * int(b.get("h", 0))),
+    )
+    return intersection / smaller if smaller else 0.0
+
+
+def _normalized_source_text(text: str) -> str:
+    return "".join(ch.lower() for ch in (text or "") if ch.isalnum() or "\u3400" <= ch <= "\u9fff")
+
+
+def _source_overlap_ratio(a: str, b: str) -> float:
+    """Measure shared source characters, including separate matching spans."""
+    left, right = _normalized_source_text(a), _normalized_source_text(b)
+    if not left or not right:
+        return 0.0
+    matches = SequenceMatcher(None, left, right, autojunk=False).get_matching_blocks()
+    matched = sum(block.size for block in matches)
+    return matched / min(len(left), len(right))
+
+
+def _suppress_overlapping_duplicate_regions(regions_by_page: dict[int, list[dict]]) -> None:
+    """Suppress detector duplicates from one irregular speech bubble.
+
+    RT-DETR can emit a large text box and a smaller box for the same connected
+    bubble. Rendering both produces the exact overprinted English seen when
+    their parent bubbles and OCR text substantially overlap. The smaller
+    region remains in the render pass as erase-only so its original artwork is
+    still removed, but it never contributes a second English text block.
+    """
+    for page_num, regions in regions_by_page.items():
+        candidates = [
+            r
+            for r in regions
+            if r.get("render", True)
+            and r.get("has_usable_text")
+            and r.get("final_text")
+            and r.get("parent_bubble")
+        ]
+        candidates.sort(
+            key=lambda r: int(r["bbox"].get("w", 0)) * int(r["bbox"].get("h", 0)),
+            reverse=True,
+        )
+
+        for primary_index, primary in enumerate(candidates):
+            if not primary.get("render", True):
+                continue
+            for secondary in candidates[primary_index + 1 :]:
+                if not secondary.get("render", True):
+                    continue
+                parent_overlap = _box_overlap_ratio(
+                    primary.get("parent_bubble"), secondary.get("parent_bubble")
+                )
+                text_overlap = _box_overlap_ratio(
+                    primary.get("read_region") or primary.get("bbox"),
+                    secondary.get("read_region") or secondary.get("bbox"),
+                )
+                source_overlap = _source_overlap_ratio(
+                    primary.get("original_text", ""),
+                    secondary.get("original_text", ""),
+                )
+                if (
+                    parent_overlap < 0.65
+                    or text_overlap < 0.55
+                    or source_overlap < 0.55
+                ):
+                    continue
+
+                secondary["render"] = False
+                secondary["erase_only"] = True
+                secondary["render_skip_reason"] = "overlapping_duplicate"
+                secondary["overlap_duplicate_of"] = primary["region_id"]
+                logger.warning(
+                    "[%d/%d %s] Page %d %s suppressed as duplicate of %s "
+                    "(parent=%.2f, text=%.2f, source=%.2f)",
+                    _STAGE_INDEX,
+                    _TOTAL_STAGES,
+                    _STAGE_NAME,
+                    page_num,
+                    secondary["region_id"],
+                    primary["region_id"],
+                    parent_overlap,
+                    text_overlap,
+                    source_overlap,
+                )
 
 
 def _render_region(*_args, **_kwargs):
@@ -56,11 +155,13 @@ def _load_and_merge_regions(
             "render": region.get("render", True),
             "style_hint": region.get("style_hint") or "round",
             "has_usable_text": ocr_entry.get("has_usable_text", False),
+            "original_text": ocr_entry.get("original_text", ""),
             "final_text": para_entry.get("final_text") or "",
             "register": para_entry.get("register") or "neutral",
             "glossary_conflict": para_entry.get("glossary_conflict") or False,
         }
         regions_by_page.setdefault(page_num, []).append(merged)
+    _suppress_overlapping_duplicate_regions(regions_by_page)
     return regions_by_page
 
 
@@ -151,7 +252,12 @@ def _render_single_page(
     if stitch_y:
         clipped = []
         for r in page_regions:
-            region_top = int((r.get("parent_bubble") or r["bbox"])["y"])
+            # A bubble can straddle the seam while its text belongs entirely to
+            # the second source page. Use the text/layout anchor to decide
+            # which half owns the region; the parent bubble may cross the seam
+            # so erasing can still cover its border.
+            text_box = r.get("read_region") or r["bbox"]
+            region_top = int(text_box["y"])
             if region_top < stitch_y:
                 r = _clip_region_to_stitch(r, stitch_y)
                 if int(r["bbox"].get("h", 0)) == 0:
