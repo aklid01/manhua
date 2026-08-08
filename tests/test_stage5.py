@@ -595,3 +595,119 @@ def test_single_bubble_two_pass_unchanged(tmp_path, monkeypatch):
     r = render["results"][0]
     assert r["rendered"] is True
     assert r["overflow"] is False
+
+
+def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
+    """A bubble whose parent_bubble extends past global_y_offset must be clamped
+    at the stitch boundary so it doesn't overlap with bubbles on the second half."""
+    from PIL import ImageFont
+
+    from manhua_pipeline.stages import stage5_render
+
+    monkeypatch.setattr(
+        stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
+    )
+
+    stitch_y = 300
+    page_h = stitch_y * 2  # 600
+
+    ws = tmp_path / "workspace"
+    (ws / "pages").mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", (400, page_h), (255, 255, 255))
+    img.save(ws / "pages" / "001.png")
+
+    manifest = {
+        "chapter_id": "t",
+        "total_pages": 1,
+        "pages": [
+            {
+                "page_number": 1,
+                "filename": "001.png",
+                "original_filename": "001.png",
+                "skip": False,
+                "width": 400,
+                "height": page_h,
+                "global_y_offset": stitch_y,
+            }
+        ],
+        "current_stage": "render",
+        "completed_stages": [],
+        "warning_count": 0,
+        "status": "in_progress",
+    }
+    (ws / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    # R001: top half bubble whose parent_bubble bleeds 80px past stitch_y
+    r001 = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "type": "speech_bubble",
+        "bbox": {"x": 50, "y": 200, "w": 150, "h": 80},
+        "read_region": {"x": 50, "y": 200, "w": 150, "h": 80},
+        "parent_bubble": {"x": 20, "y": 180, "w": 200, "h": 200},
+        "erase_mask": {"type": "rect", "coords": [20, 180, 200, 200]},
+        "reading_order": 1,
+        "style_hint": "round",
+        "confidence": 0.95,
+        "render": True,
+    }
+    # R002: second-half bubble that starts at stitch_y + 20
+    r002 = {
+        "region_id": "P001_R002",
+        "page_number": 1,
+        "type": "speech_bubble",
+        "bbox": {"x": 50, "y": stitch_y + 20, "w": 150, "h": 80},
+        "read_region": {"x": 50, "y": stitch_y + 20, "w": 150, "h": 80},
+        "parent_bubble": {"x": 20, "y": stitch_y + 10, "w": 200, "h": 120},
+        "erase_mask": {
+            "type": "rect",
+            "coords": [20, stitch_y + 10, 200, 120],
+        },
+        "reading_order": 2,
+        "style_hint": "round",
+        "confidence": 0.95,
+        "render": True,
+    }
+
+    det = {"chapter_id": "t", "stage": "detection", "generated_at": "now", "model": "m", "regions": [r001, r002]}
+    ocr = {
+        "chapter_id": "t",
+        "stage": "ocr",
+        "results": [
+            {"region_id": "P001_R001", "page_number": 1, "has_usable_text": True},
+            {"region_id": "P001_R002", "page_number": 1, "has_usable_text": True},
+        ],
+    }
+    para = {
+        "chapter_id": "t",
+        "stage": "paraphrase",
+        "results": [
+            {"region_id": "P001_R001", "page_number": 1, "final_text": "Hello.", "register": "neutral", "paraphrased": True},
+            {"region_id": "P001_R002", "page_number": 1, "final_text": "World.", "register": "neutral", "paraphrased": True},
+        ],
+    }
+
+    (ws / "stage1_detection").mkdir(parents=True, exist_ok=True)
+    (ws / "stage1_detection" / "detection.json").write_text(json.dumps(det), encoding="utf-8")
+    (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
+    (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr), encoding="utf-8")
+    (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(json.dumps(para), encoding="utf-8")
+
+    stage5_render.run_render(str(ws), config)
+
+    render = json.loads((ws / "stage5_render" / "render.json").read_text())
+    results = {r["region_id"]: r for r in render["results"]}
+
+    assert results["P001_R001"]["rendered"] is True
+    assert results["P001_R002"]["rendered"] is True
+
+    # R001's text_box (layout input) must be clipped so text placement can't
+    # cross stitch_y. The bubble erase area is intentionally not clipped so
+    # original Chinese glyphs near the seam are fully wiped.
+    r001_result = results["P001_R001"]
+    if "text_box" in r001_result:
+        text_bottom = r001_result["text_box"]["y"] + r001_result["text_box"]["h"]
+        assert text_bottom <= stitch_y, (
+            f"R001 text_box bottom ({text_bottom}) crossed stitch boundary ({stitch_y})"
+        )

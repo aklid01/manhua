@@ -1,3 +1,4 @@
+import copy
 import json
 import time
 from datetime import datetime, timezone
@@ -63,6 +64,40 @@ def _load_and_merge_regions(
     return regions_by_page
 
 
+def _clip_region_to_stitch(region: dict, stitch_y: int) -> dict:
+    """Clamp the layout boxes of a region so text is placed only within the first
+    source page's half of a stitched image.
+
+    Only bbox and read_region are clipped at stitch_y. parent_bubble and
+    erase_mask are intentionally left at their original extent so the eraser
+    still wipes the full bubble area (including Chinese text that may sit close
+    to the seam). Restricting the layout inputs prevents English text from being
+    placed where it would overlap with second-half content.
+    """
+
+    def _clip_dict_box(d: dict | None) -> dict | None:
+        if d is None:
+            return None
+        y = int(d.get("y", 0))
+        h = int(d.get("h", 0))
+        new_h = max(0, min(h, stitch_y - y))
+        if new_h == h:
+            return d
+        result = dict(d)
+        result["h"] = new_h
+        return result
+
+    region = copy.copy(region)
+
+    region["bbox"] = _clip_dict_box(region.get("bbox")) or region["bbox"]
+
+    if region.get("read_region"):
+        region["read_region"] = _clip_dict_box(region["read_region"])
+
+    return region
+
+
+
 def _render_single_page(
     page: dict,
     ws: Path,
@@ -111,6 +146,26 @@ def _render_single_page(
 
     draw = ImageDraw.Draw(page_img)
     page_regions = regions_by_page.get(page_num, [])
+
+    stitch_y = page.get("global_y_offset")
+    if stitch_y:
+        clipped = []
+        for r in page_regions:
+            region_top = int((r.get("parent_bubble") or r["bbox"])["y"])
+            if region_top < stitch_y:
+                r = _clip_region_to_stitch(r, stitch_y)
+                if int(r["bbox"].get("h", 0)) == 0:
+                    logger.warning(
+                        "[%d/%d %s] Page %d %s bbox clipped to zero height at stitch boundary - skipping",
+                        _STAGE_INDEX,
+                        _TOTAL_STAGES,
+                        _STAGE_NAME,
+                        page_num,
+                        r["region_id"],
+                    )
+                    continue
+            clipped.append(r)
+        page_regions = clipped
 
     render_regions = [r for r in page_regions if r.get("render", True)]
 

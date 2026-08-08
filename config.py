@@ -255,6 +255,12 @@ LAYOUT_INTERIOR_ERODE_PX = 10  # inset from bubble interior edge (tail/rim guard
 LAYOUT_MAX_GROWTH_FACTOR = 3.0  # cap layout area growth vs original text box
 LAYOUT_MIN_ANCHOR_OVERLAP = 0.5  # expanded box must still cover >=50% of text box
 
+# ---- Import: page size cap ----
+# Pages wider than this are scaled down proportionally at import time.
+# Set to 0 to disable. Pillow thumbnail() only shrinks, never upscales.
+# Safe range: 1200-1500 px (OCR stays reliable; detector input is 640px anyway).
+IMPORT_MAX_WIDTH = 1500
+
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
 

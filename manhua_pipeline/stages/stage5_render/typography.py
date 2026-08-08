@@ -354,7 +354,8 @@ def _clamp_placements_to_mask(
         line_w = p["w"]
 
         if available_w >= line_w:
-            new_x = left_page + (available_w - line_w) // 2
+            max_x = max(left_page, right_page - line_w)
+            new_x = max(left_page, min(p["x"], max_x))
         else:
             new_x = left_page
 
