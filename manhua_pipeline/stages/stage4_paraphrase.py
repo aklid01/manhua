@@ -403,9 +403,7 @@ def _build_bundle(usable: list[dict], locked: list[dict], config) -> dict:
     }
 
 
-def _looks_truncated(
-    literal: str, paraphrase: str, config=None
-) -> bool:
+def _looks_truncated(literal: str, paraphrase: str, config=None) -> bool:
     """Detect a likely summary that dropped content from a long bubble."""
     min_chars = int(
         getattr(config, "PARAPHRASE_MIN_TEXT_LENGTH_CHARS", 80)

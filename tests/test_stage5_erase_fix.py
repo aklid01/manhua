@@ -667,7 +667,7 @@ def test_low_overlap_fallback_erases_text_area(tmp_path, monkeypatch):
     """When the bubble mask has good overall coverage but clips most of the
     erase rectangle (low_overlap), the planner must retry with a solid rect
     mask so original glyphs are fully cleared before English text is drawn."""
-    from manhua_pipeline.stages.stage5_render import planner, inpainting
+    from manhua_pipeline.stages.stage5_render import inpainting, planner
     from manhua_pipeline.stages.stage5_render.types import Box
 
     class _Cfg:
@@ -717,8 +717,18 @@ def test_low_overlap_fallback_erases_text_area(tmp_path, monkeypatch):
         "region_id": "P001_R001",
         "page_number": 1,
         "bbox": {"x": text_box.x, "y": text_box.y, "w": text_box.w, "h": text_box.h},
-        "read_region": {"x": text_box.x, "y": text_box.y, "w": text_box.w, "h": text_box.h},
-        "parent_bubble": {"x": bubble_box.x, "y": bubble_box.y, "w": bubble_box.w, "h": bubble_box.h},
+        "read_region": {
+            "x": text_box.x,
+            "y": text_box.y,
+            "w": text_box.w,
+            "h": text_box.h,
+        },
+        "parent_bubble": {
+            "x": bubble_box.x,
+            "y": bubble_box.y,
+            "w": bubble_box.w,
+            "h": bubble_box.h,
+        },
         "render": True,
         "has_usable_text": True,
         "final_text": "Wait up!",
@@ -747,9 +757,12 @@ def test_low_overlap_fallback_erases_text_area(tmp_path, monkeypatch):
 def test_clamp_placements_preserves_layout_x_alignment():
     """_clamp_placements_to_mask must clamp placements within mask bounds without
     forcibly recentering off-center placements to the middle of the bubble mask."""
-    from manhua_pipeline.stages.stage5_render.typography import _clamp_placements_to_mask
-    from manhua_pipeline.stages.stage5_render.types import Box
     from PIL import Image
+
+    from manhua_pipeline.stages.stage5_render.types import Box
+    from manhua_pipeline.stages.stage5_render.typography import (
+        _clamp_placements_to_mask,
+    )
 
     mask = Image.new("L", (800, 200), 255)
     bubble_box = Box(x=0, y=0, w=800, h=200)
@@ -768,20 +781,22 @@ def test_clamp_placements_preserves_layout_x_alignment():
 def test_sanitize_dark_fill_prevents_false_black_box():
     """When a dark fill color is estimated (e.g. from outer black margins/stroke),
     _sanitize_dark_fill must correct it to white if the text_box is white."""
-    from manhua_pipeline.stages.stage5_render.inpainting import _sanitize_dark_fill
-    from manhua_pipeline.stages.stage5_render.types import Box
     from PIL import Image
+
+    from manhua_pipeline.stages.stage5_render.types import Box
 
     # White page image with a white text_box
     image = Image.new("RGB", (400, 300), (255, 255, 255))
     text_box = Box(x=50, y=50, w=200, h=100)
 
+
 def test_bubble_mask_erases_entire_bubble_container():
     """erase_original_text must erase the entire speech bubble container interior,
     preventing unrendered sibling text fragments or stray edge punctuation from surviving."""
+    from PIL import Image, ImageDraw
+
     from manhua_pipeline.stages.stage5_render.inpainting import erase_original_text
     from manhua_pipeline.stages.stage5_render.types import Box
-    from PIL import Image, ImageDraw
 
     # White bubble image with black text outside the text_box (e.g. top-left unrendered fragment)
     page_img = Image.new("RGB", (400, 300), (50, 50, 50))
@@ -811,10 +826,7 @@ def test_bubble_mask_erases_entire_bubble_container():
     )
 
     # Both top-left fragment (85, 85) and main text (180, 140) must be erased to white
-    assert page_img.getpixel((85, 85)) == (255, 255, 255), "Top-left fragment was not erased"
+    assert page_img.getpixel((85, 85)) == (255, 255, 255), (
+        "Top-left fragment was not erased"
+    )
     assert page_img.getpixel((180, 140)) == (255, 255, 255), "Main text was not erased"
-
-
-
-
-

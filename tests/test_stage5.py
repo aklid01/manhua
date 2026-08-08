@@ -713,7 +713,13 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
         "render": True,
     }
 
-    det = {"chapter_id": "t", "stage": "detection", "generated_at": "now", "model": "m", "regions": [r001, r002]}
+    det = {
+        "chapter_id": "t",
+        "stage": "detection",
+        "generated_at": "now",
+        "model": "m",
+        "regions": [r001, r002],
+    }
     ocr = {
         "chapter_id": "t",
         "stage": "ocr",
@@ -726,17 +732,33 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
         "chapter_id": "t",
         "stage": "paraphrase",
         "results": [
-            {"region_id": "P001_R001", "page_number": 1, "final_text": "Hello.", "register": "neutral", "paraphrased": True},
-            {"region_id": "P001_R002", "page_number": 1, "final_text": "World.", "register": "neutral", "paraphrased": True},
+            {
+                "region_id": "P001_R001",
+                "page_number": 1,
+                "final_text": "Hello.",
+                "register": "neutral",
+                "paraphrased": True,
+            },
+            {
+                "region_id": "P001_R002",
+                "page_number": 1,
+                "final_text": "World.",
+                "register": "neutral",
+                "paraphrased": True,
+            },
         ],
     }
 
     (ws / "stage1_detection").mkdir(parents=True, exist_ok=True)
-    (ws / "stage1_detection" / "detection.json").write_text(json.dumps(det), encoding="utf-8")
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(det), encoding="utf-8"
+    )
     (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
     (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr), encoding="utf-8")
     (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
-    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(json.dumps(para), encoding="utf-8")
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(
+        json.dumps(para), encoding="utf-8"
+    )
 
     stage5_render.run_render(str(ws), config)
 

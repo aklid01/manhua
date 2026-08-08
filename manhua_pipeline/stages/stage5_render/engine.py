@@ -38,7 +38,9 @@ def _box_overlap_ratio(a: dict | None, b: dict | None) -> float:
 
 
 def _normalized_source_text(text: str) -> str:
-    return "".join(ch.lower() for ch in (text or "") if ch.isalnum() or "\u3400" <= ch <= "\u9fff")
+    return "".join(
+        ch.lower() for ch in (text or "") if ch.isalnum() or "\u3400" <= ch <= "\u9fff"
+    )
 
 
 def _source_overlap_ratio(a: str, b: str) -> float:
@@ -51,7 +53,9 @@ def _source_overlap_ratio(a: str, b: str) -> float:
     return matched / min(len(left), len(right))
 
 
-def _suppress_overlapping_duplicate_regions(regions_by_page: dict[int, list[dict]]) -> None:
+def _suppress_overlapping_duplicate_regions(
+    regions_by_page: dict[int, list[dict]],
+) -> None:
     """Suppress detector duplicates from one irregular speech bubble.
 
     RT-DETR can emit a large text box and a smaller box for the same connected
@@ -196,7 +200,6 @@ def _clip_region_to_stitch(region: dict, stitch_y: int) -> dict:
         region["read_region"] = _clip_dict_box(region["read_region"])
 
     return region
-
 
 
 def _render_single_page(

@@ -1,7 +1,7 @@
 from collections import Counter
 from statistics import median
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 from manhua_pipeline.stages.stage5_render.geometry import (
     box_inside,
@@ -329,7 +329,8 @@ def _dominant_fill_color(
     if local_text_box is not None and _is_dark(raw_fill):
         tb_crop = img.crop(local_text_box.as_xyxy())
         bright_count = sum(
-            1 for p in tb_crop.getdata()
+            1
+            for p in tb_crop.getdata()
             if (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) > 180
         )
         total = tb_crop.width * tb_crop.height
