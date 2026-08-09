@@ -79,9 +79,13 @@ def _cjk_count(text: str) -> int:
 _DIALOGUE_SIGNAL_PUNCT = frozenset("?？!！~～…。．⁈⁇‼♥♡")
 
 _CJK_INTERJECTIONS = frozenset(
+    # Vocal interjections / hesitations
     "诶欸嗯唔呒啊阿哈呵嘿嘻咦哦噢喔唉哎呃哼呀呐喂嘛啦"
-    "咧哇呜咳嘶啧哟唷嚯嗝嗬嘞嚄"
-    "嘘呸嗤吖呦啐切"
+    "咧哇呜咳嘶啧哟唷嚯嗝嗬嘞嚄嘘呸嗤吖呦啐切"
+    # Additions: breath / exclamation sounds seen in manhua
+    "额呼嗷噫噗吼咻嗨嘁唏嗞哧咩嗡吭啵"
+    # Onomatopoeia (single-char sound effects that fill a bubble alone)
+    "砰啪咚叮嘭哗哐唰嘣哒咔嗖轰嘀"
 )
 
 

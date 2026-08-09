@@ -337,6 +337,21 @@ def test_short_cjk_dialogue_triage():
         triage_region("嗯", config).reason == "translatable"
     )  # bare known interjection
 
+    # Regressions: chap 64 p23 (额……) and chap 62 p3 (呼)
+    assert triage_region("额……", config).reason == "translatable"  # hesitation + ellipsis
+    assert triage_region("额", config).reason == "translatable"   # bare hesitation
+    assert triage_region("呼", config).reason == "translatable"   # bare exhale
+
+    # Other newly added breath / exclamation chars
+    assert triage_region("嗷", config).reason == "translatable"   # pain cry
+    assert triage_region("噗", config).reason == "translatable"   # pfft
+    assert triage_region("吼", config).reason == "translatable"   # roar
+
+    # Onomatopoeia sound effects that appear solo in a bubble
+    assert triage_region("砰", config).reason == "translatable"   # bang
+    assert triage_region("啪", config).reason == "translatable"   # slap
+    assert triage_region("咚", config).reason == "translatable"   # thud
+
     # Genuine debris / non-dialogue single chars -> still trivial (skipped)
     assert triage_region("一", config).reason == "trivial"  # numeral one, no signal
     assert triage_region("王", config).reason == "trivial"  # lone char, no signal
