@@ -320,46 +320,65 @@ def test_cjk_char_count_and_is_trivial_region():
 
 
 def test_short_cjk_dialogue_triage():
-    """Short CJK dialogue with a signal must NOT be skipped as trivial noise.
+    """Single-CJK interjections/SFX bypass translation and go to paraphrase directly.
 
-    Regression guard for the "诶？" ("Huh?") speech-bubble case: a single CJK
-    char + dialogue punctuation is real dialogue and must reach the backend.
+    These chars are real dialogue but the translation model (small/local) returns empty
+    for them consistently. They are routed sfx_passthrough: translated=True with the raw
+    CJK as literal_translation so the stronger paraphrase model handles them in context.
     """
     from manhua_pipeline.stages.stage3_translation import triage_region
 
-    # Real short dialogue -> translatable
-    assert (
-        triage_region("诶？", config).reason == "translatable"
-    )  # interjection + fullwidth ?
-    assert triage_region("诶?", config).reason == "translatable"  # ASCII ?
-    assert triage_region("啊！", config).reason == "translatable"  # interjection + !
-    assert (
-        triage_region("嗯", config).reason == "translatable"
-    )  # bare known interjection
+    # Single-CJK interjections with dialogue punct -> sfx_passthrough (not translatable)
+    assert triage_region("诶？", config).reason == "sfx_passthrough"  # interjection + ?
+    assert triage_region("诶?", config).reason == "sfx_passthrough"   # ASCII ?
+    assert triage_region("啊！", config).reason == "sfx_passthrough"  # interjection + !
+    assert triage_region("嗯", config).reason == "sfx_passthrough"   # bare known interjection
 
     # Regressions: chap 64 p23 (额……) and chap 62 p3 (呼)
-    assert triage_region("额……", config).reason == "translatable"  # hesitation + ellipsis
-    assert triage_region("额", config).reason == "translatable"   # bare hesitation
-    assert triage_region("呼", config).reason == "translatable"   # bare exhale
+    assert triage_region("额……", config).reason == "sfx_passthrough"  # hesitation + ellipsis
+    assert triage_region("额", config).reason == "sfx_passthrough"   # bare hesitation
+    assert triage_region("呼", config).reason == "sfx_passthrough"   # bare exhale
+    assert triage_region("哈", config).reason == "sfx_passthrough"   # chap 62 p3 reported case
 
-    # Other newly added breath / exclamation chars
-    assert triage_region("嗷", config).reason == "translatable"   # pain cry
-    assert triage_region("噗", config).reason == "translatable"   # pfft
-    assert triage_region("吼", config).reason == "translatable"   # roar
+    # Other breath / exclamation chars
+    assert triage_region("嗷", config).reason == "sfx_passthrough"   # pain cry
+    assert triage_region("噗", config).reason == "sfx_passthrough"   # pfft
+    assert triage_region("吼", config).reason == "sfx_passthrough"   # roar
 
-    # Onomatopoeia sound effects that appear solo in a bubble
-    assert triage_region("砰", config).reason == "translatable"   # bang
-    assert triage_region("啪", config).reason == "translatable"   # slap
-    assert triage_region("咚", config).reason == "translatable"   # thud
+    # Onomatopoeia sound effects
+    assert triage_region("砰", config).reason == "sfx_passthrough"   # bang
+    assert triage_region("啪", config).reason == "sfx_passthrough"   # slap
+    assert triage_region("咚", config).reason == "sfx_passthrough"   # thud
 
     # Genuine debris / non-dialogue single chars -> still trivial (skipped)
     assert triage_region("一", config).reason == "trivial"  # numeral one, no signal
     assert triage_region("王", config).reason == "trivial"  # lone char, no signal
 
-    # Controls unchanged
+    # Multi-CJK -> normal translatable path unchanged
     assert triage_region("滚吧！", config).reason == "translatable"
     assert triage_region("", config).reason == "empty"
     assert triage_region("Hello", config).reason == "no_cjk"
+
+
+def test_sfx_passthrough_partition():
+    """sfx_passthrough regions are emitted as translated=True rows carrying raw CJK.
+
+    This is the key contract: stage4 sees them as 'usable' (translated=True) and
+    the paraphrase model receives the raw CJK as literal_translation.
+    """
+    from manhua_pipeline.stages.stage3_translation import _partition_by_triage
+
+    region = {"region_id": "P003_R003", "page_number": 3, "original_text": "哈"}
+    translatable, hard_skipped, trivial_fallback = _partition_by_triage(
+        [region], config, {}
+    )
+    assert translatable == []
+    assert trivial_fallback == []
+    row = hard_skipped[0]
+    assert row["translated"] is True
+    assert row["literal_translation"] == "哈"  # raw CJK passed to paraphrase
+    assert row["translation_source"] == "sfx_passthrough"
+    assert row["skip_reason"] is None
 
 
 def test_short_cjk_dialogue_toggle_off(monkeypatch):
@@ -406,19 +425,16 @@ def test_punct_only_toggle_off(monkeypatch):
 
 
 def test_low_confidence_real_dialogue_not_dropped(tmp_path):
-    """Regions with real CJK dialogue and has_usable_text=False (low OCR confidence)
-    must still reach the translation prompt.
+    """Regions with real CJK dialogue and has_usable_text=False must not be dropped.
 
     Regression guard for the "啊……" case: OCR read one CJK char at low confidence,
-    so has_usable_text=False. The old code re-gated on has_usable_text AFTER triage
-    already classified the region as translatable, silently dropping it. Triage
-    must win over the raw OCR confidence gate.
+    so has_usable_text=False. Single-CJK interjections now take the sfx_passthrough
+    route - they bypass translation entirely and land in translation.json as
+    translated=True, source="sfx_passthrough". The region must never be silently dropped.
     """
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
-    # has_usable_text=False simulates low OCR confidence (mean_conf < OCR_MIN_TEXT_CONF).
-    # The text itself is real dialogue: one CJK interjection + ellipsis.
     low_conf_entry = {
         "region_id": "P001_R001",
         "page_number": 1,
@@ -438,13 +454,17 @@ def test_low_confidence_real_dialogue_not_dropped(tmp_path):
     _setup(ws, [low_conf_entry])
     run_translation(str(ws), config)
 
-    prompt_path = ws / "stage3_translation" / "translation_prompt.json"
-    assert prompt_path.exists(), (
-        "translation_prompt.json must be written for real dialogue"
+    trans_path = ws / "stage3_translation" / "translation.json"
+    assert trans_path.exists(), "translation.json must be written"
+    data = json.loads(trans_path.read_text(encoding="utf-8"))
+    region = next(
+        (r for r in data.get("results", []) if r["region_id"] == "P001_R001"), None
     )
-    bundle = json.loads(prompt_path.read_text(encoding="utf-8"))
-    ids = [item["region_id"] for item in bundle["regions"]]
-    assert "P001_R001" in ids, (
-        "Low-confidence real dialogue was silently dropped — "
-        "has_usable_text=False must not override triage's 'translatable' verdict"
+    assert region is not None, "P001_R001 must appear in translation.json results"
+    assert region["translated"] is True, (
+        "sfx_passthrough must mark the region as translated=True so stage4 picks it up"
     )
+    assert region["translation_source"] == "sfx_passthrough", (
+        "single-CJK interjection must bypass the LLM and be marked sfx_passthrough"
+    )
+

@@ -50,7 +50,7 @@ def _is_trivial_region(original_text: str, config) -> bool:
 
 @dataclass(frozen=True)
 class TriageResult:
-    reason: str  # empty | watermark | no_cjk | trivial | translatable
+    reason: str  # empty | watermark | no_cjk | trivial | sfx_passthrough | translatable
     effective_text: str
 
 
@@ -128,7 +128,7 @@ def triage_region(original_text: str, config) -> TriageResult:
         if getattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", True) and (
             _has_dialogue_signal(effective)
         ):
-            return TriageResult("translatable", effective)
+            return TriageResult("sfx_passthrough", effective)
         return TriageResult("trivial", effective)
 
     return TriageResult("translatable", effective)
@@ -194,6 +194,15 @@ def _partition_by_triage(
                 trivial_fallback.append(r)
             else:
                 hard_skipped.append(_skip_row(r, "no_cjk"))
+        elif res.reason == "sfx_passthrough":
+            hard_skipped.append(
+                _translated_row(
+                    r,
+                    res.effective_text,
+                    source="sfx_passthrough",
+                    glossary_terms=[],
+                )
+            )
         elif res.reason == "trivial":
             hit = locked_index.get(res.effective_text)
             if hit:
