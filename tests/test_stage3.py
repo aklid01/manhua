@@ -330,25 +330,31 @@ def test_short_cjk_dialogue_triage():
 
     # Single-CJK interjections with dialogue punct -> sfx_passthrough (not translatable)
     assert triage_region("诶？", config).reason == "sfx_passthrough"  # interjection + ?
-    assert triage_region("诶?", config).reason == "sfx_passthrough"   # ASCII ?
+    assert triage_region("诶?", config).reason == "sfx_passthrough"  # ASCII ?
     assert triage_region("啊！", config).reason == "sfx_passthrough"  # interjection + !
-    assert triage_region("嗯", config).reason == "sfx_passthrough"   # bare known interjection
+    assert (
+        triage_region("嗯", config).reason == "sfx_passthrough"
+    )  # bare known interjection
 
     # Regressions: chap 64 p23 (额……) and chap 62 p3 (呼)
-    assert triage_region("额……", config).reason == "sfx_passthrough"  # hesitation + ellipsis
-    assert triage_region("额", config).reason == "sfx_passthrough"   # bare hesitation
-    assert triage_region("呼", config).reason == "sfx_passthrough"   # bare exhale
-    assert triage_region("哈", config).reason == "sfx_passthrough"   # chap 62 p3 reported case
+    assert (
+        triage_region("额……", config).reason == "sfx_passthrough"
+    )  # hesitation + ellipsis
+    assert triage_region("额", config).reason == "sfx_passthrough"  # bare hesitation
+    assert triage_region("呼", config).reason == "sfx_passthrough"  # bare exhale
+    assert (
+        triage_region("哈", config).reason == "sfx_passthrough"
+    )  # chap 62 p3 reported case
 
     # Other breath / exclamation chars
-    assert triage_region("嗷", config).reason == "sfx_passthrough"   # pain cry
-    assert triage_region("噗", config).reason == "sfx_passthrough"   # pfft
-    assert triage_region("吼", config).reason == "sfx_passthrough"   # roar
+    assert triage_region("嗷", config).reason == "sfx_passthrough"  # pain cry
+    assert triage_region("噗", config).reason == "sfx_passthrough"  # pfft
+    assert triage_region("吼", config).reason == "sfx_passthrough"  # roar
 
     # Onomatopoeia sound effects
-    assert triage_region("砰", config).reason == "sfx_passthrough"   # bang
-    assert triage_region("啪", config).reason == "sfx_passthrough"   # slap
-    assert triage_region("咚", config).reason == "sfx_passthrough"   # thud
+    assert triage_region("砰", config).reason == "sfx_passthrough"  # bang
+    assert triage_region("啪", config).reason == "sfx_passthrough"  # slap
+    assert triage_region("咚", config).reason == "sfx_passthrough"  # thud
 
     # Genuine debris / non-dialogue single chars -> still trivial (skipped)
     assert triage_region("一", config).reason == "trivial"  # numeral one, no signal
@@ -467,4 +473,3 @@ def test_low_confidence_real_dialogue_not_dropped(tmp_path):
     assert region["translation_source"] == "sfx_passthrough", (
         "single-CJK interjection must bypass the LLM and be marked sfx_passthrough"
     )
-

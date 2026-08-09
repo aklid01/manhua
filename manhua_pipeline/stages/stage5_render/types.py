@@ -60,6 +60,7 @@ class RenderPlan:
     bubble_mask_pixels: int = 0
     bubble_mask_area: int = 0
     bubble_mask_coverage: float = 0.0
+    bubble_mask_source: str = "generic_fill"
 
     debug_paths: dict = field(default_factory=dict)
 

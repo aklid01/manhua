@@ -830,3 +830,134 @@ def test_bubble_mask_erases_entire_bubble_container():
         "Top-left fragment was not erased"
     )
     assert page_img.getpixel((180, 140)) == (255, 255, 255), "Main text was not erased"
+
+
+def _radiating_thought_bubble():
+    """Build a thought bubble whose pale page background leaks into a fill mask."""
+    import math
+
+    page = Image.new("RGB", (420, 320), (240, 240, 240))
+    draw = ImageDraw.Draw(page)
+    cx, cy, rx, ry = 210, 160, 152, 94
+    draw.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill="white")
+
+    ray_pixels = []
+    for index in range(48):
+        angle = 2 * math.pi * index / 48
+        dx, dy = math.cos(angle), math.sin(angle)
+        start = (round(cx + rx * dx), round(cy + ry * dy))
+        end = (round(cx + (rx + 22) * dx), round(cy + (ry + 22) * dy))
+        draw.line((start, end), fill="black", width=2)
+        ray_pixels.append(end)
+
+    return page, ray_pixels
+
+
+def test_radiating_thought_mask_preserves_rays_and_erases_inner_fragments():
+    """Thought-bubble rays must survive while all text inside the oval is erased."""
+    from manhua_pipeline.stages.stage5_render import (
+        Box,
+        _get_radiating_thought_mask,
+        erase_original_text,
+    )
+
+    page, ray_pixels = _radiating_thought_bubble()
+    draw = ImageDraw.Draw(page)
+    draw.rectangle((150, 130, 270, 180), fill="black")
+    draw.rectangle((165, 195, 190, 215), fill="black")
+
+    bubble_box = Box(0, 0, page.width, page.height)
+    text_box = Box(150, 130, 120, 50)
+    erase_box = Box(138, 118, 144, 74)
+    generic_mask = Image.new("L", page.size, 255)
+    thought_mask = _get_radiating_thought_mask(
+        page,
+        generic_mask,
+        config,
+        seed_box=text_box,
+    )
+
+    assert thought_mask is not None
+    assert thought_mask.getpixel((210, 160)) == 255
+    assert all(thought_mask.getpixel(point) == 0 for point in ray_pixels)
+
+    before_rays = [page.getpixel(point) for point in ray_pixels]
+    erase_original_text(
+        page_img=page,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=thought_mask,
+        config=config,
+        fill_color=(255, 255, 255),
+    )
+
+    assert page.getpixel((210, 160)) == (255, 255, 255)
+    assert page.getpixel((175, 205)) == (255, 255, 255)
+    assert [page.getpixel(point) for point in ray_pixels] == before_rays
+
+
+def test_radiating_thought_mask_rejects_normal_bubble_and_panel():
+    """Ordinary continuous outlines must retain the generic fill-mask path."""
+    from manhua_pipeline.stages.stage5_render import Box, _get_radiating_thought_mask
+
+    seed_box = Box(120, 100, 80, 40)
+    generic_mask = Image.new("L", (320, 240), 255)
+
+    round_bubble = Image.new("RGB", (320, 240), (240, 240, 240))
+    round_draw = ImageDraw.Draw(round_bubble)
+    round_draw.ellipse((40, 45, 280, 195), fill="white", outline="black", width=3)
+    assert (
+        _get_radiating_thought_mask(
+            round_bubble,
+            generic_mask,
+            config,
+            seed_box=seed_box,
+        )
+        is None
+    )
+
+    panel = Image.new("RGB", (320, 240), "white")
+    panel_draw = ImageDraw.Draw(panel)
+    panel_draw.rectangle((20, 20, 300, 220), outline="black", width=4)
+    assert (
+        _get_radiating_thought_mask(panel, generic_mask, config, seed_box=seed_box)
+        is None
+    )
+
+
+def test_planner_records_radiating_thought_mask_strategy():
+    """The render report must distinguish thought-mask cleanup from generic fill."""
+    from manhua_pipeline.stages.stage5_render import planner
+
+    page, _ = _radiating_thought_bubble()
+    draw = ImageDraw.Draw(page)
+    draw.rectangle((150, 130, 270, 180), fill="black")
+    region = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "bbox": {"x": 150, "y": 130, "w": 120, "h": 50},
+        "read_region": {"x": 150, "y": 130, "w": 120, "h": 50},
+        "parent_bubble": {"x": 0, "y": 0, "w": page.width, "h": page.height},
+        "render": True,
+        "has_usable_text": True,
+        "final_text": "Saving everyone comes first.",
+        "register": "neutral",
+        "style_hint": "round",
+        "glossary_conflict": False,
+    }
+
+    plan = planner._plan_and_erase_region(region, page, draw, 1, config)
+    result, *_ = planner._finalize_plan(
+        plan,
+        emitter=None,
+        run_id="test",
+        chapter="test",
+        render_dir=None,
+        config=config,
+    )
+
+    assert plan.erase_strategy == "thought_bubble_inner_mask"
+    assert result["erase_strategy"] == "thought_bubble_inner_mask"
+    assert result["bubble_mask_source"] == "thought_radiating_inner"

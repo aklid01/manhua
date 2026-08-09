@@ -90,7 +90,7 @@ def _plan_and_erase_region(
     else:
         fill_color = None
 
-    bubble_mask = inpainting._get_bubble_mask(
+    generic_bubble_mask = inpainting._get_bubble_mask(
         bubble_crop,
         bubble_box.x,
         bubble_box.y,
@@ -101,6 +101,18 @@ def _plan_and_erase_region(
         config,
         seed_box=local_text_box,
         fill_color=fill_color,
+    )
+    thought_bubble_mask = inpainting._get_radiating_thought_mask(
+        bubble_crop,
+        generic_bubble_mask,
+        config,
+        seed_box=local_text_box,
+    )
+    bubble_mask = (
+        thought_bubble_mask if thought_bubble_mask is not None else generic_bubble_mask
+    )
+    bubble_mask_source = (
+        "thought_radiating_inner" if thought_bubble_mask is not None else "generic_fill"
     )
 
     shared_parent = False
@@ -128,7 +140,7 @@ def _plan_and_erase_region(
     crop_area = max(1, bubble_box.w * bubble_box.h)
     coverage = mask_pixels / crop_area
 
-    if coverage < min_cov:
+    if coverage < min_cov and thought_bubble_mask is None:
         logger.warning(
             "[%d/%d %s] Page %d %s -> low fill-mask coverage (%.3f); "
             "falling back to padded text-box erase.",
@@ -140,6 +152,7 @@ def _plan_and_erase_region(
             coverage,
         )
         bubble_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
+        bubble_mask_source = "text_rect_fallback"
         fill_color = (255, 255, 255)
 
     def _is_dark(c: tuple[int, int, int]) -> bool:
@@ -202,25 +215,45 @@ def _plan_and_erase_region(
 
     if erase_meta.get("low_overlap"):
         logger.warning(
-            "[%d/%d %s] Page %d %s -> erase mask low overlap (%.2f); "
-            "retrying with solid rect fallback.",
+            "[%d/%d %s] Page %d %s -> erase mask low overlap (%.2f); %s fallback.",
             _STAGE_INDEX,
             _TOTAL_STAGES,
             _STAGE_NAME,
             page_num,
             rid,
             erase_meta.get("clip_retention_ratio", 0.0),
+            "using image inpaint"
+            if erase_meta.get("repaired_with_image_inpaint")
+            else "retrying with solid rect",
         )
         fallback_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
-        erase_meta = inpainting.erase_original_text(
-            page_img=page_img,
-            draw=draw,
-            text_box=text_box,
+        if erase_meta.get("repaired_with_image_inpaint"):
+            # The original color mask is unsafe for placement too: its holes
+            # are what forced text toward the right edge. Keep the repaired
+            # image, but give typography the full parent-panel rectangle as a
+            # neutral layout mask.
+            bubble_mask = inpainting._solid_rect_mask(bubble_box, bubble_box)
+            bubble_mask_source = "image_inpaint_layout"
+        else:
+            erase_meta = inpainting.erase_original_text(
+                page_img=page_img,
+                draw=draw,
+                text_box=text_box,
+                bubble_box=bubble_box,
+                erase_box=erase_box,
+                bubble_mask=fallback_mask,
+                config=config,
+                fill_color=fill_color or (255, 255, 255),
+            )
+            bubble_mask = fallback_mask
+            bubble_mask_source = "text_rect_fallback"
+        _, _, erase_box, layout_box = geometry.select_render_geometry(
+            region,
+            page_img.size,
+            config,
+            bubble_mask=bubble_mask,
             bubble_box=bubble_box,
-            erase_box=erase_box,
-            bubble_mask=fallback_mask,
-            config=config,
-            fill_color=fill_color or (255, 255, 255),
+            sibling_text_boxes=sibling_text_boxes,
         )
 
     if do_debug:
@@ -281,7 +314,11 @@ def _plan_and_erase_region(
         layout_box=layout_box.as_dict(),
         erase_box=erase_box.as_dict(),
         bubble_box=bubble_box.as_dict(),
-        erase_strategy=erase_meta.get("erase_strategy", ""),
+        erase_strategy=(
+            "thought_bubble_inner_mask"
+            if bubble_mask_source == "thought_radiating_inner"
+            else erase_meta.get("erase_strategy", "")
+        ),
         debug_paths=debug_paths,
     )
 
@@ -297,6 +334,7 @@ def _plan_and_erase_region(
     plan.bubble_mask_pixels = mask_px
     plan.bubble_mask_area = mask_area
     plan.bubble_mask_coverage = (mask_px / mask_area) if mask_area else 0.0
+    plan.bubble_mask_source = bubble_mask_source
 
     text_bg = fill_color or inpainting.estimate_text_background(
         page_img, text_box, bubble_box
@@ -515,6 +553,7 @@ def _finalize_plan(
         "bubble_mask_pixels": plan.bubble_mask_pixels,
         "bubble_mask_area": plan.bubble_mask_area,
         "bubble_mask_coverage": plan.bubble_mask_coverage,
+        "bubble_mask_source": plan.bubble_mask_source,
     }
     if plan.debug_paths:
         result["debug_paths"] = plan.debug_paths

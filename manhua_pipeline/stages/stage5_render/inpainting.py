@@ -80,6 +80,32 @@ def _count_mask_pixels(mask: Image.Image) -> int:
     return histogram[255] if len(histogram) > 255 else 0
 
 
+def _image_inpaint(
+    page_img: Image.Image,
+    bubble_box: Box,
+    mask: Image.Image,
+) -> bool:
+    """Repair a masked text area while preserving a non-flat panel background.
+
+    Colored UI panels commonly have gradients, glows, or texture. Painting a
+    single dominant RGB value over those panels creates the large flat patches
+    seen in failed renders. OpenCV is already available in the detector
+    environment, but this remains optional so the solid-fill fallback keeps
+    working in minimal installations.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return False
+
+    crop = np.asarray(page_img.crop(bubble_box.as_xyxy()).convert("RGB"))
+    mask_arr = np.asarray(mask.convert("L"))
+    repaired = cv2.inpaint(crop, mask_arr, 3, cv2.INPAINT_TELEA)
+    page_img.paste(Image.fromarray(repaired, mode="RGB"), (bubble_box.x, bubble_box.y))
+    return True
+
+
 def erase_original_text(
     *,
     page_img: Image.Image,
@@ -117,34 +143,63 @@ def erase_original_text(
             dilation += 1
         text_mask = text_mask.filter(ImageFilter.MaxFilter(dilation))
 
-    # Use bubble_mask directly to clean the entire speech bubble container interior,
-    # preventing stray Chinese characters, unrendered sibling fragments, or edge punctuation from surviving.
-    erase_mask = bubble_mask
-
-    fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
-    page_img.paste(
-        fill_image,
-        (bubble_box.x, bubble_box.y),
-        mask=erase_mask,
-    )
-
     text_pixels = _count_mask_pixels(text_mask)
-    erase_pixels = _count_mask_pixels(erase_mask)
-    retention = (erase_pixels / text_pixels) if text_pixels else 0.0
+    import numpy as np
+
+    mask_overlap = Image.fromarray(
+        np.minimum(np.asarray(text_mask), np.asarray(bubble_mask)).astype("uint8"),
+        mode="L",
+    )
+    overlap_pixels = _count_mask_pixels(mask_overlap)
+    retention = (overlap_pixels / text_pixels) if text_pixels else 0.0
     min_retention = float(getattr(config, "TEXT_ERASE_MIN_RETENTION", 0.65))
     low_overlap = retention < min_retention
+
+    # A mask that misses part of the text region is unsafe for whole-bubble
+    # painting. Use the text rectangle as the repair mask and preserve colored
+    # gradients with image inpainting when possible.
+    repaired_with_image_inpaint = False
+    if low_overlap:
+        erase_mask = text_mask
+        is_colored = max(fill) - min(fill) > 18 and not all(
+            channel >= 245 for channel in fill
+        )
+        if is_colored and getattr(config, "RENDER_IMAGE_INPAINT", True):
+            repaired_with_image_inpaint = _image_inpaint(
+                page_img,
+                bubble_box,
+                text_mask,
+            )
+
+        if not repaired_with_image_inpaint:
+            fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
+            page_img.paste(fill_image, (bubble_box.x, bubble_box.y), mask=erase_mask)
+    else:
+        # Use bubble_mask directly to clean the entire speech bubble container
+        # interior, preventing stray Chinese characters, unrendered sibling
+        # fragments, or edge punctuation from surviving.
+        erase_mask = bubble_mask
+        fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
+        page_img.paste(fill_image, (bubble_box.x, bubble_box.y), mask=erase_mask)
+
+    erase_pixels = _count_mask_pixels(erase_mask)
 
     margin = int(getattr(config, "TEXT_ERASE_PARENT_MARGIN_PX", 8))
     geometrically_inside = box_inside(text_box, bubble_box, margin=margin)
 
     return {
-        "erase_strategy": "text_mask_clipped_to_bubble",
+        "erase_strategy": (
+            "text_mask_image_inpaint"
+            if repaired_with_image_inpaint
+            else "text_mask_clipped_to_bubble"
+        ),
         "erase_fill": list(fill),
         "dilation_px": dilation,
         "text_mask_pixels": text_pixels,
         "erase_mask_pixels": erase_pixels,
         "clip_retention_ratio": retention,
         "low_overlap": low_overlap,
+        "repaired_with_image_inpaint": repaired_with_image_inpaint,
         "safe_rect": geometrically_inside,
         "text_mask": text_mask,
         "erase_mask": erase_mask,
@@ -361,6 +416,141 @@ def _solid_rect_mask(bubble_box: Box, erase_box: Box) -> Image.Image:
     )
     draw.rectangle(local, fill=255)
     return mask
+
+
+def _get_radiating_thought_mask(  # noqa: C901
+    bbox_img: Image.Image,
+    generic_mask: Image.Image,
+    config,
+    *,
+    seed_box: Box | None = None,
+) -> Image.Image | None:
+    """Return the inner interior of a radiating thought bubble, if detected.
+
+    Pale page backgrounds can connect to a thought bubble's white interior
+    through the gaps between its rays. The generic fill detector consequently
+    returns an almost-solid rectangle and erases the rays. This path samples
+    dark radial strokes, reconstructs their enclosed inner boundary, and only
+    returns a mask when the shape is strongly characteristic of that style.
+    """
+    if not getattr(config, "THOUGHT_BUBBLE_MASK_ENABLED", True) or seed_box is None:
+        return None
+
+    import math
+
+    import numpy as np
+
+    width, height = bbox_img.size
+    if min(width, height) < 40:
+        return None
+
+    generic_coverage = _count_mask_pixels(generic_mask) / max(1, width * height)
+    if generic_coverage < float(
+        getattr(config, "THOUGHT_BUBBLE_GENERIC_MIN_COVERAGE", 0.92)
+    ):
+        return None
+
+    rgb = np.asarray(bbox_img.convert("RGB"), dtype=np.uint8)
+    luminance = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    dark = luminance < int(getattr(config, "THOUGHT_BUBBLE_DARK_THRESHOLD", 130))
+
+    sample_count = max(36, int(getattr(config, "THOUGHT_BUBBLE_ANGLE_SAMPLES", 144)))
+    min_ray_length = max(2, int(getattr(config, "THOUGHT_BUBBLE_MIN_RAY_LENGTH_PX", 5)))
+    cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+    minimum_radius = max(18, int(min(width, height) * 0.30))
+    text_pad = int(getattr(config, "TEXT_ERASE_PADDING_PX", 12))
+    text_x0 = max(0, seed_box.x - text_pad)
+    text_y0 = max(0, seed_box.y - text_pad)
+    text_x1 = min(width, seed_box.x2 + text_pad)
+    text_y1 = min(height, seed_box.y2 + text_pad)
+
+    def _edge_distance(dx: float, dy: float) -> float:
+        distances = []
+        if abs(dx) > 1e-6:
+            distances.append((width - 1 - cx) / dx if dx > 0 else cx / -dx)
+        if abs(dy) > 1e-6:
+            distances.append((height - 1 - cy) / dy if dy > 0 else cy / -dy)
+        return min(distances)
+
+    ray_starts: dict[int, int] = {}
+    for sector in range(sample_count):
+        angle = 2.0 * math.pi * sector / sample_count
+        dx, dy = math.cos(angle), math.sin(angle)
+        run_length = 0
+        run_start = None
+        for radius in range(minimum_radius, int(_edge_distance(dx, dy))):
+            x = int(round(cx + radius * dx))
+            y = int(round(cy + radius * dy))
+            if text_x0 <= x < text_x1 and text_y0 <= y < text_y1:
+                run_length = 0
+                run_start = None
+                continue
+
+            x0, x1 = max(0, x - 1), min(width, x + 2)
+            y0, y1 = max(0, y - 1), min(height, y + 2)
+            if dark[y0:y1, x0:x1].any():
+                if run_start is None:
+                    run_start = radius
+                run_length += 1
+                if run_length >= min_ray_length:
+                    ray_starts[sector] = run_start
+                    break
+            else:
+                run_length = 0
+                run_start = None
+
+    ray_ratio = len(ray_starts) / sample_count
+    min_ratio = float(getattr(config, "THOUGHT_BUBBLE_MIN_RAY_SECTOR_RATIO", 0.35))
+    max_ratio = float(getattr(config, "THOUGHT_BUBBLE_MAX_RAY_SECTOR_RATIO", 0.75))
+    if not min_ratio <= ray_ratio <= max_ratio:
+        return None
+
+    valid = np.array(sorted(ray_starts), dtype=float)
+    radii = np.array([ray_starts[int(i)] for i in valid], dtype=float)
+    expanded_indices = np.concatenate(
+        (valid - sample_count, valid, valid + sample_count)
+    )
+    expanded_radii = np.tile(radii, 3)
+    interpolated = np.interp(np.arange(sample_count), expanded_indices, expanded_radii)
+    # A short circular median smooths individual ray gaps without making the
+    # reconstructed edge visibly polygonal.
+    smoothed = np.empty(sample_count, dtype=float)
+    for sector in range(sample_count):
+        window = [
+            interpolated[(sector + offset) % sample_count] for offset in range(-2, 3)
+        ]
+        smoothed[sector] = float(np.median(window))
+
+    yy, xx = np.indices((height, width))
+    distances = np.hypot(xx - cx, yy - cy)
+    angles = (np.arctan2(yy - cy, xx - cx) + 2.0 * math.pi) % (2.0 * math.pi)
+    positions = angles * sample_count / (2.0 * math.pi)
+    lower = np.floor(positions).astype(int) % sample_count
+    upper = (lower + 1) % sample_count
+    fraction = positions - np.floor(positions)
+    boundary = smoothed[lower] * (1.0 - fraction) + smoothed[upper] * fraction
+    inset = int(getattr(config, "THOUGHT_BUBBLE_INTERIOR_INSET_PX", 6))
+    interior = distances <= np.maximum(0, boundary - inset)
+
+    coverage = float(interior.mean())
+    min_coverage = float(getattr(config, "THOUGHT_BUBBLE_INTERIOR_MIN_COVERAGE", 0.28))
+    max_coverage = float(getattr(config, "THOUGHT_BUBBLE_INTERIOR_MAX_COVERAGE", 0.80))
+    if not min_coverage <= coverage <= max_coverage:
+        return None
+
+    coverage_x0 = max(0, seed_box.x)
+    coverage_y0 = max(0, seed_box.y)
+    coverage_x1 = min(width, seed_box.x2)
+    coverage_y1 = min(height, seed_box.y2)
+    if coverage_x0 >= coverage_x1 or coverage_y0 >= coverage_y1:
+        return None
+    text_coverage = float(
+        interior[coverage_y0:coverage_y1, coverage_x0:coverage_x1].mean()
+    )
+    if text_coverage < float(getattr(config, "THOUGHT_BUBBLE_MIN_TEXT_COVERAGE", 0.85)):
+        return None
+
+    return Image.fromarray((interior * 255).astype(np.uint8), mode="L")
 
 
 def _get_bubble_mask(
