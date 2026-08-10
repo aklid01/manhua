@@ -961,3 +961,50 @@ def test_planner_records_radiating_thought_mask_strategy():
     assert plan.erase_strategy == "thought_bubble_inner_mask"
     assert result["erase_strategy"] == "thought_bubble_inner_mask"
     assert result["bubble_mask_source"] == "thought_radiating_inner"
+
+
+def test_erase_clears_text_above_bubble():
+    """text_box protrudes above bubble_box - the overflow strip must be erased.
+
+    Reproduces the P019_R002 ch28 failure: OCR bbox starts ~250 px above the
+    parent bubble, so the bubble-clipped erase never touches the top strip and
+    Chinese characters survive.
+    """
+    page = Image.new("RGB", (800, 2000), (200, 200, 200))
+    draw = ImageDraw.Draw(page)
+
+    bubble_box = Box(20, 1265, 688, 509)
+    text_box = Box(29, 1011, 558, 670)
+
+    bubble_mask = Image.new("L", (bubble_box.w, bubble_box.h), 255)
+
+    red = (220, 50, 50)
+    draw.rectangle(
+        (text_box.x, text_box.y, text_box.x2, bubble_box.y - 1),
+        fill=red,
+    )
+
+    erase_box = Box(
+        max(text_box.x, bubble_box.x),
+        bubble_box.y,
+        min(text_box.x2, bubble_box.x2) - max(text_box.x, bubble_box.x),
+        min(text_box.y2, bubble_box.y2) - bubble_box.y,
+    )
+
+    erase_original_text(
+        page_img=page,
+        draw=draw,
+        text_box=text_box,
+        bubble_box=bubble_box,
+        erase_box=erase_box,
+        bubble_mask=bubble_mask,
+        config=config,
+    )
+
+    above_mid_x = text_box.x + text_box.w // 2
+    above_mid_y = (text_box.y + bubble_box.y) // 2
+    pixel = page.getpixel((above_mid_x, above_mid_y))
+    assert pixel == (255, 255, 255), (
+        f"Expected white at ({above_mid_x},{above_mid_y}) but got {pixel}; "
+        "Chinese text above bubble was not erased."
+    )

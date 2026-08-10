@@ -187,6 +187,54 @@ def erase_original_text(
     margin = int(getattr(config, "TEXT_ERASE_PARENT_MARGIN_PX", 8))
     geometrically_inside = box_inside(text_box, bubble_box, margin=margin)
 
+    # Erase the portion of the OCR text_box that lies outside the bubble_box.
+    # This happens when the detector assigns text coordinates that extend beyond
+    # the parent bubble boundary (e.g. text detected above the bubble in a
+    # stitched page). The bubble-clipped erase above never reaches that area,
+    # leaving raw Chinese glyphs visible.
+    pad = int(getattr(config, "TEXT_ERASE_PADDING_PX", 12))
+    img_w, img_h = page_img.size
+    expanded_text = Box(
+        max(0, text_box.x - pad),
+        max(0, text_box.y - pad),
+        min(img_w, text_box.x2 + pad) - max(0, text_box.x - pad),
+        min(img_h, text_box.y2 + pad) - max(0, text_box.y - pad),
+    )
+    overflow_strips: list[tuple[int, int, int, int]] = []
+    if expanded_text.y < bubble_box.y:
+        overflow_strips.append((
+            expanded_text.x,
+            expanded_text.y,
+            expanded_text.x2,
+            min(bubble_box.y, expanded_text.y2),
+        ))
+    if expanded_text.y2 > bubble_box.y2:
+        overflow_strips.append((
+            expanded_text.x,
+            max(bubble_box.y2, expanded_text.y),
+            expanded_text.x2,
+            expanded_text.y2,
+        ))
+    if expanded_text.x < bubble_box.x:
+        overflow_strips.append((
+            expanded_text.x,
+            expanded_text.y,
+            min(bubble_box.x, expanded_text.x2),
+            expanded_text.y2,
+        ))
+    if expanded_text.x2 > bubble_box.x2:
+        overflow_strips.append((
+            max(bubble_box.x2, expanded_text.x),
+            expanded_text.y,
+            expanded_text.x2,
+            expanded_text.y2,
+        ))
+    for x0, y0, x1, y1 in overflow_strips:
+        if x1 > x0 and y1 > y0:
+            strip_w, strip_h = x1 - x0, y1 - y0
+            strip_fill = Image.new("RGB", (strip_w, strip_h), (255, 255, 255))
+            page_img.paste(strip_fill, (x0, y0))
+
     return {
         "erase_strategy": (
             "text_mask_image_inpaint"
