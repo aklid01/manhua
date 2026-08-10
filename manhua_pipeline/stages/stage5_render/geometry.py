@@ -173,12 +173,17 @@ def select_render_geometry(
     bubble_mask=None,
     bubble_box: Box | None = None,
     sibling_text_boxes: list[Box] | None = None,
+    text_box_override: Box | None = None,
 ) -> tuple[Box, Box, Box, Box]:
-    text_value = region.get("read_region") or region.get("bbox")
-    if not text_value:
-        raise ValueError(f"Region {region.get('region_id')} has no read_region or bbox")
-
-    text_box = clip_box(box_from_dict(text_value), image_size)
+    if text_box_override is not None:
+        text_box = clip_box(text_box_override, image_size)
+    else:
+        text_value = region.get("read_region") or region.get("bbox")
+        if not text_value:
+            raise ValueError(
+                f"Region {region.get('region_id')} has no read_region or bbox"
+            )
+        text_box = clip_box(box_from_dict(text_value), image_size)
 
     parent_value = region.get("parent_bubble")
     if bubble_box is None:

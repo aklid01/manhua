@@ -134,6 +134,30 @@ def _plan_and_erase_region(
         sibling_text_boxes=sibling_text_boxes,
     )
 
+    erase_text_box = text_box
+    preserved_erase_box = region.get("_erase_text_box")
+    stitched_erase = bool(preserved_erase_box)
+    if preserved_erase_box:
+        erase_text_box = geometry.clip_box(
+            geometry.box_from_dict(preserved_erase_box), page_img.size
+        )
+        _, _, erase_box, _ = geometry.select_render_geometry(
+            region,
+            page_img.size,
+            config,
+            bubble_mask=None,
+            bubble_box=bubble_box,
+            text_box_override=erase_text_box,
+        )
+
+    erase_bubble_mask = bubble_mask
+    if stitched_erase:
+        # A stitched text box can include source glyphs that the radiating
+        # bubble mask classifies as part of the ray ring. The full OCR box is
+        # the authoritative erase area; keep the measured mask for layout but
+        # use a padded text rectangle for this seam-crossing erase.
+        erase_bubble_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
+
     min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.40))
     mask_hist = bubble_mask.histogram()
     mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
@@ -205,10 +229,10 @@ def _plan_and_erase_region(
     erase_meta = inpainting.erase_original_text(
         page_img=page_img,
         draw=draw,
-        text_box=text_box,
+        text_box=erase_text_box,
         bubble_box=bubble_box,
         erase_box=erase_box,
-        bubble_mask=bubble_mask,
+        bubble_mask=erase_bubble_mask,
         config=config,
         fill_color=fill_color,
     )
@@ -238,7 +262,7 @@ def _plan_and_erase_region(
             erase_meta = inpainting.erase_original_text(
                 page_img=page_img,
                 draw=draw,
-                text_box=text_box,
+                text_box=erase_text_box,
                 bubble_box=bubble_box,
                 erase_box=erase_box,
                 bubble_mask=fallback_mask,
@@ -247,13 +271,21 @@ def _plan_and_erase_region(
             )
             bubble_mask = fallback_mask
             bubble_mask_source = "text_rect_fallback"
-        _, _, erase_box, layout_box = geometry.select_render_geometry(
+        _, _, _, layout_box = geometry.select_render_geometry(
             region,
             page_img.size,
             config,
             bubble_mask=bubble_mask,
             bubble_box=bubble_box,
             sibling_text_boxes=sibling_text_boxes,
+        )
+        _, _, erase_box, _ = geometry.select_render_geometry(
+            region,
+            page_img.size,
+            config,
+            bubble_mask=None,
+            bubble_box=bubble_box,
+            text_box_override=erase_text_box,
         )
 
     if do_debug:
@@ -294,6 +326,7 @@ def _plan_and_erase_region(
             page_width=page_img.width,
             page_height=page_img.height,
             text_box=text_box.as_dict(),
+            erase_text_box=erase_text_box.as_dict(),
             erase_box=erase_box.as_dict(),
             bubble_box=bubble_box.as_dict(),
             erase_strategy=erase_meta.get("erase_strategy", ""),
@@ -311,12 +344,13 @@ def _plan_and_erase_region(
         page_width=page_img.width,
         page_height=page_img.height,
         text_box=text_box.as_dict(),
+        erase_text_box=erase_text_box.as_dict(),
         layout_box=layout_box.as_dict(),
         erase_box=erase_box.as_dict(),
         bubble_box=bubble_box.as_dict(),
         erase_strategy=(
             "thought_bubble_inner_mask"
-            if bubble_mask_source == "thought_radiating_inner"
+            if bubble_mask_source == "thought_radiating_inner" and not stitched_erase
             else erase_meta.get("erase_strategy", "")
         ),
         debug_paths=debug_paths,
@@ -541,6 +575,7 @@ def _finalize_plan(
         "glossary_conflict": plan.glossary_conflict,
         "erase_strategy": plan.erase_strategy,
         "text_box": plan.text_box,
+        "erase_text_box": plan.erase_text_box,
         "bubble_box": plan.bubble_box,
         "erase_box": plan.erase_box,
         "layout_box": plan.layout_box,

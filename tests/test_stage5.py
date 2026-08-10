@@ -1,6 +1,6 @@
 import json
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import config
 
@@ -641,8 +641,7 @@ def test_single_bubble_two_pass_unchanged(tmp_path, monkeypatch):
 
 
 def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
-    """A bubble whose parent_bubble extends past global_y_offset must be clamped
-    at the stitch boundary so it doesn't overlap with bubbles on the second half."""
+    """Layout is clipped at the seam while source text crossing it is erased."""
     from PIL import ImageFont
 
     from manhua_pipeline.stages import stage5_render
@@ -657,6 +656,7 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
     ws = tmp_path / "workspace"
     (ws / "pages").mkdir(parents=True, exist_ok=True)
     img = Image.new("RGB", (400, page_h), (255, 255, 255))
+    ImageDraw.Draw(img).rectangle((55, 330, 75, 345), fill=(0, 0, 0))
     img.save(ws / "pages" / "001.png")
 
     manifest = {
@@ -680,13 +680,13 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
     }
     (ws / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    # R001: top half bubble whose parent_bubble bleeds 80px past stitch_y
+    # R001: text crosses the seam while its parent bubble bleeds 80px past it.
     r001 = {
         "region_id": "P001_R001",
         "page_number": 1,
         "type": "speech_bubble",
-        "bbox": {"x": 50, "y": 200, "w": 150, "h": 80},
-        "read_region": {"x": 50, "y": 200, "w": 150, "h": 80},
+        "bbox": {"x": 50, "y": 200, "w": 150, "h": 180},
+        "read_region": {"x": 50, "y": 200, "w": 150, "h": 180},
         "parent_bubble": {"x": 20, "y": 180, "w": 200, "h": 200},
         "erase_mask": {"type": "rect", "coords": [20, 180, 200, 200]},
         "reading_order": 1,
@@ -777,3 +777,11 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
         assert text_bottom <= stitch_y, (
             f"R001 text_box bottom ({text_bottom}) crossed stitch boundary ({stitch_y})"
         )
+    erase_text_box = r001_result["erase_text_box"]
+    assert erase_text_box["y"] + erase_text_box["h"] > stitch_y
+    assert r001_result["erase_box"]["y"] + r001_result["erase_box"]["h"] >= 346
+
+    rendered = Image.open(
+        ws / "stage5_render" / "rendered" / "001.png"
+    ).convert("RGB")
+    assert rendered.getpixel((65, 337)) == (255, 255, 255)

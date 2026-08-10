@@ -48,6 +48,7 @@ class RenderPlan:
     readable_min_pt: int | None = None
     abs_min_pt: int | None = None
     text_box: dict = field(default_factory=dict)
+    erase_text_box: dict = field(default_factory=dict)
     layout_box: dict = field(default_factory=dict)
     erase_box: dict = field(default_factory=dict)
     bubble_box: dict = field(default_factory=dict)

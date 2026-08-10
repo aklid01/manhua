@@ -170,14 +170,12 @@ def _load_and_merge_regions(
 
 
 def _clip_region_to_stitch(region: dict, stitch_y: int) -> dict:
-    """Clamp the layout boxes of a region so text is placed only within the first
-    source page's half of a stitched image.
+    """Clamp layout boxes while preserving the full box needed for erasure.
 
-    Only bbox and read_region are clipped at stitch_y. parent_bubble and
-    erase_mask are intentionally left at their original extent so the eraser
-    still wipes the full bubble area (including Chinese text that may sit close
-    to the seam). Restricting the layout inputs prevents English text from being
-    placed where it would overlap with second-half content.
+    The clipped ``bbox``/``read_region`` prevent English text from being placed
+    in the second source page's half. The original OCR box is retained
+    separately because the eraser must still cover source glyphs that cross the
+    stitch seam.
     """
 
     def _clip_dict_box(d: dict | None) -> dict | None:
@@ -194,10 +192,19 @@ def _clip_region_to_stitch(region: dict, stitch_y: int) -> dict:
 
     region = copy.copy(region)
 
-    region["bbox"] = _clip_dict_box(region.get("bbox")) or region["bbox"]
+    original_bbox = region.get("bbox")
+    original_read_region = region.get("read_region")
+    clipped_bbox = _clip_dict_box(original_bbox)
+    clipped_read_region = _clip_dict_box(original_read_region)
 
-    if region.get("read_region"):
-        region["read_region"] = _clip_dict_box(region["read_region"])
+    region["bbox"] = clipped_bbox or region["bbox"]
+    if original_read_region:
+        region["read_region"] = clipped_read_region
+
+    if clipped_bbox != original_bbox or clipped_read_region != original_read_region:
+        erase_text_box = original_read_region or original_bbox
+        if erase_text_box:
+            region["_erase_text_box"] = copy.deepcopy(erase_text_box)
 
     return region
 
@@ -476,6 +483,7 @@ def run_render(workspace: str, config, run_id: str | None = None) -> Path:
                     metadata={
                         "action": r.get("action"),
                         "text_box": r.get("text_box"),
+                        "erase_text_box": r.get("erase_text_box"),
                         "bubble_box": r.get("bubble_box"),
                         "erase_box": r.get("erase_box"),
                         "layout_box": r.get("layout_box"),
