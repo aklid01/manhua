@@ -1,0 +1,7 @@
+# Optional requirements for the standalone Touch-Up Editor GUI
+PyQt6>=6.5.0
+opencv-python>=4.8.0
+pillow>=10.0
+numpy>=1.24
+ultralytics>=8.0
+torch>=2.0.0
