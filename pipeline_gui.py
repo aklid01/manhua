@@ -117,15 +117,15 @@ QMainWindow, QWidget {
     background-color: #141518;
     color: #e5e7eb;
     font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-    font-size: 13px;
+    font-size: 12px;
 }
 
 QGroupBox {
     background-color: #1c1e24;
     border: 1px solid #2d3139;
-    border-radius: 8px;
-    margin-top: 18px;
-    padding-top: 12px;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding-top: 8px;
     font-weight: 600;
     color: #93c5fd;
 }
@@ -133,9 +133,9 @@ QGroupBox {
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    padding: 2px 8px;
+    padding: 1px 6px;
     background-color: #1c1e24;
-    border-radius: 4px;
+    border-radius: 3px;
     color: #93c5fd;
 }
 
@@ -143,10 +143,10 @@ QPushButton {
     background-color: #2a2e39;
     color: #f3f4f6;
     border: 1px solid #3e4451;
-    border-radius: 6px;
-    padding: 6px 14px;
+    border-radius: 5px;
+    padding: 4px 10px;
     font-weight: 500;
-    min-height: 20px;
+    min-height: 18px;
 }
 
 QPushButton:hover {
@@ -208,9 +208,9 @@ QLineEdit, QSpinBox, QComboBox {
     background-color: #1c1e24;
     color: #f3f4f6;
     border: 1px solid #374151;
-    border-radius: 6px;
-    padding: 5px 10px;
-    min-height: 20px;
+    border-radius: 5px;
+    padding: 3px 8px;
+    min-height: 18px;
 }
 
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
@@ -227,14 +227,14 @@ QTreeWidget, QTableWidget, QTextEdit {
     background-color: #181a1f;
     color: #e5e7eb;
     border: 1px solid #2d3139;
-    border-radius: 6px;
+    border-radius: 5px;
     gridline-color: #262a33;
 }
 
 QHeaderView::section {
     background-color: #20242c;
     color: #9ca3af;
-    padding: 6px;
+    padding: 4px 6px;
     border: 1px solid #2d3139;
     font-weight: 600;
 }
@@ -251,27 +251,28 @@ QTreeWidget::item:hover {
 QProgressBar {
     background-color: #1c1e24;
     border: 1px solid #2d3139;
-    border-radius: 6px;
+    border-radius: 5px;
     text-align: center;
     color: #f9fafb;
     font-weight: 600;
+    max-height: 18px;
 }
 
 QProgressBar::chunk {
     background-color: #2563eb;
-    border-radius: 5px;
+    border-radius: 4px;
 }
 
 QScrollBar:vertical {
     background: #141518;
-    width: 10px;
+    width: 8px;
     margin: 0px;
 }
 
 QScrollBar::handle:vertical {
     background: #374151;
-    min-height: 20px;
-    border-radius: 5px;
+    min-height: 16px;
+    border-radius: 4px;
 }
 
 QScrollBar::handle:vertical:hover {
@@ -293,15 +294,15 @@ QSplitter::handle:hover {
 QTabWidget::pane {
     border: 1px solid #2d3139;
     background-color: #181a1f;
-    border-radius: 6px;
+    border-radius: 5px;
 }
 
 QTabBar::tab {
     background: #1f232b;
     color: #9ca3af;
-    padding: 6px 14px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
+    padding: 5px 12px;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
     margin-right: 2px;
 }
 
@@ -398,7 +399,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Pipeline Configuration & Settings")
-        self.resize(560, 480)
+        self.resize(560, 440)
         self._build_ui()
         self._load_values()
 
@@ -408,28 +409,35 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         layout.addWidget(tabs)
 
-        # Tab 1: General
+        # Tab 1: Paths & General
         t1 = QWidget()
         l1 = QVBoxLayout(t1)
 
-        gb_general = QGroupBox("Series & Paths")
+        gb_general = QGroupBox("Directories & Defaults")
         g1 = QGridLayout(gb_general)
 
-        g1.addWidget(QLabel("Series Folder:"), 0, 0)
-        self.txt_series = QLineEdit()
-        g1.addWidget(self.txt_series, 0, 1)
-        btn_br = QPushButton("Browse…")
-        btn_br.clicked.connect(self._browse_series)
-        g1.addWidget(btn_br, 0, 2)
+        g1.addWidget(QLabel("Input Folder (Raw Scans/CBZ):"), 0, 0)
+        self.txt_input = QLineEdit()
+        g1.addWidget(self.txt_input, 0, 1)
+        btn_br_in = QPushButton("Browse…")
+        btn_br_in.clicked.connect(self._browse_input)
+        g1.addWidget(btn_br_in, 0, 2)
 
-        g1.addWidget(QLabel("Default Package Format:"), 1, 0)
+        g1.addWidget(QLabel("Output Series Folder (Workspace):"), 1, 0)
+        self.txt_output = QLineEdit()
+        g1.addWidget(self.txt_output, 1, 1)
+        btn_br_out = QPushButton("Browse…")
+        btn_br_out.clicked.connect(self._browse_output)
+        g1.addWidget(btn_br_out, 1, 2)
+
+        g1.addWidget(QLabel("Default Package Format:"), 2, 0)
         self.cmb_pkg = QComboBox()
         self.cmb_pkg.addItems(PACKAGE_FORMATS)
-        g1.addWidget(self.cmb_pkg, 1, 1)
+        g1.addWidget(self.cmb_pkg, 2, 1)
 
         l1.addWidget(gb_general)
         l1.addStretch()
-        tabs.addTab(t1, "General")
+        tabs.addTab(t1, "Paths & General")
 
         # Tab 2: Translation & Paraphrase (AI)
         t2 = QWidget()
@@ -494,14 +502,24 @@ class SettingsDialog(QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-    def _browse_series(self):
-        d = QFileDialog.getExistingDirectory(self, "Select Series Folder")
+    def _browse_input(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Select Input Folder (Raw Scans/CBZ)"
+        )
         if d:
-            self.txt_series.setText(d)
+            self.txt_input.setText(d)
+
+    def _browse_output(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Select Output Series Folder (Workspace)"
+        )
+        if d:
+            self.txt_output.setText(d)
 
     def _load_values(self):
         settings = _read_settings()
-        self.txt_series.setText(settings.get("output_dir", ""))
+        self.txt_input.setText(settings.get("input_dir", ""))
+        self.txt_output.setText(settings.get("output_dir", ""))
         self.cmb_pkg.setCurrentText(settings.get("gui_default_package", "cbz"))
         self.txt_ollama_host.setText(
             settings.get("ollama_host", "http://localhost:11434")
@@ -523,7 +541,8 @@ class SettingsDialog(QDialog):
         self.chk_ocr_gpu.setChecked(settings.get("ocr_use_gpu", True))
 
     def _save_values(self):
-        _write_setting("output_dir", self.txt_series.text().strip())
+        _write_setting("input_dir", self.txt_input.text().strip())
+        _write_setting("output_dir", self.txt_output.text().strip())
         _write_setting("gui_default_package", self.cmb_pkg.currentText())
         _write_setting("ollama_host", self.txt_ollama_host.text().strip())
         _write_setting("ollama_translate_model", self.txt_trans_model.text().strip())
@@ -584,65 +603,81 @@ class PipelineGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Manhua Translation Pipeline - Studio Runner")
-        self.resize(1380, 860)
+        self.resize(1180, 680)
+        self.setMinimumSize(960, 520)
 
         self.active_runner: ProcessRunner | None = None
         self.is_running = False
 
-        self.current_series: Path | None = None
+        self.current_input_dir: Path | None = None
+        self.current_output_dir: Path | None = None
         self.current_chapter: str | None = None
         self.current_input_path: str | None = None
         self.chapter_pages: list[str] = []
         self.current_page_idx: int = 0
 
         self.chapter_regions: dict = {}
-        self.batch_queue: list[str] = []
-        self.batch_idx: int = 0
 
         self.stage_buttons: dict[str, QPushButton] = {}
         self.stage_status_labels: dict[str, QLabel] = {}
 
         self._build_ui()
-        self._load_series_from_settings()
+        self._load_paths_from_settings()
 
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(6)
 
-        # ---------------- Top Bar ----------------
-        top_bar = QWidget()
-        top_bar.setFixedHeight(48)
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-
-        title_lbl = QLabel("MANHUA PIPELINE STUDIO")
-        title_lbl.setStyleSheet(
-            "font-size: 15px; font-weight: 700; color: #60a5fa; letter-spacing: 1px;"
+        # ---------------- Top Bar (Input & Output Paths) ----------------
+        top_box = QFrame()
+        top_box.setStyleSheet(
+            "background-color: #1c1e24; border: 1px solid #2d3139; border-radius: 6px; padding: 2px;"
         )
-        top_layout.addWidget(title_lbl)
+        top_grid = QGridLayout(top_box)
+        top_grid.setContentsMargins(6, 4, 6, 4)
+        top_grid.setHorizontalSpacing(8)
+        top_grid.setVerticalSpacing(4)
 
-        top_layout.addSpacing(20)
-        top_layout.addWidget(QLabel("Series Folder:"))
+        # Row 0: Input Directory
+        lbl_in = QLabel("Input (Raw Scans/CBZ):")
+        lbl_in.setStyleSheet("font-weight: 600; color: #93c5fd;")
+        top_grid.addWidget(lbl_in, 0, 0)
 
-        self.txt_series_header = QLineEdit()
-        self.txt_series_header.setPlaceholderText(
-            "Select series output folder containing chapters..."
+        self.txt_input_header = QLineEdit()
+        self.txt_input_header.setPlaceholderText(
+            "Select source folder containing raw chapter folders or .cbz/.zip archives..."
         )
-        self.txt_series_header.setReadOnly(True)
-        top_layout.addWidget(self.txt_series_header, 1)
+        self.txt_input_header.setReadOnly(True)
+        top_grid.addWidget(self.txt_input_header, 0, 1)
 
-        btn_browse_series = QPushButton("Browse Series…")
-        btn_browse_series.clicked.connect(self._on_browse_series)
-        top_layout.addWidget(btn_browse_series)
+        btn_browse_in = QPushButton("Browse…")
+        btn_browse_in.clicked.connect(self._on_browse_input)
+        top_grid.addWidget(btn_browse_in, 0, 2)
 
         btn_settings = QPushButton("⚙ Settings")
         btn_settings.clicked.connect(self._open_settings)
-        top_layout.addWidget(btn_settings)
+        top_grid.addWidget(btn_settings, 0, 3)
 
-        main_layout.addWidget(top_bar)
+        # Row 1: Output Directory
+        lbl_out = QLabel("Output (Workspace/Series):")
+        lbl_out.setStyleSheet("font-weight: 600; color: #93c5fd;")
+        top_grid.addWidget(lbl_out, 1, 0)
+
+        self.txt_output_header = QLineEdit()
+        self.txt_output_header.setPlaceholderText(
+            "Select output series folder where translated chapters & packages will be stored..."
+        )
+        self.txt_output_header.setReadOnly(True)
+        top_grid.addWidget(self.txt_output_header, 1, 1)
+
+        btn_browse_out = QPushButton("Browse…")
+        btn_browse_out.clicked.connect(self._on_browse_output)
+        top_grid.addWidget(btn_browse_out, 1, 2)
+
+        main_layout.addWidget(top_box)
 
         # ---------------- Main Vertical Splitter ----------------
         v_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -672,8 +707,8 @@ class PipelineGUI(QMainWindow):
         p4 = self._build_console_panel()
         v_splitter.addWidget(p4)
 
-        v_splitter.setStretchFactor(0, 7)
-        v_splitter.setStretchFactor(1, 3)
+        v_splitter.setStretchFactor(0, 8)
+        v_splitter.setStretchFactor(1, 2)
 
         main_layout.addWidget(v_splitter, 1)
 
@@ -681,8 +716,8 @@ class PipelineGUI(QMainWindow):
     def _build_chapters_panel(self) -> QWidget:
         panel = QGroupBox("Chapters & Batch Queue")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 12, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(6, 8, 6, 6)
+        layout.setSpacing(4)
 
         btn_row = QHBoxLayout()
         btn_add_folder = QPushButton("📁 Add Folder…")
@@ -710,10 +745,11 @@ class PipelineGUI(QMainWindow):
 
         opts_group = QFrame()
         opts_group.setStyleSheet(
-            "background-color: #181a1f; border-radius: 6px; padding: 4px;"
+            "background-color: #181a1f; border-radius: 5px; padding: 2px;"
         )
         opts_layout = QVBoxLayout(opts_group)
-        opts_layout.setContentsMargins(6, 6, 6, 6)
+        opts_layout.setContentsMargins(4, 4, 4, 4)
+        opts_layout.setSpacing(2)
 
         self.chk_fresh = QCheckBox("Fresh run (wipe prior chapter outputs)")
         opts_layout.addWidget(self.chk_fresh)
@@ -723,7 +759,7 @@ class PipelineGUI(QMainWindow):
         self.spin_skip_last = QSpinBox()
         self.spin_skip_last.setRange(0, 20)
         self.spin_skip_last.setValue(0)
-        self.spin_skip_last.setFixedWidth(54)
+        self.spin_skip_last.setFixedWidth(48)
         skip_row.addWidget(self.spin_skip_last)
         skip_row.addWidget(QLabel("pages (promo/credits)"))
         skip_row.addStretch()
@@ -748,27 +784,28 @@ class PipelineGUI(QMainWindow):
     def _build_stages_panel(self) -> QWidget:
         panel = QGroupBox("Active Chapter & Pipeline Stages")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 12, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(6, 8, 6, 6)
+        layout.setSpacing(4)
 
         # Chapter info box
         info_box = QFrame()
         info_box.setStyleSheet(
-            "background-color: #181a1f; border: 1px solid #282c34; border-radius: 6px; padding: 6px;"
+            "background-color: #181a1f; border: 1px solid #282c34; border-radius: 5px; padding: 4px;"
         )
         info_layout = QVBoxLayout(info_box)
-        info_layout.setContentsMargins(6, 6, 6, 6)
+        info_layout.setContentsMargins(4, 4, 4, 4)
+        info_layout.setSpacing(2)
 
         self.lbl_active_chapter = QLabel("No chapter selected")
         self.lbl_active_chapter.setStyleSheet(
-            "font-size: 14px; font-weight: 700; color: #f3f4f6;"
+            "font-size: 13px; font-weight: 700; color: #f3f4f6;"
         )
         info_layout.addWidget(self.lbl_active_chapter)
 
         self.lbl_active_details = QLabel(
             "Select or import a chapter to begin processing."
         )
-        self.lbl_active_details.setStyleSheet("color: #9ca3af; font-size: 12px;")
+        self.lbl_active_details.setStyleSheet("color: #9ca3af; font-size: 11px;")
         info_layout.addWidget(self.lbl_active_details)
 
         layout.addWidget(info_box)
@@ -780,35 +817,36 @@ class PipelineGUI(QMainWindow):
 
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setContentsMargins(0, 4, 0, 4)
-        scroll_layout.setSpacing(6)
+        scroll_layout.setContentsMargins(0, 2, 0, 2)
+        scroll_layout.setSpacing(4)
 
         for name in STAGES:
             stage_card = QFrame()
             stage_card.setStyleSheet(
-                "background-color: #181a1f; border: 1px solid #262932; border-radius: 6px; padding: 6px;"
+                "background-color: #181a1f; border: 1px solid #262932; border-radius: 5px; padding: 4px;"
             )
             card_layout = QHBoxLayout(stage_card)
-            card_layout.setContentsMargins(8, 6, 8, 6)
+            card_layout.setContentsMargins(6, 4, 6, 4)
 
             info_sub = QVBoxLayout()
+            info_sub.setSpacing(1)
             title = QLabel(STAGE_LABELS[name])
             title.setStyleSheet("font-weight: 600; color: #e5e7eb;")
             info_sub.addWidget(title)
 
             desc = QLabel(STAGE_DESCRIPTIONS[name])
-            desc.setStyleSheet("color: #6b7280; font-size: 11px;")
+            desc.setStyleSheet("color: #6b7280; font-size: 10px;")
             info_sub.addWidget(desc)
             card_layout.addLayout(info_sub, 1)
 
             st_lbl = QLabel("○ Pending")
             st_lbl.setStyleSheet("color: #9ca3af; font-weight: 500;")
-            st_lbl.setFixedWidth(80)
+            st_lbl.setFixedWidth(74)
             card_layout.addWidget(st_lbl)
             self.stage_status_labels[name] = st_lbl
 
             btn = QPushButton("Run")
-            btn.setFixedWidth(80)
+            btn.setFixedWidth(74)
             btn.clicked.connect(lambda _, n=name: self._run_single_stage(n))
             btn.setEnabled(False)
             card_layout.addWidget(btn)
@@ -819,27 +857,28 @@ class PipelineGUI(QMainWindow):
         # Stage 7 (Package)
         pkg_card = QFrame()
         pkg_card.setStyleSheet(
-            "background-color: #181a1f; border: 1px solid #262932; border-radius: 6px; padding: 6px;"
+            "background-color: #181a1f; border: 1px solid #262932; border-radius: 5px; padding: 4px;"
         )
         pkg_layout = QHBoxLayout(pkg_card)
-        pkg_layout.setContentsMargins(8, 6, 8, 6)
+        pkg_layout.setContentsMargins(6, 4, 6, 4)
 
         pkg_info = QVBoxLayout()
+        pkg_info.setSpacing(1)
         pkg_title = QLabel("7 · Package")
         pkg_title.setStyleSheet("font-weight: 600; color: #e5e7eb;")
         pkg_info.addWidget(pkg_title)
         pkg_desc = QLabel("Pack rendered pages into archive")
-        pkg_desc.setStyleSheet("color: #6b7280; font-size: 11px;")
+        pkg_desc.setStyleSheet("color: #6b7280; font-size: 10px;")
         pkg_info.addWidget(pkg_desc)
         pkg_layout.addLayout(pkg_info, 1)
 
         self.cmb_pkg_format = QComboBox()
         self.cmb_pkg_format.addItems(PACKAGE_FORMATS)
-        self.cmb_pkg_format.setFixedWidth(64)
+        self.cmb_pkg_format.setFixedWidth(58)
         pkg_layout.addWidget(self.cmb_pkg_format)
 
         self.btn_package = QPushButton("Package")
-        self.btn_package.setFixedWidth(80)
+        self.btn_package.setFixedWidth(74)
         self.btn_package.clicked.connect(self._run_package_stage)
         self.btn_package.setEnabled(False)
         pkg_layout.addWidget(self.btn_package)
@@ -862,8 +901,8 @@ class PipelineGUI(QMainWindow):
     def _build_preview_panel(self) -> QWidget:
         panel = QGroupBox("Live Preview & Region Inspector")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 12, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(6, 8, 6, 6)
+        layout.setSpacing(4)
 
         # Top Bar: Mode selector & page navigation
         nav_bar = QHBoxLayout()
@@ -882,7 +921,7 @@ class PipelineGUI(QMainWindow):
         nav_bar.addWidget(self.cmb_preview_mode, 1)
 
         self.btn_prev_page = QPushButton("◀")
-        self.btn_prev_page.setFixedWidth(32)
+        self.btn_prev_page.setFixedWidth(28)
         self.btn_prev_page.clicked.connect(self._prev_page)
         nav_bar.addWidget(self.btn_prev_page)
 
@@ -891,7 +930,7 @@ class PipelineGUI(QMainWindow):
         nav_bar.addWidget(self.lbl_page_counter)
 
         self.btn_next_page = QPushButton("▶")
-        self.btn_next_page.setFixedWidth(32)
+        self.btn_next_page.setFixedWidth(28)
         self.btn_next_page.clicked.connect(self._next_page)
         nav_bar.addWidget(self.btn_next_page)
 
@@ -932,7 +971,7 @@ class PipelineGUI(QMainWindow):
         self.tbl_regions.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.Stretch
         )
-        self.tbl_regions.setMaximumHeight(160)
+        self.tbl_regions.setMaximumHeight(130)
         layout.addWidget(self.tbl_regions, 1)
 
         # Quick edit button
@@ -945,8 +984,8 @@ class PipelineGUI(QMainWindow):
     def _build_console_panel(self) -> QWidget:
         panel = QGroupBox("Console & Event Stream")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 12, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(6, 8, 6, 6)
+        layout.setSpacing(4)
 
         # Toolbar
         bar = QHBoxLayout()
@@ -967,9 +1006,9 @@ class PipelineGUI(QMainWindow):
         # Output text
         self.txt_console = QTextEdit()
         self.txt_console.setReadOnly(True)
-        self.txt_console.setFont(QFont("Consolas", 10))
+        self.txt_console.setFont(QFont("Consolas", 9))
         self.txt_console.setStyleSheet(
-            "background-color: #0f1012; color: #d1d5db; border: 1px solid #23262d; border-radius: 6px; padding: 4px;"
+            "background-color: #0f1012; color: #d1d5db; border: 1px solid #23262d; border-radius: 5px; padding: 4px;"
         )
         layout.addWidget(self.txt_console, 1)
 
@@ -992,71 +1031,91 @@ class PipelineGUI(QMainWindow):
         layout.addLayout(footer)
         return panel
 
-    # ---------------- Series & Chapter Loading ----------------
+    # ---------------- Paths & Settings Loading ----------------
     def _open_settings(self):
         dlg = SettingsDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._load_series_from_settings()
+            self._load_paths_from_settings()
 
-    def _on_browse_series(self):
-        d = QFileDialog.getExistingDirectory(self, "Select Series Folder")
+    def _on_browse_input(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Select Input Folder (Raw Scans/CBZ)"
+        )
+        if d:
+            _write_setting("input_dir", d)
+            self._load_paths_from_settings()
+
+    def _on_browse_output(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Select Output Series Folder (Workspace)"
+        )
         if d:
             _write_setting("output_dir", d)
-            self._load_series_from_settings()
+            self._load_paths_from_settings()
 
-    def _load_series_from_settings(self):
+    def _load_paths_from_settings(self):
         settings = _read_settings()
-        series_path = settings.get("output_dir", "")
-        self.txt_series_header.setText(series_path)
+        in_path = settings.get("input_dir", "")
+        out_path = settings.get("output_dir", "")
 
-        if series_path and Path(series_path).exists():
-            self.current_series = Path(series_path)
-            self._scan_series_folder()
-        else:
-            self.current_series = None
-            self.tree_chapters.clear()
+        self.txt_input_header.setText(in_path)
+        self.txt_output_header.setText(out_path)
 
-    def _scan_series_folder(self):
-        if not self.current_series or not self.current_series.exists():
+        self.current_input_dir = (
+            Path(in_path) if in_path and Path(in_path).exists() else None
+        )
+        self.current_output_dir = (
+            Path(out_path) if out_path and Path(out_path).exists() else None
+        )
+
+        self._scan_chapters()
+
+    def _collect_from_dir(
+        self, folder: Path | None, seen: set[str], entries: list[tuple[str, str]]
+    ):
+        if not folder or not folder.exists():
             return
+        for child in sorted(folder.iterdir()):
+            if child.name.startswith("."):
+                continue
+            is_valid = child.is_dir() or child.suffix.lower() in {".cbz", ".zip"}
+            if not is_valid:
+                continue
+            ch_name = _chapter_name(str(child))
+            if ch_name not in seen:
+                seen.add(ch_name)
+                entries.append((ch_name, str(child)))
+
+    def _get_chapter_status(self, ch_name: str) -> tuple[str, str]:
+        if not self.current_output_dir:
+            return "○ Raw", "-"
+        manifest_file = self.current_output_dir / ch_name / "manifest.json"
+        if not manifest_file.exists():
+            return "○ Raw", "-"
+        try:
+            data = _safe_read_json(manifest_file)
+            curr = data.get("current_stage", "pending")
+            page_count = str(data.get("total_pages", len(data.get("pages", []))))
+            if curr in {"complete", "package"}:
+                return "✓ Complete", page_count
+            if curr == "qa":
+                return "⚠ QA Review", page_count
+            return f"● {curr.capitalize()}", page_count
+        except Exception:
+            return "○ Raw", "-"
+
+    def _scan_chapters(self):
         self.tree_chapters.clear()
+        seen_names: set[str] = set()
+        chapter_entries: list[tuple[str, str]] = []
 
-        # Find chapter folders or archive files
-        items = []
-        for child in sorted(self.current_series.iterdir()):
-            if child.is_dir() and not child.name.startswith("."):
-                items.append(child)
-            elif child.suffix.lower() in {".cbz", ".zip"}:
-                items.append(child)
+        self._collect_from_dir(self.current_input_dir, seen_names, chapter_entries)
+        self._collect_from_dir(self.current_output_dir, seen_names, chapter_entries)
 
-        for p in items:
-            ch_name = _chapter_name(str(p))
-            manifest_file = (
-                p / "manifest.json"
-                if p.is_dir()
-                else (self.current_series / ch_name / "manifest.json")
-            )
-
-            status = "○ Pending"
-            page_count = "-"
-            if manifest_file.exists():
-                try:
-                    data = json.loads(manifest_file.read_text(encoding="utf-8"))
-                    curr = data.get("current_stage", "pending")
-                    page_count = str(
-                        data.get("total_pages", len(data.get("pages", [])))
-                    )
-                    if curr == "complete" or curr == "package":
-                        status = "✓ Complete"
-                    elif curr == "qa":
-                        status = "⚠ QA Review"
-                    else:
-                        status = f"● {curr.capitalize()}"
-                except Exception:
-                    pass
-
+        for ch_name, src_path in chapter_entries:
+            status, page_count = self._get_chapter_status(ch_name)
             item = QTreeWidgetItem([ch_name, status, page_count])
-            item.setData(0, Qt.ItemDataRole.UserRole, str(p))
+            item.setData(0, Qt.ItemDataRole.UserRole, src_path)
             self.tree_chapters.addTopLevelItem(item)
 
     # ---------------- Pickers & Chapter Selection ----------------
@@ -1088,9 +1147,11 @@ class PipelineGUI(QMainWindow):
             self._select_input_path(path_str, auto_import=False)
 
     def _select_input_path(self, path_str: str, auto_import: bool = False):
-        if not self.current_series:
+        if not self.current_output_dir:
             QMessageBox.warning(
-                self, "Series Folder", "Please select a series folder first."
+                self,
+                "Output Series Folder",
+                "Please select an Output Series Folder (Workspace) first.",
             )
             return
 
@@ -1107,9 +1168,9 @@ class PipelineGUI(QMainWindow):
             self._run_single_stage("import")
 
     def _get_active_chapter_dir(self) -> Path | None:
-        if not self.current_series or not self.current_chapter:
+        if not self.current_output_dir or not self.current_chapter:
             return None
-        return self.current_series / self.current_chapter
+        return self.current_output_dir / self.current_chapter
 
     def _manifest_current_stage(self) -> str | None:
         ch_dir = self._get_active_chapter_dir()
@@ -1211,7 +1272,7 @@ class PipelineGUI(QMainWindow):
             return
         self.is_running = True
         self.btn_stop.setEnabled(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminate while running
+        self.progress_bar.setRange(0, 0)
         self.lbl_status.setText("● Processing...")
         self.lbl_status.setStyleSheet("color: #60a5fa; font-weight: 600;")
         self._refresh_stage_states()
@@ -1226,7 +1287,6 @@ class PipelineGUI(QMainWindow):
         self.active_runner.start()
 
     def _handle_process_line(self, line: str):
-        # Update progress if pattern matches e.g. "Page 012/032"
         m = re.search(r"Page\s+(\d+)/(\d+)", line, re.IGNORECASE)
         if m:
             cur, tot = int(m.group(1)), int(m.group(2))
@@ -1263,7 +1323,7 @@ class PipelineGUI(QMainWindow):
             self.lbl_status.setText("● Failed / Interrupted")
             self.lbl_status.setStyleSheet("color: #ef4444; font-weight: 600;")
 
-        self._scan_series_folder()
+        self._scan_chapters()
         self._refresh_stage_states()
         self._load_chapter_pages_for_preview()
 
@@ -1350,13 +1410,20 @@ class PipelineGUI(QMainWindow):
         )
 
     def _run_batch_all(self):
-        if not self.current_series:
+        target_dir = self.current_input_dir or self.current_output_dir
+        if not target_dir:
+            QMessageBox.warning(
+                self,
+                "No Directory",
+                "Please select an Input Folder or Output Series Folder first.",
+            )
             return
+
         if (
             QMessageBox.question(
                 self,
                 "Run Batch",
-                f"Run all chapters in {self.current_series.name}?",
+                f"Run batch processing for all chapters in {target_dir.name}?",
             )
             != QMessageBox.StandardButton.Yes
         ):
@@ -1366,7 +1433,7 @@ class PipelineGUI(QMainWindow):
             sys.executable,
             str(PIPELINE),
             "batch",
-            str(self.current_series),
+            str(target_dir),
         ]
         if self.chk_fresh.isChecked():
             cmd += ["--fresh"]
@@ -1435,7 +1502,6 @@ class PipelineGUI(QMainWindow):
         else:
             self.chapter_pages = []
 
-        # Load regions from stage1/stage2/stage3/stage4 if available
         self._load_regions_data(ch_dir)
 
         tot = len(self.chapter_pages)
@@ -1519,7 +1585,6 @@ class PipelineGUI(QMainWindow):
         overlay_path = ch_dir / "stage1_detection" / "overlays" / page_name
 
         if is_split:
-            # Left = Original, Right = Rendered
             img_left = raw_path if raw_path.exists() else None
             img_right = render_path if render_path.exists() else raw_path
             self._display_on_canvas(self.canvas_left, img_left)
