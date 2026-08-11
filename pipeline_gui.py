@@ -1,18 +1,61 @@
 import json
-import queue
+import re
 import subprocess
 import sys
-import threading
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+
+from PIL import Image
+from PyQt6.QtCore import QRectF, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFrame,
+    QGraphicsPixmapItem,
+    QGraphicsRectItem,
+    QGraphicsScene,
+    QGraphicsView,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QSpinBox,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 ROOT = Path(__file__).resolve().parent
 PIPELINE = ROOT / "pipeline.py"
 SETTINGS = ROOT / "settings.json"
+CONFIG_FILE = ROOT / "config.py"
+TOUCHUP_APP = ROOT / "touchup" / "app.py"
 
-# Ordered pipeline stages (mirrors config.STAGE_ORDER). Import is auto-run; the rest are
-# manual "Run" buttons that unlock in sequence. QA + Package unlock together after Render.
 STAGES = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
 STAGE_LABELS = {
     "import": "0 · Import",
@@ -23,10 +66,17 @@ STAGE_LABELS = {
     "render": "5 · Render",
     "qa": "6 · QA",
 }
+STAGE_DESCRIPTIONS = {
+    "import": "Extract pages, normalize sizes, generate manifest",
+    "detect": "Detect speech bubbles & text regions (RT-DETR / YOLO)",
+    "ocr": "Recognize Chinese text via PaddleOCR",
+    "translate": "Translate dialogue to literal English (Ollama/MCP)",
+    "paraphrase": "Rewrite into natural, punchy comic dialogue",
+    "render": "Bubble inpainting & English typesetting",
+    "qa": "Validate text coverage, sizes, & formatting",
+}
 PACKAGE_FORMATS = ["cbz", "zip", "tar", "pdf"]
 
-# Stages that use a prompt/response handoff when backend is manual/mcp.
-# (paths mirror config STAGE_FOLDERS + *_PROMPT/RESPONSE_NAME defaults)
 HANDOFF_HINTS = {
     "translate": (
         "stage3_translation/translation_prompt.json",
@@ -38,8 +88,6 @@ HANDOFF_HINTS = {
     ),
 }
 
-# Only surface meaningful lines in the log (warnings, re-runs, overrides, verdicts) -
-# hide the per-page INFO spam. Case-insensitive substring match.
 SHOW_KEYWORDS = (
     "warning",
     "error",
@@ -64,18 +112,221 @@ SHOW_KEYWORDS = (
     "stitch",
 )
 
+DARK_STYLE = """
+QMainWindow, QWidget {
+    background-color: #141518;
+    color: #e5e7eb;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    font-size: 13px;
+}
 
-def _read_settings() -> dict:
-    if SETTINGS.exists():
+QGroupBox {
+    background-color: #1c1e24;
+    border: 1px solid #2d3139;
+    border-radius: 8px;
+    margin-top: 18px;
+    padding-top: 12px;
+    font-weight: 600;
+    color: #93c5fd;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 2px 8px;
+    background-color: #1c1e24;
+    border-radius: 4px;
+    color: #93c5fd;
+}
+
+QPushButton {
+    background-color: #2a2e39;
+    color: #f3f4f6;
+    border: 1px solid #3e4451;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: 500;
+    min-height: 20px;
+}
+
+QPushButton:hover {
+    background-color: #353b49;
+    border-color: #60a5fa;
+}
+
+QPushButton:pressed {
+    background-color: #1f232b;
+}
+
+QPushButton:disabled {
+    background-color: #181a20;
+    color: #525866;
+    border-color: #242830;
+}
+
+QPushButton#primaryBtn {
+    background-color: #2563eb;
+    color: #ffffff;
+    border: 1px solid #3b82f6;
+    font-weight: 600;
+}
+
+QPushButton#primaryBtn:hover {
+    background-color: #1d4ed8;
+    border-color: #60a5fa;
+}
+
+QPushButton#primaryBtn:disabled {
+    background-color: #1e3a8a;
+    color: #64748b;
+    border-color: #1e293b;
+}
+
+QPushButton#accentBtn {
+    background-color: #059669;
+    color: #ffffff;
+    border: 1px solid #10b981;
+    font-weight: 600;
+}
+
+QPushButton#accentBtn:hover {
+    background-color: #047857;
+}
+
+QPushButton#resumeBtn {
+    background-color: #d97706;
+    color: #ffffff;
+    border: 1px solid #f59e0b;
+    font-weight: 600;
+}
+
+QPushButton#resumeBtn:hover {
+    background-color: #b45309;
+}
+
+QLineEdit, QSpinBox, QComboBox {
+    background-color: #1c1e24;
+    color: #f3f4f6;
+    border: 1px solid #374151;
+    border-radius: 6px;
+    padding: 5px 10px;
+    min-height: 20px;
+}
+
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+    border: 1px solid #3b82f6;
+    background-color: #20232a;
+}
+
+QComboBox::drop-down {
+    border: none;
+    padding-right: 6px;
+}
+
+QTreeWidget, QTableWidget, QTextEdit {
+    background-color: #181a1f;
+    color: #e5e7eb;
+    border: 1px solid #2d3139;
+    border-radius: 6px;
+    gridline-color: #262a33;
+}
+
+QHeaderView::section {
+    background-color: #20242c;
+    color: #9ca3af;
+    padding: 6px;
+    border: 1px solid #2d3139;
+    font-weight: 600;
+}
+
+QTreeWidget::item:selected, QTableWidget::item:selected {
+    background-color: #1e3a5f;
+    color: #93c5fd;
+}
+
+QTreeWidget::item:hover {
+    background-color: #232731;
+}
+
+QProgressBar {
+    background-color: #1c1e24;
+    border: 1px solid #2d3139;
+    border-radius: 6px;
+    text-align: center;
+    color: #f9fafb;
+    font-weight: 600;
+}
+
+QProgressBar::chunk {
+    background-color: #2563eb;
+    border-radius: 5px;
+}
+
+QScrollBar:vertical {
+    background: #141518;
+    width: 10px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #374151;
+    min-height: 20px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #4b5563;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QSplitter::handle {
+    background-color: #262932;
+}
+
+QSplitter::handle:hover {
+    background-color: #3b82f6;
+}
+
+QTabWidget::pane {
+    border: 1px solid #2d3139;
+    background-color: #181a1f;
+    border-radius: 6px;
+}
+
+QTabBar::tab {
+    background: #1f232b;
+    color: #9ca3af;
+    padding: 6px 14px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    margin-right: 2px;
+}
+
+QTabBar::tab:selected {
+    background: #282e3a;
+    color: #60a5fa;
+    font-weight: 600;
+}
+"""
+
+
+def _safe_read_json(path: Path) -> dict:
+    if path.exists():
         try:
-            return json.loads(SETTINGS.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return {}
     return {}
 
 
+def _read_settings() -> dict:
+    return _safe_read_json(SETTINGS)
+
+
 def _write_setting(key: str, value) -> None:
-    """Read-modify-write settings.json so we never clobber pipeline-managed keys."""
     s = _read_settings()
     s[key] = value
     try:
@@ -87,411 +338,1252 @@ def _write_setting(key: str, value) -> None:
 
 
 def _chapter_name(input_path: str) -> str:
-    """Chapter folder name = stem for cbz/zip, folder name otherwise (mirrors import)."""
     p = Path(input_path)
     if p.suffix.lower() in {".cbz", ".zip"}:
         return p.stem
     return p.name
 
 
-class PipelineGUI:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        root.title("Manhua Pipeline - Guided Runner")
-        root.geometry("640x680")
+def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
+    if pil_img.mode != "RGBA":
+        pil_img = pil_img.convert("RGBA")
+    data = pil_img.tobytes("raw", "RGBA")
+    qimg = QImage(data, pil_img.width, pil_img.height, QImage.Format.Format_RGBA8888)
+    return QPixmap.fromImage(qimg.copy())
 
-        self.q: queue.Queue = queue.Queue()
-        self.running = False
-        self.input_path: str | None = None
-        self.chapter: str | None = None
-        self.stage_done: dict[str, bool] = {}
-        self.stage_btns: dict[str, ttk.Button] = {}
+
+class ProcessRunner(QThread):
+    line_emitted = pyqtSignal(str)
+    finished_emitted = pyqtSignal(int)
+
+    def __init__(self, cmd: list[str]):
+        super().__init__()
+        self.cmd = cmd
+        self.proc: subprocess.Popen | None = None
+        self._killed = False
+
+    def run(self):
+        try:
+            self.proc = subprocess.Popen(
+                self.cmd,
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+            )
+            for line in self.proc.stdout:
+                if self._killed:
+                    break
+                self.line_emitted.emit(line.rstrip("\n"))
+            self.proc.wait()
+            rc = self.proc.returncode if not self._killed else -1
+            self.finished_emitted.emit(rc)
+        except Exception as exc:
+            self.line_emitted.emit(f"[GUI] Error launching process: {exc}")
+            self.finished_emitted.emit(1)
+
+    def kill(self):
+        self._killed = True
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Pipeline Configuration & Settings")
+        self.resize(560, 480)
+        self._build_ui()
+        self._load_values()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+
+        # Tab 1: General
+        t1 = QWidget()
+        l1 = QVBoxLayout(t1)
+
+        gb_general = QGroupBox("Series & Paths")
+        g1 = QGridLayout(gb_general)
+
+        g1.addWidget(QLabel("Series Folder:"), 0, 0)
+        self.txt_series = QLineEdit()
+        g1.addWidget(self.txt_series, 0, 1)
+        btn_br = QPushButton("Browse…")
+        btn_br.clicked.connect(self._browse_series)
+        g1.addWidget(btn_br, 0, 2)
+
+        g1.addWidget(QLabel("Default Package Format:"), 1, 0)
+        self.cmb_pkg = QComboBox()
+        self.cmb_pkg.addItems(PACKAGE_FORMATS)
+        g1.addWidget(self.cmb_pkg, 1, 1)
+
+        l1.addWidget(gb_general)
+        l1.addStretch()
+        tabs.addTab(t1, "General")
+
+        # Tab 2: Translation & Paraphrase (AI)
+        t2 = QWidget()
+        l2 = QVBoxLayout(t2)
+
+        gb_ollama = QGroupBox("Ollama / Local AI Settings")
+        g2 = QGridLayout(gb_ollama)
+
+        g2.addWidget(QLabel("Ollama Host URL:"), 0, 0)
+        self.txt_ollama_host = QLineEdit("http://localhost:11434")
+        g2.addWidget(self.txt_ollama_host, 0, 1)
+
+        g2.addWidget(QLabel("Translate Model:"), 1, 0)
+        self.txt_trans_model = QLineEdit("qwen2.5:3b-instruct")
+        g2.addWidget(self.txt_trans_model, 1, 1)
+
+        g2.addWidget(QLabel("Paraphrase Model:"), 2, 0)
+        self.txt_para_model = QLineEdit("qwen2.5:3b-instruct")
+        g2.addWidget(self.txt_para_model, 2, 1)
+
+        g2.addWidget(QLabel("Paraphrase Tone:"), 3, 0)
+        self.txt_para_tone = QLineEdit(
+            "preserve crude/rude register; casual US English"
+        )
+        g2.addWidget(self.txt_para_tone, 3, 1)
+
+        l2.addWidget(gb_ollama)
+        l2.addStretch()
+        tabs.addTab(t2, "AI & Ollama")
+
+        # Tab 3: OCR & Detection
+        t3 = QWidget()
+        l3 = QVBoxLayout(t3)
+
+        gb_models = QGroupBox("Detection & OCR Engines")
+        g3 = QGridLayout(gb_models)
+
+        g3.addWidget(QLabel("Detector Backend:"), 0, 0)
+        self.cmb_detector = QComboBox()
+        self.cmb_detector.addItems(["rtdetr", "yolov8"])
+        g3.addWidget(self.cmb_detector, 0, 1)
+
+        g3.addWidget(QLabel("Detector GPU:"), 1, 0)
+        self.chk_det_gpu = QCheckBox("Enable GPU for Detection")
+        self.chk_det_gpu.setChecked(True)
+        g3.addWidget(self.chk_det_gpu, 1, 1)
+
+        g3.addWidget(QLabel("OCR GPU:"), 2, 0)
+        self.chk_ocr_gpu = QCheckBox("Enable GPU for PaddleOCR")
+        self.chk_ocr_gpu.setChecked(True)
+        g3.addWidget(self.chk_ocr_gpu, 2, 1)
+
+        l3.addWidget(gb_models)
+        l3.addStretch()
+        tabs.addTab(t3, "Detection & OCR")
+
+        # Buttons
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self._save_values)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _browse_series(self):
+        d = QFileDialog.getExistingDirectory(self, "Select Series Folder")
+        if d:
+            self.txt_series.setText(d)
+
+    def _load_values(self):
+        settings = _read_settings()
+        self.txt_series.setText(settings.get("output_dir", ""))
+        self.cmb_pkg.setCurrentText(settings.get("gui_default_package", "cbz"))
+        self.txt_ollama_host.setText(
+            settings.get("ollama_host", "http://localhost:11434")
+        )
+        self.txt_trans_model.setText(
+            settings.get("ollama_translate_model", "qwen2.5:3b-instruct")
+        )
+        self.txt_para_model.setText(
+            settings.get("ollama_para_model", "qwen2.5:3b-instruct")
+        )
+        self.txt_para_tone.setText(
+            settings.get(
+                "paraphrase_tone",
+                "preserve crude/rude register; casual US English",
+            )
+        )
+        self.cmb_detector.setCurrentText(settings.get("detector_backend", "rtdetr"))
+        self.chk_det_gpu.setChecked(settings.get("detector_use_gpu", True))
+        self.chk_ocr_gpu.setChecked(settings.get("ocr_use_gpu", True))
+
+    def _save_values(self):
+        _write_setting("output_dir", self.txt_series.text().strip())
+        _write_setting("gui_default_package", self.cmb_pkg.currentText())
+        _write_setting("ollama_host", self.txt_ollama_host.text().strip())
+        _write_setting("ollama_translate_model", self.txt_trans_model.text().strip())
+        _write_setting("ollama_para_model", self.txt_para_model.text().strip())
+        _write_setting("paraphrase_tone", self.txt_para_tone.text().strip())
+        _write_setting("detector_backend", self.cmb_detector.currentText())
+        _write_setting("detector_use_gpu", self.chk_det_gpu.isChecked())
+        _write_setting("ocr_use_gpu", self.chk_ocr_gpu.isChecked())
+        self.accept()
+
+
+class SmoothCanvasView(QGraphicsView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
+        self.pixmap_item = QGraphicsPixmapItem()
+        self.scene.addItem(self.pixmap_item)
+
+        self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setStyleSheet("background-color: #121316; border: none;")
+
+        self._rect_items: list[QGraphicsRectItem] = []
+
+    def set_image(self, pixmap: QPixmap):
+        self.clear_overlays()
+        self.pixmap_item.setPixmap(pixmap)
+        self.scene.setSceneRect(QRectF(pixmap.rect()))
+        self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def add_overlay_box(
+        self,
+        rect: QRectF,
+        color: QColor = QColor(255, 60, 60, 200),
+        width: int = 2,
+    ):
+        box_item = QGraphicsRectItem(rect)
+        pen = QPen(color, width)
+        box_item.setPen(pen)
+        self.scene.addItem(box_item)
+        self._rect_items.append(box_item)
+
+    def clear_overlays(self):
+        for item in self._rect_items:
+            self.scene.removeItem(item)
+        self._rect_items.clear()
+
+    def wheelEvent(self, event):
+        factor = 1.15 if event.angleDelta().y() > 0 else 0.85
+        self.scale(factor, factor)
+
+
+class PipelineGUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Manhua Translation Pipeline - Studio Runner")
+        self.resize(1380, 860)
+
+        self.active_runner: ProcessRunner | None = None
+        self.is_running = False
+
+        self.current_series: Path | None = None
+        self.current_chapter: str | None = None
+        self.current_input_path: str | None = None
+        self.chapter_pages: list[str] = []
+        self.current_page_idx: int = 0
+
+        self.chapter_regions: dict = {}
+        self.batch_queue: list[str] = []
+        self.batch_idx: int = 0
+
+        self.stage_buttons: dict[str, QPushButton] = {}
+        self.stage_status_labels: dict[str, QLabel] = {}
 
         self._build_ui()
-        self._poll_queue()
+        self._load_series_from_settings()
 
-    def _manifest_current_stage(self) -> str | None:
-        """Read <series>/<chapter>/manifest.json 'current_stage'. None if unreadable."""
-        try:
-            mpath = Path(self.series_var.get().strip()) / self.chapter / "manifest.json"
-            return json.loads(mpath.read_text(encoding="utf-8")).get("current_stage")
-        except Exception:
-            return None
-
-    # ---------------- UI ----------------
     def _build_ui(self):
-        pad = {"padx": 8, "pady": 4}
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(8)
 
-        # Series folder (persisted)
-        top = ttk.LabelFrame(
-            self.root, text="Series folder (where chapters are stored)"
-        )
-        top.pack(fill="x", **pad)
-        self.series_var = tk.StringVar(value=_read_settings().get("output_dir", ""))
-        ttk.Entry(top, textvariable=self.series_var).pack(
-            side="left", fill="x", expand=True, padx=6, pady=6
-        )
-        ttk.Button(top, text="Browse…", command=self._pick_series).pack(
-            side="right", padx=6
-        )
+        # ---------------- Top Bar ----------------
+        top_bar = QWidget()
+        top_bar.setFixedHeight(48)
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Input picker
-        inp = ttk.LabelFrame(self.root, text="Chapter input")
-        inp.pack(fill="x", **pad)
-        row = ttk.Frame(inp)
-        row.pack(fill="x", padx=6, pady=6)
-        ttk.Button(row, text="Choose Folder…", command=self._pick_folder).pack(
-            side="left"
+        title_lbl = QLabel("MANHUA PIPELINE STUDIO")
+        title_lbl.setStyleSheet(
+            "font-size: 15px; font-weight: 700; color: #60a5fa; letter-spacing: 1px;"
         )
-        ttk.Button(row, text="Choose CBZ/ZIP…", command=self._pick_archive).pack(
-            side="left", padx=6
+        top_layout.addWidget(title_lbl)
+
+        top_layout.addSpacing(20)
+        top_layout.addWidget(QLabel("Series Folder:"))
+
+        self.txt_series_header = QLineEdit()
+        self.txt_series_header.setPlaceholderText(
+            "Select series output folder containing chapters..."
         )
-        self.input_lbl = ttk.Label(inp, text="No input selected.", foreground="#888")
-        self.input_lbl.pack(anchor="w", padx=6, pady=(0, 6))
-        self.fresh_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            inp,
-            text="Fresh  (⚠ wipes prior outputs for this chapter)",
-            variable=self.fresh_var,
-        ).pack(anchor="w", padx=6, pady=(0, 6))
+        self.txt_series_header.setReadOnly(True)
+        top_layout.addWidget(self.txt_series_header, 1)
 
-        self.skip_last_var = tk.IntVar(value=0)
-        row2 = ttk.Frame(inp)
-        row2.pack(anchor="w", padx=6, pady=(0, 6))
-        ttk.Label(row2, text="Skip last").pack(side="left")
-        ttk.Spinbox(
-            row2, from_=0, to=20, width=4, textvariable=self.skip_last_var
-        ).pack(side="left", padx=4)
-        ttk.Label(row2, text="pages (promo/credits at chapter end)").pack(side="left")
+        btn_browse_series = QPushButton("Browse Series…")
+        btn_browse_series.clicked.connect(self._on_browse_series)
+        top_layout.addWidget(btn_browse_series)
 
-        # Stages
-        st = ttk.LabelFrame(self.root, text="Stages (unlock in order)")
-        st.pack(fill="x", **pad)
+        btn_settings = QPushButton("⚙ Settings")
+        btn_settings.clicked.connect(self._open_settings)
+        top_layout.addWidget(btn_settings)
+
+        main_layout.addWidget(top_bar)
+
+        # ---------------- Main Vertical Splitter ----------------
+        v_splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # Upper Horizontal Splitter (3 Panels)
+        h_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Panel 1: Chapters & Batch
+        p1 = self._build_chapters_panel()
+        h_splitter.addWidget(p1)
+
+        # Panel 2: Active Chapter & Stages
+        p2 = self._build_stages_panel()
+        h_splitter.addWidget(p2)
+
+        # Panel 3: Live Preview & Region Inspector
+        p3 = self._build_preview_panel()
+        h_splitter.addWidget(p3)
+
+        h_splitter.setStretchFactor(0, 2)
+        h_splitter.setStretchFactor(1, 3)
+        h_splitter.setStretchFactor(2, 4)
+
+        v_splitter.addWidget(h_splitter)
+
+        # Panel 4 (Bottom): Console & Execution Progress
+        p4 = self._build_console_panel()
+        v_splitter.addWidget(p4)
+
+        v_splitter.setStretchFactor(0, 7)
+        v_splitter.setStretchFactor(1, 3)
+
+        main_layout.addWidget(v_splitter, 1)
+
+    # ---------------- UI Sub-Panels ----------------
+    def _build_chapters_panel(self) -> QWidget:
+        panel = QGroupBox("Chapters & Batch Queue")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 12, 8, 8)
+        layout.setSpacing(6)
+
+        btn_row = QHBoxLayout()
+        btn_add_folder = QPushButton("📁 Add Folder…")
+        btn_add_folder.clicked.connect(self._on_pick_folder)
+        btn_row.addWidget(btn_add_folder)
+
+        btn_add_cbz = QPushButton("📦 Add CBZ/ZIP…")
+        btn_add_cbz.clicked.connect(self._on_pick_archive)
+        btn_row.addWidget(btn_add_cbz)
+        layout.addLayout(btn_row)
+
+        self.tree_chapters = QTreeWidget()
+        self.tree_chapters.setHeaderLabels(["Chapter", "Status", "Pages"])
+        self.tree_chapters.header().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.tree_chapters.header().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.tree_chapters.header().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.tree_chapters.itemClicked.connect(self._on_chapter_item_clicked)
+        layout.addWidget(self.tree_chapters, 1)
+
+        opts_group = QFrame()
+        opts_group.setStyleSheet(
+            "background-color: #181a1f; border-radius: 6px; padding: 4px;"
+        )
+        opts_layout = QVBoxLayout(opts_group)
+        opts_layout.setContentsMargins(6, 6, 6, 6)
+
+        self.chk_fresh = QCheckBox("Fresh run (wipe prior chapter outputs)")
+        opts_layout.addWidget(self.chk_fresh)
+
+        skip_row = QHBoxLayout()
+        skip_row.addWidget(QLabel("Skip last:"))
+        self.spin_skip_last = QSpinBox()
+        self.spin_skip_last.setRange(0, 20)
+        self.spin_skip_last.setValue(0)
+        self.spin_skip_last.setFixedWidth(54)
+        skip_row.addWidget(self.spin_skip_last)
+        skip_row.addWidget(QLabel("pages (promo/credits)"))
+        skip_row.addStretch()
+        opts_layout.addLayout(skip_row)
+
+        layout.addWidget(opts_group)
+
+        action_row = QHBoxLayout()
+        self.btn_run_selected = QPushButton("▶ Run Chapter")
+        self.btn_run_selected.setObjectName("primaryBtn")
+        self.btn_run_selected.clicked.connect(self._run_selected_chapter_auto)
+        action_row.addWidget(self.btn_run_selected)
+
+        self.btn_run_all = QPushButton("▶ Run All (Batch)")
+        self.btn_run_all.setObjectName("accentBtn")
+        self.btn_run_all.clicked.connect(self._run_batch_all)
+        action_row.addWidget(self.btn_run_all)
+        layout.addLayout(action_row)
+
+        return panel
+
+    def _build_stages_panel(self) -> QWidget:
+        panel = QGroupBox("Active Chapter & Pipeline Stages")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 12, 8, 8)
+        layout.setSpacing(6)
+
+        # Chapter info box
+        info_box = QFrame()
+        info_box.setStyleSheet(
+            "background-color: #181a1f; border: 1px solid #282c34; border-radius: 6px; padding: 6px;"
+        )
+        info_layout = QVBoxLayout(info_box)
+        info_layout.setContentsMargins(6, 6, 6, 6)
+
+        self.lbl_active_chapter = QLabel("No chapter selected")
+        self.lbl_active_chapter.setStyleSheet(
+            "font-size: 14px; font-weight: 700; color: #f3f4f6;"
+        )
+        info_layout.addWidget(self.lbl_active_chapter)
+
+        self.lbl_active_details = QLabel(
+            "Select or import a chapter to begin processing."
+        )
+        self.lbl_active_details.setStyleSheet("color: #9ca3af; font-size: 12px;")
+        info_layout.addWidget(self.lbl_active_details)
+
+        layout.addWidget(info_box)
+
+        # Stages scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("border: none; background-color: transparent;")
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 4, 0, 4)
+        scroll_layout.setSpacing(6)
+
         for name in STAGES:
-            r = ttk.Frame(st)
-            r.pack(fill="x", padx=6, pady=2)
-            btn = ttk.Button(
-                r,
-                text=STAGE_LABELS[name],
-                width=18,
-                command=lambda n=name: self._run_stage(n),
+            stage_card = QFrame()
+            stage_card.setStyleSheet(
+                "background-color: #181a1f; border: 1px solid #262932; border-radius: 6px; padding: 6px;"
             )
-            btn.pack(side="left")
-            btn.state(["disabled"])
-            self.stage_btns[name] = btn
-            if name == "qa":
-                # Package sits beside QA (both unlock after Render).
-                self.pkg_fmt = tk.StringVar(
-                    value=_read_settings().get("gui_default_package", "cbz")
-                )
-                self.pkg_btn = ttk.Button(
-                    r, text="Package", width=12, command=self._run_package
-                )
-                self.pkg_btn.pack(side="left", padx=(12, 4))
-                self.pkg_btn.state(["disabled"])
-                ttk.Combobox(
-                    r,
-                    textvariable=self.pkg_fmt,
-                    values=PACKAGE_FORMATS,
-                    width=6,
-                    state="readonly",
-                ).pack(side="left")
+            card_layout = QHBoxLayout(stage_card)
+            card_layout.setContentsMargins(8, 6, 8, 6)
 
-        # Log
-        lg = ttk.LabelFrame(
-            self.root, text="Output (warnings · re-runs · overrides · verdicts)"
+            info_sub = QVBoxLayout()
+            title = QLabel(STAGE_LABELS[name])
+            title.setStyleSheet("font-weight: 600; color: #e5e7eb;")
+            info_sub.addWidget(title)
+
+            desc = QLabel(STAGE_DESCRIPTIONS[name])
+            desc.setStyleSheet("color: #6b7280; font-size: 11px;")
+            info_sub.addWidget(desc)
+            card_layout.addLayout(info_sub, 1)
+
+            st_lbl = QLabel("○ Pending")
+            st_lbl.setStyleSheet("color: #9ca3af; font-weight: 500;")
+            st_lbl.setFixedWidth(80)
+            card_layout.addWidget(st_lbl)
+            self.stage_status_labels[name] = st_lbl
+
+            btn = QPushButton("Run")
+            btn.setFixedWidth(80)
+            btn.clicked.connect(lambda _, n=name: self._run_single_stage(n))
+            btn.setEnabled(False)
+            card_layout.addWidget(btn)
+            self.stage_buttons[name] = btn
+
+            scroll_layout.addWidget(stage_card)
+
+        # Stage 7 (Package)
+        pkg_card = QFrame()
+        pkg_card.setStyleSheet(
+            "background-color: #181a1f; border: 1px solid #262932; border-radius: 6px; padding: 6px;"
         )
-        lg.pack(fill="both", expand=True, **pad)
-        self.log = tk.Text(
-            lg,
-            height=14,
-            wrap="word",
-            state="disabled",
-            font=("Consolas", 9),
-            bg="#111",
-            fg="#ddd",
+        pkg_layout = QHBoxLayout(pkg_card)
+        pkg_layout.setContentsMargins(8, 6, 8, 6)
+
+        pkg_info = QVBoxLayout()
+        pkg_title = QLabel("7 · Package")
+        pkg_title.setStyleSheet("font-weight: 600; color: #e5e7eb;")
+        pkg_info.addWidget(pkg_title)
+        pkg_desc = QLabel("Pack rendered pages into archive")
+        pkg_desc.setStyleSheet("color: #6b7280; font-size: 11px;")
+        pkg_info.addWidget(pkg_desc)
+        pkg_layout.addLayout(pkg_info, 1)
+
+        self.cmb_pkg_format = QComboBox()
+        self.cmb_pkg_format.addItems(PACKAGE_FORMATS)
+        self.cmb_pkg_format.setFixedWidth(64)
+        pkg_layout.addWidget(self.cmb_pkg_format)
+
+        self.btn_package = QPushButton("Package")
+        self.btn_package.setFixedWidth(80)
+        self.btn_package.clicked.connect(self._run_package_stage)
+        self.btn_package.setEnabled(False)
+        pkg_layout.addWidget(self.btn_package)
+
+        scroll_layout.addWidget(pkg_card)
+        scroll_layout.addStretch()
+
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll, 1)
+
+        # Stage Action Bar
+        action_bar = QHBoxLayout()
+        self.btn_open_touchup = QPushButton("🎨 Open Chapter in Touch-Up")
+        self.btn_open_touchup.clicked.connect(self._launch_touchup_chapter)
+        action_bar.addWidget(self.btn_open_touchup)
+
+        layout.addLayout(action_bar)
+        return panel
+
+    def _build_preview_panel(self) -> QWidget:
+        panel = QGroupBox("Live Preview & Region Inspector")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 12, 8, 8)
+        layout.setSpacing(6)
+
+        # Top Bar: Mode selector & page navigation
+        nav_bar = QHBoxLayout()
+        nav_bar.addWidget(QLabel("Mode:"))
+
+        self.cmb_preview_mode = QComboBox()
+        self.cmb_preview_mode.addItems(
+            [
+                "Rendered Page (Stage 5)",
+                "Original Page (Stage 0)",
+                "Detection Overlays (Stage 1)",
+                "Side-by-Side Split",
+            ]
         )
-        self.log.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
-        sb = ttk.Scrollbar(lg, command=self.log.yview)
-        sb.pack(side="right", fill="y", pady=6)
-        self.log.config(yscrollcommand=sb.set)
-        self.log.tag_config("err", foreground="#ff6b6b")
-        self.log.tag_config("warn", foreground="#ffd166")
-        self.log.tag_config("ok", foreground="#8ce99a")
-        self.log.tag_config("sys", foreground="#74c0fc")
+        self.cmb_preview_mode.currentIndexChanged.connect(self._update_preview_image)
+        nav_bar.addWidget(self.cmb_preview_mode, 1)
 
-    # ---------------- pickers ----------------
-    def _pick_series(self):
-        d = filedialog.askdirectory(title="Select series folder")
+        self.btn_prev_page = QPushButton("◀")
+        self.btn_prev_page.setFixedWidth(32)
+        self.btn_prev_page.clicked.connect(self._prev_page)
+        nav_bar.addWidget(self.btn_prev_page)
+
+        self.lbl_page_counter = QLabel("Page 0 / 0")
+        self.lbl_page_counter.setStyleSheet("font-weight: 600; color: #93c5fd;")
+        nav_bar.addWidget(self.lbl_page_counter)
+
+        self.btn_next_page = QPushButton("▶")
+        self.btn_next_page.setFixedWidth(32)
+        self.btn_next_page.clicked.connect(self._next_page)
+        nav_bar.addWidget(self.btn_next_page)
+
+        layout.addLayout(nav_bar)
+
+        # Image Canvas Splitter (for side-by-side or single view)
+        self.preview_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        self.canvas_left = SmoothCanvasView()
+        self.preview_splitter.addWidget(self.canvas_left)
+
+        self.canvas_right = SmoothCanvasView()
+        self.preview_splitter.addWidget(self.canvas_right)
+        self.canvas_right.setVisible(False)
+
+        layout.addWidget(self.preview_splitter, 3)
+
+        # Page slider
+        self.page_slider = QSlider(Qt.Orientation.Horizontal)
+        self.page_slider.setRange(0, 0)
+        self.page_slider.valueChanged.connect(self._on_slider_changed)
+        layout.addWidget(self.page_slider)
+
+        # Regions Table / Inspector
+        self.tbl_regions = QTableWidget(0, 4)
+        self.tbl_regions.setHorizontalHeaderLabels(
+            ["Region", "Original (OCR)", "Translation", "Paraphrase"]
+        )
+        self.tbl_regions.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.tbl_regions.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.tbl_regions.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        self.tbl_regions.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.Stretch
+        )
+        self.tbl_regions.setMaximumHeight(160)
+        layout.addWidget(self.tbl_regions, 1)
+
+        # Quick edit button
+        self.btn_touchup_page = QPushButton("🎨 Edit Active Page in Touch-Up")
+        self.btn_touchup_page.clicked.connect(self._launch_touchup_page)
+        layout.addWidget(self.btn_touchup_page)
+
+        return panel
+
+    def _build_console_panel(self) -> QWidget:
+        panel = QGroupBox("Console & Event Stream")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 12, 8, 8)
+        layout.setSpacing(6)
+
+        # Toolbar
+        bar = QHBoxLayout()
+        self.chk_filter_important = QCheckBox(
+            "Filter meaningful only (warnings, overrides, verdicts)"
+        )
+        self.chk_filter_important.setChecked(True)
+        bar.addWidget(self.chk_filter_important)
+
+        bar.addStretch()
+
+        btn_clear = QPushButton("Clear Console")
+        btn_clear.clicked.connect(self._clear_console)
+        bar.addWidget(btn_clear)
+
+        layout.addLayout(bar)
+
+        # Output text
+        self.txt_console = QTextEdit()
+        self.txt_console.setReadOnly(True)
+        self.txt_console.setFont(QFont("Consolas", 10))
+        self.txt_console.setStyleSheet(
+            "background-color: #0f1012; color: #d1d5db; border: 1px solid #23262d; border-radius: 6px; padding: 4px;"
+        )
+        layout.addWidget(self.txt_console, 1)
+
+        # Status & Progress Footer
+        footer = QHBoxLayout()
+        self.lbl_status = QLabel("● Idle")
+        self.lbl_status.setStyleSheet("font-weight: 600; color: #10b981;")
+        footer.addWidget(self.lbl_status)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        footer.addWidget(self.progress_bar, 1)
+
+        self.btn_stop = QPushButton("⏹ Stop")
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.clicked.connect(self._stop_running_process)
+        footer.addWidget(self.btn_stop)
+
+        layout.addLayout(footer)
+        return panel
+
+    # ---------------- Series & Chapter Loading ----------------
+    def _open_settings(self):
+        dlg = SettingsDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._load_series_from_settings()
+
+    def _on_browse_series(self):
+        d = QFileDialog.getExistingDirectory(self, "Select Series Folder")
         if d:
-            self.series_var.set(d)
-            self._set_output_dir(d)
+            _write_setting("output_dir", d)
+            self._load_series_from_settings()
 
-    def _pick_folder(self):
-        d = filedialog.askdirectory(title="Select chapter folder (images)")
+    def _load_series_from_settings(self):
+        settings = _read_settings()
+        series_path = settings.get("output_dir", "")
+        self.txt_series_header.setText(series_path)
+
+        if series_path and Path(series_path).exists():
+            self.current_series = Path(series_path)
+            self._scan_series_folder()
+        else:
+            self.current_series = None
+            self.tree_chapters.clear()
+
+    def _scan_series_folder(self):
+        if not self.current_series or not self.current_series.exists():
+            return
+        self.tree_chapters.clear()
+
+        # Find chapter folders or archive files
+        items = []
+        for child in sorted(self.current_series.iterdir()):
+            if child.is_dir() and not child.name.startswith("."):
+                items.append(child)
+            elif child.suffix.lower() in {".cbz", ".zip"}:
+                items.append(child)
+
+        for p in items:
+            ch_name = _chapter_name(str(p))
+            manifest_file = (
+                p / "manifest.json"
+                if p.is_dir()
+                else (self.current_series / ch_name / "manifest.json")
+            )
+
+            status = "○ Pending"
+            page_count = "-"
+            if manifest_file.exists():
+                try:
+                    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                    curr = data.get("current_stage", "pending")
+                    page_count = str(
+                        data.get("total_pages", len(data.get("pages", [])))
+                    )
+                    if curr == "complete" or curr == "package":
+                        status = "✓ Complete"
+                    elif curr == "qa":
+                        status = "⚠ QA Review"
+                    else:
+                        status = f"● {curr.capitalize()}"
+                except Exception:
+                    pass
+
+            item = QTreeWidgetItem([ch_name, status, page_count])
+            item.setData(0, Qt.ItemDataRole.UserRole, str(p))
+            self.tree_chapters.addTopLevelItem(item)
+
+    # ---------------- Pickers & Chapter Selection ----------------
+    def _on_pick_folder(self):
+        if self.is_running:
+            QMessageBox.information(
+                self, "Busy", "A pipeline process is still running."
+            )
+            return
+        d = QFileDialog.getExistingDirectory(self, "Select Chapter Folder (Images)")
         if d:
-            self._on_input_selected(d)
+            self._select_input_path(d)
 
-    def _pick_archive(self):
-        f = filedialog.askopenfilename(
-            title="Select CBZ/ZIP", filetypes=[("Comic archives", "*.cbz *.zip")]
+    def _on_pick_archive(self):
+        if self.is_running:
+            QMessageBox.information(
+                self, "Busy", "A pipeline process is still running."
+            )
+            return
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Select CBZ/ZIP Archive", "", "Comic Archives (*.cbz *.zip)"
         )
         if f:
-            self._on_input_selected(f)
+            self._select_input_path(f)
 
-    # ---------------- flow ----------------
-    def _on_input_selected(self, path: str):
-        if self.running:
-            messagebox.showinfo("Busy", "A stage is still running - please wait.")
+    def _on_chapter_item_clicked(self, item: QTreeWidgetItem, column: int):
+        path_str = item.data(0, Qt.ItemDataRole.UserRole)
+        if path_str:
+            self._select_input_path(path_str, auto_import=False)
+
+    def _select_input_path(self, path_str: str, auto_import: bool = False):
+        if not self.current_series:
+            QMessageBox.warning(
+                self, "Series Folder", "Please select a series folder first."
+            )
             return
-        if not self.series_var.get().strip():
-            messagebox.showwarning("Series folder", "Pick a series folder first.")
+
+        self.current_input_path = path_str
+        self.current_chapter = _chapter_name(path_str)
+
+        self.lbl_active_chapter.setText(f"Chapter: {self.current_chapter}")
+        self.lbl_active_details.setText(f"Source: {Path(path_str).name}")
+
+        self._refresh_stage_states()
+        self._load_chapter_pages_for_preview()
+
+        if auto_import:
+            self._run_single_stage("import")
+
+    def _get_active_chapter_dir(self) -> Path | None:
+        if not self.current_series or not self.current_chapter:
+            return None
+        return self.current_series / self.current_chapter
+
+    def _manifest_current_stage(self) -> str | None:
+        ch_dir = self._get_active_chapter_dir()
+        if not ch_dir:
+            return None
+        mpath = ch_dir / "manifest.json"
+        if mpath.exists():
+            try:
+                return json.loads(mpath.read_text(encoding="utf-8")).get(
+                    "current_stage"
+                )
+            except Exception:
+                return None
+        return None
+
+    def _refresh_stage_states(self):
+        curr_stage = self._manifest_current_stage()
+
+        # Reset all stage buttons
+        for name in STAGES:
+            self.stage_buttons[name].setEnabled(False)
+            self.stage_buttons[name].setText("Run")
+            self.stage_buttons[name].setObjectName("")
+            self.stage_status_labels[name].setText("○ Pending")
+            self.stage_status_labels[name].setStyleSheet("color: #9ca3af;")
+
+        self.btn_package.setEnabled(False)
+
+        # Import is always runnable for selected input
+        self.stage_buttons["import"].setEnabled(not self.is_running)
+
+        if not curr_stage:
             return
-        self.input_path = path
-        self.chapter = _chapter_name(path)
-        self.input_lbl.config(
-            text=f"{Path(path).name}   →   chapter '{self.chapter}'", foreground="#ddd"
+
+        # Unlock completed / current stages
+        stage_order = STAGES
+        if curr_stage in stage_order:
+            curr_idx = stage_order.index(curr_stage)
+            for i in range(curr_idx):
+                sname = stage_order[i]
+                self.stage_buttons[sname].setEnabled(not self.is_running)
+                self.stage_buttons[sname].setText("Re-run")
+                self.stage_status_labels[sname].setText("✓ Done")
+                self.stage_status_labels[sname].setStyleSheet(
+                    "color: #10b981; font-weight: 600;"
+                )
+
+            # Active stage
+            act_name = stage_order[curr_idx]
+            self.stage_buttons[act_name].setEnabled(not self.is_running)
+            self.stage_buttons[act_name].setObjectName("primaryBtn")
+
+            # Check if handoff pending
+            if act_name in HANDOFF_HINTS and self._is_handoff_pending(act_name):
+                self.stage_buttons[act_name].setText("Resume ▶")
+                self.stage_buttons[act_name].setObjectName("resumeBtn")
+                self.stage_status_labels[act_name].setText("Waiting MCP")
+                self.stage_status_labels[act_name].setStyleSheet(
+                    "color: #f59e0b; font-weight: 600;"
+                )
+            else:
+                self.stage_buttons[act_name].setText("Run")
+                self.stage_status_labels[act_name].setText("● Ready")
+                self.stage_status_labels[act_name].setStyleSheet(
+                    "color: #60a5fa; font-weight: 600;"
+                )
+
+            if curr_stage == "qa" or curr_idx >= stage_order.index("render"):
+                self.btn_package.setEnabled(not self.is_running)
+        elif curr_stage in {"complete", "package"}:
+            for sname in stage_order:
+                self.stage_buttons[sname].setEnabled(not self.is_running)
+                self.stage_buttons[sname].setText("Re-run")
+                self.stage_status_labels[sname].setText("✓ Done")
+                self.stage_status_labels[sname].setStyleSheet(
+                    "color: #10b981; font-weight: 600;"
+                )
+            self.btn_package.setEnabled(not self.is_running)
+
+        self._reapply_styles()
+
+    def _is_handoff_pending(self, stage_name: str) -> bool:
+        ch_dir = self._get_active_chapter_dir()
+        if not ch_dir or stage_name not in HANDOFF_HINTS:
+            return False
+        prompt_rel, resp_rel = HANDOFF_HINTS[stage_name]
+        p_path = ch_dir / prompt_rel
+        r_path = ch_dir / resp_rel
+        return p_path.exists() and not r_path.exists()
+
+    def _reapply_styles(self):
+        for btn in self.stage_buttons.values():
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    # ---------------- Process Execution Plumbing ----------------
+    def _run_cmd(self, cmd: list[str], on_done=None):
+        if self.is_running:
+            return
+        self.is_running = True
+        self.btn_stop.setEnabled(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate while running
+        self.lbl_status.setText("● Processing...")
+        self.lbl_status.setStyleSheet("color: #60a5fa; font-weight: 600;")
+        self._refresh_stage_states()
+
+        self._log_sys("$ " + " ".join(Path(c).name if c == cmd[1] else c for c in cmd))
+
+        self.active_runner = ProcessRunner(cmd)
+        self.active_runner.line_emitted.connect(self._handle_process_line)
+        self.active_runner.finished_emitted.connect(
+            lambda rc: self._handle_process_finished(rc, on_done)
         )
+        self.active_runner.start()
 
-        # RESET stage buttons for the new chapter
-        self.stage_done = {s: False for s in STAGES}
-        for n, b in self.stage_btns.items():
-            b.state(["disabled"])
-            b.configure(text=STAGE_LABELS[n])
-        self.stage_btns["import"].state(["!disabled"])
-        self.pkg_btn.state(["disabled"])
-        self._clear_log()
+    def _handle_process_line(self, line: str):
+        # Update progress if pattern matches e.g. "Page 012/032"
+        m = re.search(r"Page\s+(\d+)/(\d+)", line, re.IGNORECASE)
+        if m:
+            cur, tot = int(m.group(1)), int(m.group(2))
+            self.progress_bar.setRange(0, tot)
+            self.progress_bar.setValue(cur)
 
-        if self.fresh_var.get():
-            if not messagebox.askyesno(
-                "Fresh run",
-                f"Fresh will WIPE prior outputs for '{self.chapter}'.\nContinue?",
-            ):
-                return
-        self._sys(f"Input selected: {self.chapter}. Auto-running Import…")
-        self._run_stage("import", auto=True)
-
-    def _run_stage(self, name: str, auto: bool = False):
-        if self.running:
+        if not self.chk_filter_important.isChecked():
+            self._append_console(line)
             return
+
+        low = line.lower()
+        if any(k in low for k in SHOW_KEYWORDS):
+            tag = (
+                "err"
+                if any(x in low for x in ["error", "failed", "giving up"])
+                else "warn"
+                if any(x in low for x in ["warning", "held", "missing", "conflict"])
+                else "ok"
+                if any(x in low for x in ["success", "done:"])
+                else "sys"
+            )
+            self._append_console(line, tag)
+
+    def _handle_process_finished(self, rc: int, on_done=None):
+        self.is_running = False
+        self.btn_stop.setEnabled(False)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100 if rc == 0 else 0)
+
+        if rc == 0:
+            self.lbl_status.setText("● Complete")
+            self.lbl_status.setStyleSheet("color: #10b981; font-weight: 600;")
+        else:
+            self.lbl_status.setText("● Failed / Interrupted")
+            self.lbl_status.setStyleSheet("color: #ef4444; font-weight: 600;")
+
+        self._scan_series_folder()
+        self._refresh_stage_states()
+        self._load_chapter_pages_for_preview()
+
+        if on_done:
+            on_done(rc)
+
+    def _stop_running_process(self):
+        if self.active_runner and self.is_running:
+            self.active_runner.kill()
+            self._log_sys("Process cancelled by user.", "err")
+
+    # ---------------- Stage Actions ----------------
+    def _run_single_stage(self, name: str):
+        if not self.current_chapter:
+            return
+
         cmd = [sys.executable, str(PIPELINE)]
         if name == "import":
-            cmd += ["import", "--input", self.input_path]
-            if self.fresh_var.get():
+            if not self.current_input_path:
+                return
+            cmd += ["import", "--input", self.current_input_path]
+            if self.chk_fresh.isChecked():
                 cmd += ["--fresh"]
-            if self.skip_last_var.get() > 0:
-                cmd += ["--skip-last", str(self.skip_last_var.get())]
+            if self.spin_skip_last.value() > 0:
+                cmd += ["--skip-last", str(self.spin_skip_last.value())]
         else:
-            cmd += [name, "--chapter", self.chapter]
-        self._run_cmd(cmd, on_done=lambda rc: self._stage_finished(name, rc))
+            cmd += [name, "--chapter", self.current_chapter]
 
-    def _run_package(self):
-        if self.running:
+        self._run_cmd(
+            cmd,
+            on_done=lambda rc: self._log_sys(
+                f"{STAGE_LABELS.get(name, name)} finished (code {rc}).",
+                "ok" if rc == 0 else "err",
+            ),
+        )
+
+    def _run_package_stage(self):
+        if not self.current_chapter:
             return
-        fmt = self.pkg_fmt.get()
-        _write_setting("gui_default_package", fmt)  # remember choice
+        fmt = self.cmb_pkg_format.currentText()
+        _write_setting("gui_default_package", fmt)
         cmd = [
             sys.executable,
             str(PIPELINE),
             "package",
             "--chapter",
-            self.chapter,
+            self.current_chapter,
             "--package",
             fmt,
         ]
         self._run_cmd(
             cmd,
-            on_done=lambda rc: self._sys(
-                f"Package {'done' if rc == 0 else 'FAILED'} ({fmt}).",
+            on_done=lambda rc: self._log_sys(
+                f"Package finished ({fmt}).", "ok" if rc == 0 else "err"
+            ),
+        )
+
+    def _run_selected_chapter_auto(self):
+        if not self.current_chapter or not self.current_input_path:
+            QMessageBox.warning(
+                self, "Select Chapter", "Please select a chapter first."
+            )
+            return
+
+        cmd = [
+            sys.executable,
+            str(PIPELINE),
+            self.current_chapter,
+            "--all",
+            "--input",
+            self.current_input_path,
+        ]
+        if self.chk_fresh.isChecked():
+            cmd += ["--fresh"]
+        if self.spin_skip_last.value() > 0:
+            cmd += ["--skip-last", str(self.spin_skip_last.value())]
+
+        self._run_cmd(
+            cmd,
+            on_done=lambda rc: self._log_sys(
+                f"Chapter {self.current_chapter} pipeline auto-run complete.",
                 "ok" if rc == 0 else "err",
             ),
         )
 
-    def _stage_finished(self, name: str, rc: int):
-        # Hard failure -> keep this stage enabled so the user can retry.
-        if rc != 0:
-            self._sys(
-                f"{STAGE_LABELS.get(name, name)} did not complete cleanly - "
-                f"fix the issue above and re-run this stage.",
-                "err",
+    def _run_batch_all(self):
+        if not self.current_series:
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Run Batch",
+                f"Run all chapters in {self.current_series.name}?",
             )
-            self.stage_btns[name].state(["!disabled"])
+            != QMessageBox.StandardButton.Yes
+        ):
             return
 
-        cs = self._manifest_current_stage()
-        if cs is None:
-            self._sys(
-                "Couldn't read manifest to confirm the stage advanced - "
-                "re-run this stage if needed.",
-                "warn",
-            )
-            self.stage_btns[name].state(["!disabled"])
-            return
+        cmd = [
+            sys.executable,
+            str(PIPELINE),
+            "batch",
+            str(self.current_series),
+        ]
+        if self.chk_fresh.isChecked():
+            cmd += ["--fresh"]
+        if self.spin_skip_last.value() > 0:
+            cmd += ["--skip-last", str(self.spin_skip_last.value())]
 
-        # Handoff pending: exit code was 0 but the manifest did NOT advance past this stage,
-        # i.e. the stage only wrote its prompt and is awaiting a manual/MCP response.
-        if cs == name:
-            self._handoff_pending(name)
-            return
-
-        # Truly complete (manifest advanced past this stage, or reached 'complete').
-        self.stage_done[name] = True
-        self.stage_btns[name].configure(
-            text=STAGE_LABELS[name]
-        )  # clear any "Resume" label
-        self._sys(f"{STAGE_LABELS.get(name, name)} complete.", "ok")
-        self.stage_btns["import"].state(["!disabled"])
-
-        if name == "render":
-            self.stage_btns["qa"].state(["!disabled"])
-            self.pkg_btn.state(["!disabled"])
-            self._sys("QA and Package are now available (run either, or both).", "sys")
-        else:
-            idx = STAGES.index(name)
-            if idx + 1 < len(STAGES):
-                self.stage_btns[STAGES[idx + 1]].state(["!disabled"])
-
-    def _handoff_pending(self, name: str):
-        """Stage wrote its prompt and is waiting for a manual/MCP response. Keep it active
-        as 'Resume', tell the user exactly what to do, and DON'T unlock the next stage."""
-        prompt_rel, resp_rel = HANDOFF_HINTS.get(
-            name, ("<prompt>.json", "<response>.json")
-        )
-        btn = self.stage_btns[name]
-        btn.configure(text=f"Resume ▶ {STAGE_LABELS[name]}")
-        btn.state(["!disabled"])
-        self._sys(f"{STAGE_LABELS.get(name, name)} needs a manual/MCP handoff:", "warn")
-        self._sys(f"   1. Prompt written to:  {self.chapter}/{prompt_rel}", "warn")
-        self._sys(
-            "   2. Get the result - paste it to your chatbot, or run your MCP tool.",
-            "warn",
-        )
-        self._sys(f"   3. Save the reply as:  {self.chapter}/{resp_rel}", "warn")
-        self._sys(
-            f"   4. Click 'Resume ▶ {STAGE_LABELS[name]}' to ingest and continue.",
-            "warn",
-        )
-
-    def _set_output_dir(self, path: str):
         self._run_cmd(
-            [sys.executable, str(PIPELINE), "--set-output-dir", path],
-            on_done=lambda rc: (
-                self._sys("Series folder saved.", "ok") if rc == 0 else None
+            cmd,
+            on_done=lambda rc: self._log_sys(
+                "Batch run finished.", "ok" if rc == 0 else "err"
             ),
-            quiet=True,
         )
 
-    # ---------------- subprocess plumbing ----------------
-    def _run_cmd(self, cmd: list[str], on_done=None, quiet: bool = False):
-        self.running = True
-        self._set_buttons_running(True)
-        if not quiet:
-            self._sys(
-                "$ " + " ".join(Path(c).name if c == cmd[1] else c for c in cmd), "sys"
+    # ---------------- Touch-Up Integration ----------------
+    def _launch_touchup_chapter(self):
+        if not self.current_chapter:
+            return
+        ch_dir = self._get_active_chapter_dir()
+        if not ch_dir:
+            return
+        target_dir = ch_dir / "pages"
+        first_img = None
+        if target_dir.exists():
+            for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+                imgs = sorted(target_dir.glob(f"*{ext}"))
+                if imgs:
+                    first_img = imgs[0]
+                    break
+        self._spawn_touchup(first_img)
+
+    def _launch_touchup_page(self):
+        if not self.chapter_pages or self.current_page_idx >= len(self.chapter_pages):
+            return
+        img_name = self.chapter_pages[self.current_page_idx]
+        ch_dir = self._get_active_chapter_dir()
+        if not ch_dir:
+            return
+        page_path = ch_dir / "pages" / img_name
+        self._spawn_touchup(page_path if page_path.exists() else None)
+
+    def _spawn_touchup(self, img_path: Path | None):
+        cmd = [sys.executable, str(TOUCHUP_APP)]
+        if img_path and img_path.exists():
+            cmd += ["--image", str(img_path)]
+        try:
+            subprocess.Popen(cmd, cwd=str(ROOT))
+            self._log_sys(f"Launched Touch-Up Editor ({img_path or 'Empty'}).", "sys")
+        except Exception as exc:
+            self._log_sys(f"Failed to launch Touch-Up: {exc}", "err")
+
+    # ---------------- Preview & Inspector ----------------
+    def _load_chapter_pages_for_preview(self):
+        ch_dir = self._get_active_chapter_dir()
+        if not ch_dir:
+            self.chapter_pages = []
+            self.current_page_idx = 0
+            self._update_preview_image()
+            return
+
+        pages_dir = ch_dir / "pages"
+        if pages_dir.exists():
+            exts = {".png", ".jpg", ".jpeg", ".webp"}
+            self.chapter_pages = sorted(
+                [f.name for f in pages_dir.iterdir() if f.suffix.lower() in exts]
+            )
+        else:
+            self.chapter_pages = []
+
+        # Load regions from stage1/stage2/stage3/stage4 if available
+        self._load_regions_data(ch_dir)
+
+        tot = len(self.chapter_pages)
+        self.page_slider.setRange(1 if tot > 0 else 0, tot)
+        self.current_page_idx = 0
+        if tot > 0:
+            self.page_slider.setValue(1)
+        self._update_preview_image()
+
+    def _load_regions_data(self, ch_dir: Path):
+        self.chapter_regions.clear()
+        det_data = _safe_read_json(ch_dir / "stage1_detection" / "detection.json")
+        ocr_data = _safe_read_json(ch_dir / "stage2_ocr" / "ocr_results.json")
+        trans_map = _safe_read_json(
+            ch_dir / "stage3_translation" / "translation_response.json"
+        )
+        para_map = _safe_read_json(
+            ch_dir / "stage4_paraphrase" / "paraphrase_response.json"
+        )
+
+        det_map = {
+            r["region_id"]: r
+            for r in det_data.get("regions", [])
+            if isinstance(r, dict) and "region_id" in r
+        }
+        ocr_map = {
+            r["region_id"]: r.get("original_text", "")
+            for r in ocr_data.get("results", [])
+            if isinstance(r, dict) and "region_id" in r
+        }
+
+        for rid, rdata in det_map.items():
+            pnum = rdata.get("page_number", 1)
+            self.chapter_regions.setdefault(pnum, []).append(
+                {
+                    "region_id": rid,
+                    "bbox": rdata.get("bbox", {}),
+                    "ocr": ocr_map.get(rid, ""),
+                    "trans": trans_map.get(rid, ""),
+                    "para": para_map.get(rid, ""),
+                }
             )
 
-        def worker():
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    cwd=str(ROOT),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                for line in proc.stdout:
-                    self.q.put(("line", line.rstrip("\n")))
-                proc.wait()
-                self.q.put(("done", proc.returncode))
-            except Exception as exc:
-                self.q.put(("line", f"[GUI] Failed to launch: {exc}"))
-                self.q.put(("done", 1))
-            finally:
-                self.q.put(("__cb__", on_done))
+    def _on_slider_changed(self, val: int):
+        if val > 0 and val <= len(self.chapter_pages):
+            self.current_page_idx = val - 1
+            self._update_preview_image()
 
-        threading.Thread(target=worker, daemon=True).start()
+    def _prev_page(self):
+        if self.current_page_idx > 0:
+            self.current_page_idx -= 1
+            self.page_slider.setValue(self.current_page_idx + 1)
+            self._update_preview_image()
 
-    def _poll_queue(self):
-        pending_cb = None
-        try:
-            while True:
-                kind, payload = self.q.get_nowait()
-                if kind == "line":
-                    self._maybe_log(payload)
-                elif kind == "done":
-                    self._last_rc = payload
-                elif kind == "__cb__":
-                    self.running = False
-                    self._set_buttons_running(False)
-                    pending_cb = payload
-        except queue.Empty:
-            pass
-        if pending_cb is not None:
+    def _next_page(self):
+        if self.current_page_idx < len(self.chapter_pages) - 1:
+            self.current_page_idx += 1
+            self.page_slider.setValue(self.current_page_idx + 1)
+            self._update_preview_image()
+
+    def _update_preview_image(self):
+        ch_dir = self._get_active_chapter_dir()
+        tot = len(self.chapter_pages)
+
+        if not ch_dir or tot == 0 or self.current_page_idx >= tot:
+            self.lbl_page_counter.setText("Page 0 / 0")
+            self.tbl_regions.setRowCount(0)
+            return
+
+        page_name = self.chapter_pages[self.current_page_idx]
+        self.lbl_page_counter.setText(
+            f"Page {self.current_page_idx + 1} / {tot}  ({page_name})"
+        )
+
+        mode = self.cmb_preview_mode.currentText()
+        is_split = "Side-by-Side" in mode
+        self.canvas_right.setVisible(is_split)
+
+        raw_path = ch_dir / "pages" / page_name
+        render_path = ch_dir / "stage5_render" / "pages" / page_name
+        overlay_path = ch_dir / "stage1_detection" / "overlays" / page_name
+
+        if is_split:
+            # Left = Original, Right = Rendered
+            img_left = raw_path if raw_path.exists() else None
+            img_right = render_path if render_path.exists() else raw_path
+            self._display_on_canvas(self.canvas_left, img_left)
+            self._display_on_canvas(self.canvas_right, img_right)
+        else:
+            target = (
+                render_path
+                if "Rendered" in mode and render_path.exists()
+                else overlay_path
+                if "Detection" in mode and overlay_path.exists()
+                else raw_path
+            )
+            self._display_on_canvas(self.canvas_left, target)
+
+        self._populate_region_table(self.current_page_idx + 1)
+
+    def _display_on_canvas(self, canvas: SmoothCanvasView, img_path: Path | None):
+        if img_path and img_path.exists():
             try:
-                pending_cb(getattr(self, "_last_rc", 1))
+                pil_img = Image.open(img_path)
+                canvas.set_image(pil_to_qpixmap(pil_img))
             except Exception:
                 pass
-        self.root.after(120, self._poll_queue)
 
-    def _set_buttons_running(self, busy: bool):
-        # While a stage runs, disable all stage buttons; _stage_finished re-enables the right one.
-        for b in self.stage_btns.values():
-            if busy:
-                b.state(["disabled"])
-        if busy:
-            self.pkg_btn.state(["disabled"])
+    def _populate_region_table(self, page_num: int):
+        self.tbl_regions.setRowCount(0)
+        regs = self.chapter_regions.get(page_num, [])
+        self.tbl_regions.setRowCount(len(regs))
+        for row, r in enumerate(regs):
+            self.tbl_regions.setItem(row, 0, QTableWidgetItem(r["region_id"]))
+            self.tbl_regions.setItem(row, 1, QTableWidgetItem(r["ocr"]))
+            self.tbl_regions.setItem(row, 2, QTableWidgetItem(r["trans"]))
+            self.tbl_regions.setItem(row, 3, QTableWidgetItem(r["para"]))
 
-    # ---------------- log helpers ----------------
-    def _maybe_log(self, line: str):
-        low = line.lower()
-        if not any(k in low for k in SHOW_KEYWORDS):
-            return
-        tag = (
-            "err"
-            if ("error" in low or "failed" in low or "giving up" in low)
-            else "warn"
-            if (
-                "warning" in low
-                or "held" in low
-                or "missing" in low
-                or "not translated" in low
-                or "conflict" in low
-            )
-            else None
+    # ---------------- Console Helpers ----------------
+    def _append_console(self, text: str, tag: str | None = None):
+        color = (
+            "#ef4444"
+            if tag == "err"
+            else "#f59e0b"
+            if tag == "warn"
+            else "#10b981"
+            if tag == "ok"
+            else "#60a5fa"
+            if tag == "sys"
+            else "#e5e7eb"
         )
-        self._append(line, tag)
+        html = f"<span style='color:{color}; font-family:Consolas;'>{text}</span><br>"
+        self.txt_console.insertHtml(html)
+        self.txt_console.ensureCursorVisible()
 
-    def _sys(self, msg: str, tag: str = "sys"):
-        self._append(f"» {msg}", tag)
+    def _log_sys(self, msg: str, tag: str = "sys"):
+        self._append_console(f"» {msg}", tag)
 
-    def _append(self, text: str, tag=None):
-        self.log.config(state="normal")
-        self.log.insert("end", text + "\n", (tag,) if tag else ())
-        self.log.see("end")
-        self.log.config(state="disabled")
-
-    def _clear_log(self):
-        self.log.config(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.config(state="disabled")
+    def _clear_console(self):
+        self.txt_console.clear()
 
 
 def main():
-    if not PIPELINE.exists():
-        print(
-            f"pipeline.py not found next to this GUI ({PIPELINE}). "
-            f"Place pipeline_gui.py in the project root."
-        )
-    root = tk.Tk()
-    try:
-        ttk.Style().theme_use("clam")
-    except Exception:
-        pass
-    PipelineGUI(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    app.setStyleSheet(DARK_STYLE)
+    window = PipelineGUI()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
