@@ -1487,22 +1487,35 @@ class PipelineGUI(QMainWindow):
     # ---------------- Preview & Inspector ----------------
     def _load_chapter_pages_for_preview(self):
         ch_dir = self._get_active_chapter_dir()
-        if not ch_dir:
-            self.chapter_pages = []
-            self.current_page_idx = 0
-            self._update_preview_image()
-            return
+        self.chapter_pages = []
 
-        pages_dir = ch_dir / "pages"
-        if pages_dir.exists():
-            exts = {".png", ".jpg", ".jpeg", ".webp"}
-            self.chapter_pages = sorted(
-                [f.name for f in pages_dir.iterdir() if f.suffix.lower() in exts]
-            )
-        else:
-            self.chapter_pages = []
+        if ch_dir:
+            manifest_data = _safe_read_json(ch_dir / "manifest.json")
+            for p in manifest_data.get("pages", []):
+                fn = p.get("filename")
+                if fn and fn not in self.chapter_pages:
+                    self.chapter_pages.append(fn)
 
-        self._load_regions_data(ch_dir)
+            if not self.chapter_pages and (ch_dir / "pages").exists():
+                exts = {".png", ".jpg", ".jpeg", ".webp"}
+                self.chapter_pages = sorted(
+                    [
+                        f.name
+                        for f in (ch_dir / "pages").iterdir()
+                        if f.suffix.lower() in exts
+                    ]
+                )
+
+        if not self.chapter_pages and self.current_input_path:
+            p_in = Path(self.current_input_path)
+            if p_in.is_dir():
+                exts = {".png", ".jpg", ".jpeg", ".webp"}
+                self.chapter_pages = sorted(
+                    [f.name for f in p_in.iterdir() if f.suffix.lower() in exts]
+                )
+
+        if ch_dir:
+            self._load_regions_data(ch_dir)
 
         tot = len(self.chapter_pages)
         self.page_slider.setRange(1 if tot > 0 else 0, tot)
@@ -1511,42 +1524,81 @@ class PipelineGUI(QMainWindow):
             self.page_slider.setValue(1)
         self._update_preview_image()
 
+    def _extract_ocr_map(self, ch_dir: Path) -> dict[str, str]:
+        ocr_map = {}
+        ocr_data = _safe_read_json(ch_dir / "stage2_ocr" / "ocr.json")
+        if not ocr_data:
+            ocr_data = _safe_read_json(ch_dir / "stage2_ocr" / "ocr_results.json")
+        for r in ocr_data.get("results", []):
+            if isinstance(r, dict) and "region_id" in r:
+                t = r.get("original_text") or r.get("text") or r.get("raw_text") or ""
+                if t:
+                    ocr_map[r["region_id"]] = t
+        return ocr_map
+
+    def _extract_trans_map(self, ch_dir: Path) -> dict[str, str]:
+        trans_map = {}
+        trans_resp = _safe_read_json(
+            ch_dir / "stage3_translation" / "translation_response.json"
+        )
+        if isinstance(trans_resp, dict):
+            trans_map.update(trans_resp)
+        trans_file = _safe_read_json(ch_dir / "stage3_translation" / "translation.json")
+        for r in trans_file.get("results", []):
+            if isinstance(r, dict) and "region_id" in r:
+                t = (
+                    r.get("literal_translation")
+                    or r.get("translated_text")
+                    or r.get("translation")
+                    or ""
+                )
+                if t:
+                    trans_map.setdefault(r["region_id"], t)
+        return trans_map
+
+    def _extract_para_map(self, ch_dir: Path) -> dict[str, str]:
+        para_map = {}
+        para_resp = _safe_read_json(
+            ch_dir / "stage4_paraphrase" / "paraphrase_response.json"
+        )
+        if isinstance(para_resp, dict):
+            para_map.update(para_resp)
+        para_file = _safe_read_json(ch_dir / "stage4_paraphrase" / "paraphrase.json")
+        for r in para_file.get("results", []):
+            if isinstance(r, dict) and "region_id" in r:
+                t = r.get("final_text") or r.get("paraphrase") or r.get("text") or ""
+                if t:
+                    para_map.setdefault(r["region_id"], t)
+        return para_map
+
     def _load_regions_data(self, ch_dir: Path):
         self.chapter_regions.clear()
         det_data = _safe_read_json(ch_dir / "stage1_detection" / "detection.json")
-        ocr_data = _safe_read_json(ch_dir / "stage2_ocr" / "ocr_results.json")
-        trans_map = _safe_read_json(
-            ch_dir / "stage3_translation" / "translation_response.json"
-        )
-        para_map = _safe_read_json(
-            ch_dir / "stage4_paraphrase" / "paraphrase_response.json"
-        )
+        ocr_map = self._extract_ocr_map(ch_dir)
+        trans_map = self._extract_trans_map(ch_dir)
+        para_map = self._extract_para_map(ch_dir)
 
-        det_map = {
-            r["region_id"]: r
-            for r in det_data.get("regions", [])
-            if isinstance(r, dict) and "region_id" in r
-        }
-        ocr_map = {
-            r["region_id"]: r.get("original_text", "")
-            for r in ocr_data.get("results", [])
-            if isinstance(r, dict) and "region_id" in r
-        }
+        for r in det_data.get("regions", []):
+            if not isinstance(r, dict) or "region_id" not in r:
+                continue
+            rid = r["region_id"]
+            pnum = r.get("page_number")
+            if not isinstance(pnum, int):
+                m = re.search(r"P(\d+)", rid, re.IGNORECASE)
+                pnum = int(m.group(1)) if m else 1
 
-        for rid, rdata in det_map.items():
-            pnum = rdata.get("page_number", 1)
             self.chapter_regions.setdefault(pnum, []).append(
                 {
                     "region_id": rid,
-                    "bbox": rdata.get("bbox", {}),
-                    "ocr": ocr_map.get(rid, ""),
+                    "bbox": r.get("bbox", {}),
+                    "ocr": ocr_map.get(rid, r.get("original_text", r.get("text", ""))),
                     "trans": trans_map.get(rid, ""),
                     "para": para_map.get(rid, ""),
                 }
             )
 
     def _on_slider_changed(self, val: int):
-        if val > 0 and val <= len(self.chapter_pages):
+        if 0 < val <= len(self.chapter_pages):
             self.current_page_idx = val - 1
             self._update_preview_image()
 
@@ -1561,6 +1613,47 @@ class PipelineGUI(QMainWindow):
             self.current_page_idx += 1
             self.page_slider.setValue(self.current_page_idx + 1)
             self._update_preview_image()
+
+    def _search_image_in_dirs(
+        self, dirs: list[Path], stem: str, exts: list[str], suffixes: list[str]
+    ) -> Path | None:
+        for d in dirs:
+            if not d.exists():
+                continue
+            for ext in exts:
+                for sfx in suffixes:
+                    p = d / f"{stem}{sfx}{ext}"
+                    if p.exists() and p.is_file():
+                        return p
+        return None
+
+    def _find_page_image(
+        self, ch_dir: Path | None, page_name: str, kind: str
+    ) -> Path | None:
+        if not ch_dir:
+            return None
+        stem = Path(page_name).stem
+        exts = [Path(page_name).suffix, ".png", ".jpg", ".jpeg", ".webp"]
+
+        if kind == "rendered":
+            dirs = [
+                ch_dir / "stage5_render" / "rendered",
+                ch_dir / "stage5_render" / "pages",
+                ch_dir / "stage5_render",
+            ]
+            return self._search_image_in_dirs(dirs, stem, exts, ["", "_rendered"])
+
+        if kind == "overlay":
+            dirs = [
+                ch_dir / "stage1_detection" / "overlays",
+                ch_dir / "stage1_detection",
+            ]
+            return self._search_image_in_dirs(dirs, stem, exts, ["_overlay", ""])
+
+        dirs = [ch_dir / "pages"]
+        if self.current_input_path and Path(self.current_input_path).is_dir():
+            dirs.append(Path(self.current_input_path))
+        return self._search_image_in_dirs(dirs, stem, exts, [""])
 
     def _update_preview_image(self):
         ch_dir = self._get_active_chapter_dir()
@@ -1580,23 +1673,23 @@ class PipelineGUI(QMainWindow):
         is_split = "Side-by-Side" in mode
         self.canvas_right.setVisible(is_split)
 
-        raw_path = ch_dir / "pages" / page_name
-        render_path = ch_dir / "stage5_render" / "pages" / page_name
-        overlay_path = ch_dir / "stage1_detection" / "overlays" / page_name
+        raw_path = self._find_page_image(ch_dir, page_name, "raw")
+        render_path = self._find_page_image(ch_dir, page_name, "rendered")
+        overlay_path = self._find_page_image(ch_dir, page_name, "overlay")
 
         if is_split:
-            img_left = raw_path if raw_path.exists() else None
-            img_right = render_path if render_path.exists() else raw_path
+            img_left = overlay_path or raw_path
+            img_right = render_path or raw_path
             self._display_on_canvas(self.canvas_left, img_left)
             self._display_on_canvas(self.canvas_right, img_right)
         else:
-            target = (
-                render_path
-                if "Rendered" in mode and render_path.exists()
-                else overlay_path
-                if "Detection" in mode and overlay_path.exists()
-                else raw_path
-            )
+            if "Rendered" in mode:
+                target = render_path or raw_path
+            elif "Detection" in mode:
+                target = overlay_path or raw_path
+            else:
+                target = raw_path
+
             self._display_on_canvas(self.canvas_left, target)
 
         self._populate_region_table(self.current_page_idx + 1)
