@@ -204,13 +204,33 @@ QPushButton#resumeBtn:hover {
     background-color: #b45309;
 }
 
-QLineEdit, QSpinBox, QComboBox {
+QLineEdit, QComboBox {
     background-color: #1c1e24;
     color: #f3f4f6;
     border: 1px solid #374151;
     border-radius: 5px;
     padding: 3px 8px;
     min-height: 18px;
+}
+
+QSpinBox {
+    background-color: #1c1e24;
+    color: #f3f4f6;
+    border: 1px solid #374151;
+    border-radius: 5px;
+    padding: 2px 4px;
+    padding-right: 16px;
+    min-height: 18px;
+}
+
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 14px;
+    background-color: #282c35;
+    border: none;
+}
+
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background-color: #3b82f6;
 }
 
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
@@ -759,7 +779,8 @@ class PipelineGUI(QMainWindow):
         self.spin_skip_last = QSpinBox()
         self.spin_skip_last.setRange(0, 20)
         self.spin_skip_last.setValue(0)
-        self.spin_skip_last.setFixedWidth(48)
+        self.spin_skip_last.setFixedWidth(56)
+        self.spin_skip_last.setAlignment(Qt.AlignmentFlag.AlignCenter)
         skip_row.addWidget(self.spin_skip_last)
         skip_row.addWidget(QLabel("pages (promo/credits)"))
         skip_row.addStretch()
