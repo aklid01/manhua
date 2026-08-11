@@ -932,8 +932,8 @@ class PipelineGUI(QMainWindow):
         self.cmb_preview_mode = QComboBox()
         self.cmb_preview_mode.addItems(
             [
-                "Rendered Page (Stage 5)",
                 "Original Page (Stage 0)",
+                "Rendered Page (Stage 5)",
                 "Detection Overlays (Stage 1)",
                 "Side-by-Side Split",
             ]
@@ -1774,6 +1774,10 @@ class PipelineGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    f = app.font()
+    f.setPointSize(9)
+    f.setFamily("Segoe UI")
+    app.setFont(f)
     app.setStyleSheet(DARK_STYLE)
     window = PipelineGUI()
     window.show()
