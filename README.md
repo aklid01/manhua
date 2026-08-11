@@ -1,393 +1,356 @@
-<div align="center">
+# Manhua Translation Pipeline
 
-# Beyond the Horizon
+Manhua Translation Pipeline is a local-first Python application for converting
+Chinese manhua pages into translated English pages. It accepts CBZ, ZIP, or
+folders of images and processes them through detection, OCR, translation,
+editing, rendering, quality assurance, and optional packaging.
 
-### Translate. Refine. Render.
+The project is intended for two groups:
 
-**A local-first, modular pipeline for translating manhua - on your terms.**
+- Readers and translators who want a guided workflow with the option to review
+  or correct text manually.
+- Developers who want an inspectable, rerunnable pipeline with replaceable
+  detection, OCR, translation, and paraphrasing components.
 
-Chinese → English scanlation from raw CBZ to finished pages, with every stage
-rerunnable, every backend replaceable, and a human in the loop wherever you want one.
+The pipeline writes intermediate results as JSON files inside each chapter
+workspace. You can inspect or edit those files, rerun one stage, or resume from
+the last completed stage.
 
-<br />
+## What the pipeline does
 
-![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
-![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
-![Local First](https://img.shields.io/badge/local--first-yes-success)
-![MCP Ready](https://img.shields.io/badge/MCP-ready-8A2BE2)
+For each chapter, the application performs these steps:
 
-</div>
+1. **Import** - normalizes a CBZ, ZIP, or image folder into ordered PNG pages.
+2. **Detection** - finds speech bubbles and narration regions.
+3. **OCR** - extracts Chinese text and records confidence scores.
+4. **Translation** - produces a literal Chinese-to-English translation.
+5. **Paraphrase** - optionally turns the literal translation into natural
+   dialogue while preserving the meaning and glossary terms.
+6. **Rendering** - removes the original text and typesets English onto the
+   page.
+7. **QA** - reports missing text, untranslated regions, overflow, glossary
+   conflicts, and rendering failures.
+8. **Package** - optionally creates ZIP, CBZ, TAR, or PDF output.
 
----
+Packaging is an optional terminal operation. It does not change the chapter's
+pipeline stage in `manifest.json`.
 
-## Philosophy
+### Supported input and output
 
-The pipeline adapts to you - not the other way around.
+Supported inputs:
 
-Manhua Pipeline is built on the idea that a translation workflow should be **yours**:
-your hardware, your models, your review process. It runs locally by default, breaks the
-work into independent stages you can rerun at will, and never locks you into a vendor or
-an API key.
+- CBZ archives
+- ZIP archives
+- Folders containing JPG, JPEG, PNG, or WEBP images
 
-- **Local-first** - runs on your machine; nothing leaves it unless you choose.
-- **Modular** - seven independent stages, each with a single responsibility.
-- **Vendor-neutral** - swap translation and refinement backends freely.
-- **Human-in-the-loop** - review, override, or hand off at any stage.
-- **Fully rerunnable** - every stage is idempotent and resumable.
-- **Replaceable components** - no stage assumes what came before it, beyond its input file.
+PDF import is not currently implemented. PDF output is supported after pages
+have been rendered.
 
-> [!NOTE]
-> **Your workflow. Your models. Your choice.**
-> No mandatory AI credits. No mandatory API keys. Just a pipeline that
-> does one job well and gets out of your way.
+Supported package formats:
 
----
+`zip`, `cbz`, `tar`, and `pdf`.
 
-## Why Manhua Pipeline?
+## How to choose a workflow
 
-This is not "another OCR tool" or "another translation script." It is a **workflow**.
+The translation and paraphrase stages can use different backends. Configure
+them independently in `config.py`.
 
-Most tools give you one monolithic button: image in, translation out, no visibility, no
-recovery when a step goes wrong. Manhua Pipeline is the opposite - a chain of small,
-inspectable stages that each write a plain JSON artifact you can read, edit, and rerun.
+| Backend  | Description                                                     | Suitable when                                       |
+| -------- | --------------------------------------------------------------- | --------------------------------------------------- |
+| `manual` | Writes a JSON prompt bundle. You provide and save the response. | You want full control or do not have a local model. |
+| `mcp`    | Exposes pending work through the included MCP server.           | You use an MCP-capable agent or client.             |
+| `ollama` | Sends requests to a local Ollama server.                        | You want an automated local workflow.               |
 
-| What matters             | How the pipeline delivers it                                                   |
-| ------------------------ | ------------------------------------------------------------------------------ |
-| **Modular stages**       | Import → Detect → OCR → Translate → Paraphrase → Render → QA, each standalone. |
-| **Rerunnable**           | Re-run any stage without redoing the ones before it.                           |
-| **Human review**         | Every stage emits editable JSON; overrides are first-class.                    |
-| **Backend independence** | Translate/refine with a local model, a cloud agent, or your own hands.         |
-| **Reproducible**         | A manifest tracks exactly where each chapter is; resume anytime.               |
+The current defaults are:
 
-If you care about _how_ your translation is produced - not just that it happened - this is
-built for you.
-
----
-
-## Feature Highlights
-
-- **Local-first** - RT-DETR / YOLOv8 text & bubble detection + PaddleOCR / Transformers (PP-OCRv6) + local LLMs, all on your box.
-- **Modular** - seven decoupled stages, plain-JSON handoffs.
-- **Vendor-neutral** - `manual`, `mcp`, and `ollama` backends for translate & refine.
-- **Human-in-the-loop** - per-region overrides, glossary locking, manual handoff.
-- **Guided GUI** - visual step-by-step runner with automatic handoff & resume tracking.
-- **MCP Ready** - drive translation/refinement from any MCP client (e.g. Antigravity).
-- **Fully rerunnable** - idempotent stages, manifest-driven resume, batch processing.
-
----
-
-## Pipeline Overview
-
-```
-        ┌───────────┐
-        │  Import    │  CBZ / ZIP / folder → ordered pages + manifest
-        └─────┬─────┘
-              ▼
-        ┌───────────┐
-        │ Detection  │  RT-DETR / YOLOv8 speech-bubble + narration boxes
-        └─────┬─────┘
-              ▼
-        ┌───────────┐
-        │    OCR     │  PaddleOCR / Transformers (PP-OCRv6 zh) + confidence retry
-        └─────┬─────┘
-              ▼
-        ┌───────────┐
-        │ Translation│  literal zh → en  (manual │ mcp │ ollama)
-        └─────┬─────┘
-              ▼
-        ┌───────────┐
-        │ Paraphrase │  natural spoken en  (manual │ mcp │ ollama)
-        └─────┬─────┘
-              ▼
-        ┌───────────┐
-        │  Rendering │  typeset onto pages + credits page
-        └─────┬─────┘
-              ▼
-        ┌───────────┐
-        │     QA     │  warnings, overflow & conflict report
-        └─────┬─────┘
-              ▼
-        ┌───────────┐
-        │  Package   │  zip │ cbz │ tar │ pdf   (optional)
-        └───────────┘
+```python
+TRANSLATOR_BACKEND = "ollama"
+PARAPHRASE_BACKEND = "mcp"
 ```
 
-Every arrow is a JSON file on disk. Stop anywhere, inspect it, edit it, rerun from there.
-
----
-
-## Recommended Workflow
-
-> [!TIP]
-> **The sweet spot: local translation, agent-assisted refinement.**
->
-> | Stage           | Backend                                                                | Why                                                                                                                                                           |
-> | --------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-> | **Translation** | `ollama` - a strong Chinese→English model (e.g. `qwen2.5:3b-instruct`) | Literal translation is a low-creativity task a small local model handles well - free and fully automated.                                                     |
-> | **Refinement**  | `mcp` via Antigravity - Gemini 3.1 Pro / 3.5 Flash                     | Turning literal English into natural dialogue needs real language skill; a capable model shines here, and Antigravity's free tier keeps credit use near zero. |
->
-> This split gives you excellent quality while minimizing AI-credit spend - the local model
-> does the bulk work, the strong model does only the part that needs judgment.
-
----
-
-## Workflow Selection
-
-Choose based on your hardware and goals - the pipeline is designed to flex.
-
-| Your situation             | Suggested setup                                                                    |
-| -------------------------- | ---------------------------------------------------------------------------------- |
-| **Powerful / capable GPU** | `ollama` for both translate and refine - fully local, fully automated.             |
-| **No GPU**                 | `manual` handoff - the pipeline writes prompt bundles; you paste into any chatbot. |
-| **Best quality**           | `ollama` translate + `mcp` refine (see Recommended Workflow).                      |
-| **Advanced users**         | Replace any backend - implement the small `request()` contract and register it.    |
-
-> [!NOTE]
-> A backend is just "given a bundle of regions, return a `{region_id: text}` map." That's
-> the entire contract. Local model, remote API, MCP tool, or a human with a text editor -
-> the pipeline doesn't care.
-
----
-
-## Quick Start
-
-> [!IMPORTANT]
-> **Prerequisites:** Python 3.10+, and (optionally) [Ollama](https://ollama.com) if you
-> want local translation/refinement.
-
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Tell the pipeline where your series live (one time)
-python pipeline.py --set-output-dir "/path/to/your/series"
-
-# 3. (Optional) pull a local translation model
-ollama pull qwen2.5:3b-instruct
-
-# 4. Run a chapter end-to-end via CLI
-python pipeline.py run-all --input "/path/to/chapter_001.cbz"
-
-# ...or launch the Guided GUI Runner
-python pipeline_gui.py
-```
-
-That's it. The first run downloads the detection model from Hugging Face and caches it;
-every run after is offline for detection.
-
-> [!TIP]
-> If a stage needs a human (a `manual`/`mcp` handoff), the pipeline stops cleanly and tells
-> you exactly what to do. Resume by re-running the same command or clicking **Resume ▶** in the GUI.
-
----
+This combination uses Ollama for literal translation and an MCP client for
+language refinement. For a fully local workflow, set both backends to
+`ollama`. For a workflow without a GPU or agent integration, set one or both to
+`manual`.
 
 ## Installation
+
+Python 3.10 or newer is required.
 
 ```bash
 git clone https://github.com/aklid01/manhua.git
 cd manhua
+python -m venv .venv
+```
+
+Activate the virtual environment, then install the core dependencies:
+
+```bash
+# macOS/Linux
+source .venv/bin/activate
+
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 ```
 
-**Core dependencies** (`requirements.txt`):
+The core dependencies include the detection models, PaddleOCR, image
+processing, Transformers support, and the MCP server. Detection and OCR models
+may download from their model providers on first use and are then cached
+locally.
 
-| Package                      | Role                                          |
-| ---------------------------- | --------------------------------------------- |
-| `transformers`               | RT-DETR text & bubble detector + HF OCR model |
-| `ultralytics`                | YOLOv8 speech-bubble detection (fallback)     |
-| `paddleocr` / `paddlepaddle` | Chinese OCR engine                            |
-| `pillow`                     | Image handling & rendering                    |
-| `numpy`                      | Array ops for OCR/detection                   |
-| `fastmcp`                    | MCP server for agent-driven backends          |
+### Optional GUI and touch-up editor
 
-> [!NOTE]
-> The detection model (`ogkalu/comic-text-and-bubble-detector` for RT-DETR or `ogkalu/comic-speech-bubble-detector-yolov8m` for YOLOv8) downloads
-> automatically on first detection run and is cached by Hugging Face thereafter.
+The guided runner and the standalone touch-up editor require PyQt6 and the
+additional packages in `requirements-touchup.txt`:
 
-> [!NOTE]
-> The render font (`assets/fonts/ComicNeue-Bold.ttf`, OFL-licensed) ships with the
-> repo, so rendering works out of the box. To use a different font, set `FONT_PATH`
-> in `config.py`.
+```bash
+pip install -r requirements-touchup.txt
+```
 
----
+The touch-up editor can open a page or chapter, select regions, run OCR and
+translation, erase source text, position English text, and save the edited
+page.
 
-## Guided GUI Runner
+## Quick start
 
-In addition to the command-line interface, Manhua Pipeline includes a guided graphical runner:
+### 1. Choose the series output directory
+
+The pipeline stores all chapter workspaces below one series directory. Set it
+once with:
+
+```bash
+python pipeline.py --set-output-dir "/path/to/series"
+```
+
+This saves the setting in `settings.json`. You can override it for one run with
+`--output-dir`.
+
+### 2. Configure translation
+
+For local translation and paraphrasing, make sure Ollama is installed and
+running, then pull the configured model:
+
+```bash
+ollama pull qwen2.5:3b-instruct
+```
+
+Set the backends in `config.py`:
+
+```python
+TRANSLATOR_BACKEND = "ollama"
+PARAPHRASE_BACKEND = "ollama"
+```
+
+Alternatively, keep `PARAPHRASE_BACKEND = "mcp"` or use `manual` for either
+stage. The pipeline pauses when external input is required and can be resumed
+after the response is supplied.
+
+### 3. Process a chapter
+
+```bash
+python pipeline.py run-all --input "/path/to/chapter_001.cbz" --package cbz,pdf
+```
+
+You can also run the guided GUI:
 
 ```bash
 python pipeline_gui.py
 ```
 
-- **Series & Input Pickers**: Set your series folder and choose a chapter input (folder or CBZ/ZIP archive).
-- **Skip Trailing Pages**: Set a spinner to skip promo, ad, or credit pages at the end of a chapter during import.
-- **Sequential Execution**: Stages unlock step-by-step as each preceding stage completes.
-- **Handoff & Resume Tracking**: If a `manual` or `mcp` backend requires external input, the stage button dynamically updates to **Resume ▶ <Stage>** and the log displays step-by-step handoff instructions.
-- **Idempotent Continuation**: Saving the response file and clicking **Resume ▶** ingests the response, advances the chapter manifest, and unlocks the next stage.
-- **Log Filtering**: Output pane filters log messages to surface warnings, re-runs, overrides, and verdicts without cluttering the screen.
-- **Packaging**: Select archive formats (`cbz`, `zip`, `tar`, `pdf`) and package chapters directly from the interface.
+The GUI lets you choose the series directory and chapter input, run stages in
+order, resume pending handoffs, view logs, package output, and open a rendered page in the touch-up editor.
 
----
+## Command-line usage
 
-## CLI Usage
+`pipeline.py` provides a command for every processing stage. Each command
+operates on a chapter workspace and can be rerun independently.
 
-Every stage is its own command, and can be run in isolation. `run-all` chains them;
-`batch` runs a whole folder of chapters.
-
-### Per-stage
+### Run individual stages
 
 ```bash
-python pipeline.py import   --input chapter_001.cbz     # CBZ / ZIP / folder → pages
-python pipeline.py detect   --chapter chapter_001       # bubble detection
-python pipeline.py ocr      --chapter chapter_001       # Chinese OCR
-python pipeline.py translate  --chapter chapter_001     # literal zh → en
-python pipeline.py paraphrase --chapter chapter_001     # natural english
-python pipeline.py render   --chapter chapter_001       # typeset pages
-python pipeline.py qa       --chapter chapter_001       # quality report
+python pipeline.py import      --input chapter_001.cbz
+python pipeline.py detect      --chapter chapter_001
+python pipeline.py ocr         --chapter chapter_001
+python pipeline.py translate   --chapter chapter_001
+python pipeline.py paraphrase  --chapter chapter_001
+python pipeline.py render      --chapter chapter_001
+python pipeline.py qa          --chapter chapter_001
 ```
 
-### End-to-end
+The import command also accepts a folder of images. When starting from import,
+you can add metadata such as `--title-en`, `--title-romanized`, and `--source`.
+
+### Run or resume the complete pipeline
 
 ```bash
-# One chapter, all stages, package the result
-python pipeline.py run-all --input chapter_001.cbz --package cbz,pdf
+# Start from import
+python pipeline.py run-all --input chapter_001.cbz
 
-# Resume from a specific stage
+# Resume an existing chapter at a later stage
 python pipeline.py run-all --chapter chapter_001 --from-stage paraphrase
+
+# Import while skipping trailing promotional or credit pages
+python pipeline.py run-all --input chapter_001.cbz --skip-last 2
 ```
 
-### Batch a folder of chapters
+Use `--fresh` with `import` or `run-all` when you intentionally want to remove
+the existing stage artifacts for that chapter and start again.
+
+### Process a folder of chapters
 
 ```bash
-python pipeline.py batch --input "/downloads/MySeries" --package cbz
+python pipeline.py batch --input "/path/to/chapter-files" --package cbz
 ```
 
-> [!TIP]
-> `batch` skips already-completed chapters, resumes pending ones, continues past errors,
-> and writes a per-run log plus per-chapter error logs. Point it at a folder and walk away.
+Batch processing accepts `.cbz` and `.zip` files, resumes incomplete chapter
+folders by default, skips completed chapters, and continues after an error.
+Use `--no-resume` to skip any chapter folder that already exists.
 
-### Package an existing chapter
+### Package rendered pages
 
 ```bash
 python pipeline.py package --chapter chapter_001 --package zip,cbz,tar,pdf
 ```
 
-### Common flags
+The package command reads images from `stage5_render/rendered/` and writes the
+requested files to `stage7_package/`.
 
-| Flag                | Applies to                | Purpose                                                                |
-| ------------------- | ------------------------- | ---------------------------------------------------------------------- |
-| `--input`           | import / run-all / batch  | Source CBZ/ZIP/folder (import, run-all) or folder of chapters (batch). |
-| `--chapter`         | most stages               | Target an existing chapter by name.                                    |
-| `--workspace`       | most stages               | Target a chapter by workspace path (relative or absolute).             |
-| `--fresh`           | import / run-all          | Wipe prior stage outputs before importing.                             |
-| `--skip-last`       | import / run-all / batch  | Skip the last N pages (promo/ad/credits pages at chapter end).         |
-| `--from-stage`      | run-all                   | Resume from a given stage.                                             |
-| `--package`         | run-all / batch / package | Comma-separated formats: `zip,cbz,tar,pdf`.                            |
-| `--title-romanized` | import / run-all          | Set romanized series/chapter title metadata.                           |
-| `--title-en`        | import / run-all          | Set English series/chapter title metadata.                             |
-| `--source`          | import / run-all          | Set source URL/provenance metadata.                                    |
-| `--no-resume`       | batch                     | Skip any existing chapter folder instead of resuming pending ones.     |
-| `--clear-delay`     | batch                     | Seconds a completed chapter's output stays on screen before clearing.  |
-| `--set-output-dir`  | (top level)               | Persist your series base directory and exit.                           |
+### Resolve manual overrides
 
----
+QA creates an `overrides.json` file when a region needs attention. You can edit
+that file directly or use the interactive resolver:
 
-## Workspace Layout
-
-Everything for a series lives under one base directory. Each chapter is a self-contained
-folder; each stage owns a subfolder and one JSON artifact.
-
+```bash
+python pipeline.py resolve-overrides --chapter chapter_001
 ```
+
+After changing an override, rerun `translate`, `paraphrase`, `render`, and
+`qa` as appropriate.
+
+### Common options
+
+| Option                  | Commands                                    | Purpose                                                                              |
+| ----------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `--input PATH`          | `import`, `run-all`, `batch`                | Input archive, image folder, or batch folder.                                        |
+| `--chapter NAME`        | Most stages, `package`, `resolve-overrides` | Chapter folder name below the series directory.                                      |
+| `--workspace PATH`      | Most stages                                 | Use a specific relative or absolute workspace path.                                  |
+| `--output-dir PATH`     | Top level                                   | Override the configured series directory for one run.                                |
+| `--set-output-dir PATH` | Top level                                   | Persist the series directory and exit.                                               |
+| `--fresh`               | `import`, `run-all`, `batch`                | Remove prior stage artifacts before importing.                                       |
+| `--skip-last N`         | `import`, `run-all`, `batch`                | Mark the final N pages as skipped.                                                   |
+| `--from-stage NAME`     | `run-all`                                   | Resume from `import`, `detect`, `ocr`, `translate`, `paraphrase`, `render`, or `qa`. |
+| `--package FORMATS`     | `run-all`, `batch`, `package`               | Comma-separated `zip`, `cbz`, `tar`, or `pdf`.                                       |
+| `--no-resume`           | `batch`                                     | Skip existing chapter folders instead of resuming them.                              |
+
+Run `python pipeline.py --help` or `python pipeline.py <command> --help` for
+the complete parser help.
+
+## Chapter workspace
+
+Each chapter is self-contained. A typical workspace looks like this:
+
+```text
 your-series/
-├── glossary.json                  # series-wide locked terms
-└── chapter_001/
-    ├── manifest.json              # source of truth: stage, page list, status
-    ├── overrides.json             # per-region manual overrides (optional)
-    ├── pages/                     # normalized page images
-    ├── stage1_detection/          # detection.json (+ overlays)
-    ├── stage2_ocr/                # ocr.json
-    ├── stage3_translation/        # translation.json (+ prompt/response bundles)
-    ├── stage4_paraphrase/         # paraphrase.json
-    ├── stage5_render/rendered/    # finished pages: 001.png, 002.png, …, zzz_credits.png
-    ├── stage6_qa/                 # qa report
-    ├── stage7_package/            # archives: chapter_001.cbz, .pdf, …
-    └── logs/                      # per-chapter logs
+|-- glossary.json
+`-- chapter_001/
+    |-- manifest.json
+    |-- overrides.json
+    |-- pages/
+    |-- stage1_detection/
+    |   `-- detection.json
+    |-- stage2_ocr/
+    |   |-- ocr.json
+    |   `-- ocr_review.json       # only when review items exist
+    |-- stage3_translation/
+    |   |-- translation.json
+    |   |-- translation_prompt.json
+    |   `-- translation_response.json
+    |-- stage4_paraphrase/
+    |   |-- paraphrase.json
+    |   |-- paraphrase_prompt.json
+    |   `-- paraphrase_response.json
+    |-- stage5_render/
+    |   |-- render.json
+    |   `-- rendered/
+    |-- stage6_qa/
+    |   `-- qa.json
+    |-- stage7_package/
+    `-- logs/
 ```
 
-> [!NOTE]
-> The `manifest.json` `current_stage` field is the pipeline's memory. Resume, batch skip,
-> and status all read from it - so a chapter always knows exactly where it left off.
+Not every optional file is present in every run. `manifest.json` records the chapter metadata, page list, current stage, completed stages, and QA status. The JSON artifacts are the handoff points between stages and are intended to be readable for debugging or manual review.
 
----
+The series-level `glossary.json` stores locked names and terms. Chapter-level
+`overrides.json` stores region-specific corrections.
 
-## Pipeline Stages
+## Configuration
 
-| #   | Stage           | Input              | Output                     | Engine                        |
-| --- | --------------- | ------------------ | -------------------------- | ----------------------------- |
-| 0   | **Import**      | CBZ / ZIP / folder | `manifest.json` + `pages/` | Pillow                        |
-| 1   | **Detection**   | pages              | `detection.json`           | RT-DETR (default) / YOLOv8    |
-| 2   | **OCR**         | pages + boxes      | `ocr.json`                 | PaddleOCR / Transformers (zh) |
-| 3   | **Translation** | `ocr.json`         | `translation.json`         | pluggable backend             |
-| 4   | **Paraphrase**  | `translation.json` | `paraphrase.json`          | pluggable backend             |
-| 5   | **Rendering**   | pages + paraphrase | `rendered/*.png`           | Pillow                        |
-| 6   | **QA**          | all artifacts      | quality report             | rule-based                    |
-| 7   | **Package**     | rendered pages     | `zip / cbz / tar / pdf`    | stdlib + Pillow               |
+Most settings are in `config.py`. The most commonly changed values are:
 
-**Notable stage behaviors**
+| Area         | Settings                                                                 |
+| ------------ | ------------------------------------------------------------------------ |
+| Translation  | `TRANSLATOR_BACKEND`, `OLLAMA_TRANSLATE_MODEL`, `OLLAMA_HOST`            |
+| Paraphrasing | `PARAPHRASE_BACKEND`, `OLLAMA_PARA_MODEL`, `OLLAMA_PARA_HOST`            |
+| OCR          | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`   |
+| Detection    | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `DETECTOR_USE_GPU` |
+| Rendering    | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                |
+| QA           | `SUCCESS_MAX`, `REVIEW_MAX`                                              |
+| Packaging    | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                            |
 
-- **Detection** defaults to RT-DETR (`ogkalu/comic-text-and-bubble-detector`) with YOLOv8 as fallback, skipping text-free regions (SFX/watermark/credits) during downstream OCR.
-- **OCR** retries low-confidence regions with escalating image preprocessing, keeping the best result - deterministic OCR only improves when the _input_ changes.
-- **Translation / Paraphrase** each pick a backend independently (`manual`, `mcp`, `ollama`) and enforce a locked glossary, flagging conflicts rather than silently rewriting. Single-character CJK noise/SFX is filtered from blocking chapter completion and glossary auto-seeding.
-- **Rendering** erases source text and typesets English in two passes per page (erase-all, then draw-all) so no erase can clobber an already-drawn glyph. Fill color is detected from the dominant bubble background (with white-snap for standard bubbles) and adaptive WCAG text coloring is applied. A randomly chosen **credits page** is appended outside the QA/manifest page count.
-- **Split-bubble stitching** (detection sub-step) merges a bubble sliced across two pages into one using container bubble geometry (RT-DETR) and a relaxed text probe for cut-off edge regions.
+The bundled font is `assets/fonts/ComicNeue-Bold.ttf`. Set `FONT_PATH` to a
+different font if required. GPU use is enabled by default for detection and OCR
+but falls back to CPU when a compatible GPU runtime is unavailable.
 
----
+### Detection and OCR details
 
-## Translation Backends
+The default detector backend is RT-DETR, with YOLOv8 available as an alternate backend. Detection can skip text-free regions such as watermarks, sound effects, and credits.
 
-Both Translation and Paraphrase share the same three-backend model. Set them independently
-in `config.py`:
+OCR uses PaddleOCR with the configured `OCR_ENGINE` and Chinese language model. The current configuration prefers the Transformers engine and falls back to the Paddle engine if initialization fails. Low-confidence reads can be retried with progressively stronger preprocessing. Suspicious empty or punctuation-only dialogue regions are written to `stage2_ocr/ocr_review.json` for optional manual correction.
 
-```python
-TRANSLATOR_BACKEND = "ollama"  # "manual" | "mcp" | "ollama"
-PARAPHRASE_BACKEND = "mcp"  # "manual" | "mcp" | "ollama"
+## Translation and paraphrase handoffs
+
+### Manual backend
+
+For either stage:
+
+1. Set the corresponding backend to `manual` in `config.py`.
+2. Run the stage. It writes a prompt JSON file and waits.
+3. Submit a JSON object mapping each `region_id` to its response text.
+4. Save the response using the filename requested by the stage.
+5. Rerun the same command to ingest the response and continue.
+
+For example, translation uses:
+
+```text
+stage3_translation/translation_prompt.json
+stage3_translation/translation_response.json
 ```
 
-| Backend      | How it works                                                                      | Best for                               |
-| ------------ | --------------------------------------------------------------------------------- | -------------------------------------- |
-| **`manual`** | Writes a prompt bundle to disk; you paste it into any chatbot and save the reply. | No GPU, no setup, full control.        |
-| **`mcp`**    | Exposes the bundle as MCP tools an agent (e.g. Antigravity) calls.                | High-quality, agent-driven refinement. |
-| **`ollama`** | Calls a local Ollama server inline - no handoff, fully automated.                 | Local, free, hands-off runs.           |
+Paraphrase uses the equivalent files in `stage4_paraphrase/`.
 
-**Ollama configuration** (`config.py`):
+### Ollama backend
 
-```python
-OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b-instruct"  # CJK-capable; fits a 6 GB GPU
-OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_BATCH_SIZE = 8
-# Paraphrase uses its own OLLAMA_PARA_* knobs (higher temperature for natural phrasing)
-```
+Ollama is expected at `http://localhost:11434` by default. The translation and
+paraphrase stages have separate model, batch size, timeout, retry, and
+temperature settings. Translation uses a lower temperature by default;
+paraphrasing is configured for more natural phrasing.
 
-> [!WARNING]
-> Small local models are excellent at _literal translation_ but weaker at _creative
-> paraphrasing_ - the latter needs headroom a 3B model on a 6 GB GPU doesn't have. If
-> paraphrase quality matters, use `mcp` for refinement (see Recommended Workflow).
+### MCP backend
 
----
-
-## MCP Integration
-
-The pipeline ships an MCP server so any MCP-capable client can drive the `mcp` backends -
-translating and refining without leaving your editor.
+The repository includes an MCP server:
 
 ```bash
 python manhua_pipeline/adapters/mcp_server.py
 ```
 
-**Exposed tools:** `list_pending`, `get_translation_bundle`, `submit_translation`,
-`get_paraphrase_bundle`, `submit_paraphrase`, `get_glossary`.
+The server exposes these tools:
 
-**Antigravity setup** - add to `~/.gemini/config/mcp_config.json`:
+`list_pending`, `get_translation_bundle`, `submit_translation`,
+`get_paraphrase_bundle`, `submit_paraphrase`, and `get_glossary`.
+
+An MCP client can launch the server with a configuration similar to:
 
 ```json
 {
@@ -401,86 +364,89 @@ python manhua_pipeline/adapters/mcp_server.py
 }
 ```
 
-Then, in your agent: _"List pending chapters, then translate/paraphrase the pending one."_
-The agent calls the tools; the pipeline writes the results and advances.
+The MCP server reads the configured series directory from `settings.json`, so
+set it with `--set-output-dir` before starting the server.
 
-> [!TIP]
-> Set your series directory first (`python pipeline.py --set-output-dir …`) - the MCP
-> server reads it from `settings.json`.
+## Optional touch-up editor
 
----
+The touch-up editor is useful for corrections after automated rendering or for
+pages that need more manual control:
 
-## Manual Workflow
+```bash
+python -m touchup.app
+```
 
-No GPU and no agent? The `manual` backend turns any chatbot into your translator.
+To open a particular image immediately:
 
-1. Set `TRANSLATOR_BACKEND = "manual"` (and/or `PARAPHRASE_BACKEND = "manual"`).
-2. Run the stage - it writes a prompt bundle and stops:
-   `stage3_translation/translation_prompt.json`.
-3. Paste that JSON into your chatbot of choice.
-4. Save its JSON reply as `translation_response.json` in the same folder.
-5. Re-run the stage - it ingests the reply and continues.
+```bash
+python -m touchup.app --image "/path/to/page.png"
+```
 
-The same pattern applies to paraphrase. Nothing is automated away that you didn't ask to
-automate.
+The editor supports page or chapter navigation, region selection, OCR,
+translation assistance, source-text erasing, text placement, and saving the
+baked page. It is separate from the core CLI pipeline and requires the optional
+GUI dependencies.
 
----
+## Quality assurance and review
 
-## Advanced Configuration
+The QA stage writes `stage6_qa/qa.json` with a status of:
 
-All tunables live in `config.py`. Highlights:
+- `SUCCESS` for up to two warnings
+- `REVIEW` for three to ten warnings
+- `FAILED` for more than ten warnings or critical failures
 
-| Area                    | Keys                                                                                                              |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Backends**            | `TRANSLATOR_BACKEND`, `PARAPHRASE_BACKEND`                                                                        |
-| **Ollama (translate)**  | `OLLAMA_*` - host, model, batch size, retries, completion gate (`OLLAMA_MAX_MISSING`, `OLLAMA_TRIVIAL_CJK_CHARS`) |
-| **Ollama (paraphrase)** | `OLLAMA_PARA_*` - same knobs, tuned for natural phrasing                                                          |
-| **OCR**                 | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`, `OCR_RETRY_ENABLED`, `OCR_RETRY_MAX`      |
-| **Detection**           | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `RTDETR_CONF`, `RTDETR_SKIP_TEXT_FREE`, `DETECTOR_USE_GPU`  |
-| **Rendering**           | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`, adaptive text fill on dark bubbles                     |
-| **Credits**             | `CREDITS_TEMPLATES`, `CREDITS_DIR` (+ `credits` block in `settings.json`)                                         |
-| **Stitching**           | `STITCH_ENABLED`, `STITCH_EDGE_EPS`, `STITCH_MIN_X_OVERLAP`, `STITCH_TEXT_MIN_CONF`                               |
-| **Packaging**           | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                                                                     |
-| **QA**                  | `SUCCESS_MAX`, `REVIEW_MAX` warning thresholds                                                                    |
+The report can include low OCR confidence, missing translations, missing
+paraphrases, text overflow, possible split bubbles, glossary conflicts, and
+missing artifacts. QA reports issues; it does not silently modify the artwork or
+translation.
 
-Per-chapter **overrides** (`overrides.json`) let you hand-set any region's final text, and
-the series **glossary** (`glossary.json`) locks names/terms across every chapter.
+## Development
 
----
+Install the test and lint tools available in the project environment, then run:
+
+```bash
+pytest
+ruff check .
+ruff format --check .
+```
+
+The stage implementation is under `manhua_pipeline/stages/`. Shared workspace, schema, logging, and backend code is under `manhua_pipeline/`. The top-level `pipeline.py` contains the CLI orchestration, while `pipeline_gui.py` contains the guided PyQt6 runner.
+
+Each stage is loaded on demand from the stage registry in `pipeline.py`. A new translation or paraphrase backend can implement the existing backend request contract and be registered without changing the other stages.
 
 ## Troubleshooting
 
-> [!WARNING]
-> **Detection model won't download.** The first `detect` run fetches the RT-DETR / YOLOv8 weights from
-> Hugging Face. If you're offline or rate-limited, pre-cache the model or set
-> `HF_HUB_OFFLINE=1` once it's cached.
+### Ollama fails immediately
 
-| Symptom                                    | Likely cause                                   | Fix                                                                                                           |
-| ------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Untranslated Chinese renders as boxes (□□) | A backend left text untranslated               | The CJK guard flags these as `needs_translation`; check the translate completion gate / try a stronger model. |
-| Paraphrase "ruined" the meaning            | Small local model over-creative on refinement  | Use `mcp` for paraphrase; keep local for translation.                                                         |
-| Ollama errors immediately                  | `ollama serve` not running or model not pulled | Start Ollama and `ollama pull <model>`.                                                                       |
-| A stage keeps "waiting"                    | `manual`/`mcp` handoff pending                 | Provide the response file / run the MCP tool, then re-run or click **Resume ▶**.                              |
-| Batch stops early                          | (it shouldn't)                                 | Batch continues past errors - check `logs/` for the per-chapter error log.                                    |
+Confirm that the Ollama server is running and that the configured model has been
+downloaded:
 
----
+```bash
+ollama pull qwen2.5:3b-instruct
+```
+
+If Ollama is not available, switch the affected backend to `manual` or `mcp`.
+
+### A stage is waiting for input
+
+This is expected when using `manual` or `mcp`. Provide the response file or submit the pending bundle through the MCP client, then rerun the same stage or use **Resume** in the GUI.
+
+### Detection or OCR model downloads fail
+
+The first run may need access to the model provider. Check network access and disk space, or pre-cache the models before running offline. Once the models are cached, the pipeline can use the local cache.
+
+### Text is missing or appears as boxes
+
+Inspect `stage2_ocr/ocr.json`, the translation artifact, and the QA report. A low-confidence OCR region may need a manual correction. An untranslated CJK region usually indicates an incomplete backend response or a completion-gate failure.
+
+### Rendered text overflows a bubble
+
+Review the `overflow` entries in `qa.json`. Adjust `FONT_MAX_PT`, `FONT_MIN_PT`,
+`LINE_SPACING`, or the relevant manual override, then rerun rendering and QA.
 
 ## License
 
-Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
-Copyright © 2026 Ishan Dev Shakya.
+This project is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0). See [`LICENSE`](LICENSE) for the full license text.
 
-You may use, modify, and distribute this software under the terms of the AGPL-3.0. Network
-use counts as distribution - see [`LICENSE`](LICENSE) for the full text.
-
----
-
-<div align="center">
-
-## Beyond the Horizon
-
-**Translate. Refine. Render.**
-
-Built for readers. Built for translators. Built for the open-source community.
-
-</div>
+Copyright (c) 2026 Ishan Dev Shakya.
