@@ -1475,7 +1475,7 @@ class PipelineGUI(QMainWindow):
         self._spawn_touchup(page_path if page_path.exists() else None)
 
     def _spawn_touchup(self, img_path: Path | None):
-        cmd = [sys.executable, str(TOUCHUP_APP)]
+        cmd = [sys.executable, "-m", "touchup.app"]
         if img_path and img_path.exists():
             cmd += ["--image", str(img_path)]
         try:

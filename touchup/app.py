@@ -34,12 +34,23 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .cache import TouchupCache
-from .canvas import DraggableTextItem, TouchupCanvas
-from .inpainter import inpaint_text_regions
-from .ocr_helper import extract_text_and_boxes
-from .segmenter import SAMSegmenter
-from .translator import translate_text
+try:
+    from .cache import TouchupCache
+    from .canvas import DraggableTextItem, TouchupCanvas
+    from .inpainter import inpaint_text_regions
+    from .ocr_helper import extract_text_and_boxes
+    from .segmenter import SAMSegmenter
+    from .translator import translate_text
+except (ImportError, ValueError):
+    parent_dir = str(Path(__file__).resolve().parent.parent)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    from touchup.cache import TouchupCache
+    from touchup.canvas import DraggableTextItem, TouchupCanvas
+    from touchup.inpainter import inpaint_text_regions
+    from touchup.ocr_helper import extract_text_and_boxes
+    from touchup.segmenter import SAMSegmenter
+    from touchup.translator import translate_text
 
 
 def pil_to_qpixmap(pil_image: Image.Image) -> QPixmap:
