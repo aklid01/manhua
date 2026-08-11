@@ -781,7 +781,5 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
     assert erase_text_box["y"] + erase_text_box["h"] > stitch_y
     assert r001_result["erase_box"]["y"] + r001_result["erase_box"]["h"] >= 346
 
-    rendered = Image.open(
-        ws / "stage5_render" / "rendered" / "001.png"
-    ).convert("RGB")
+    rendered = Image.open(ws / "stage5_render" / "rendered" / "001.png").convert("RGB")
     assert rendered.getpixel((65, 337)) == (255, 255, 255)

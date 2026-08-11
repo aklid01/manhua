@@ -202,33 +202,41 @@ def erase_original_text(
     )
     overflow_strips: list[tuple[int, int, int, int]] = []
     if expanded_text.y < bubble_box.y:
-        overflow_strips.append((
-            expanded_text.x,
-            expanded_text.y,
-            expanded_text.x2,
-            min(bubble_box.y, expanded_text.y2),
-        ))
+        overflow_strips.append(
+            (
+                expanded_text.x,
+                expanded_text.y,
+                expanded_text.x2,
+                min(bubble_box.y, expanded_text.y2),
+            )
+        )
     if expanded_text.y2 > bubble_box.y2:
-        overflow_strips.append((
-            expanded_text.x,
-            max(bubble_box.y2, expanded_text.y),
-            expanded_text.x2,
-            expanded_text.y2,
-        ))
+        overflow_strips.append(
+            (
+                expanded_text.x,
+                max(bubble_box.y2, expanded_text.y),
+                expanded_text.x2,
+                expanded_text.y2,
+            )
+        )
     if expanded_text.x < bubble_box.x:
-        overflow_strips.append((
-            expanded_text.x,
-            expanded_text.y,
-            min(bubble_box.x, expanded_text.x2),
-            expanded_text.y2,
-        ))
+        overflow_strips.append(
+            (
+                expanded_text.x,
+                expanded_text.y,
+                min(bubble_box.x, expanded_text.x2),
+                expanded_text.y2,
+            )
+        )
     if expanded_text.x2 > bubble_box.x2:
-        overflow_strips.append((
-            max(bubble_box.x2, expanded_text.x),
-            expanded_text.y,
-            expanded_text.x2,
-            expanded_text.y2,
-        ))
+        overflow_strips.append(
+            (
+                max(bubble_box.x2, expanded_text.x),
+                expanded_text.y,
+                expanded_text.x2,
+                expanded_text.y2,
+            )
+        )
     for x0, y0, x1, y1 in overflow_strips:
         if x1 > x0 and y1 > y0:
             strip_w, strip_h = x1 - x0, y1 - y0
