@@ -1391,20 +1391,30 @@ class PipelineGUI(QMainWindow):
         cmd = [
             sys.executable,
             str(PIPELINE),
+            "run-all",
+            "--chapter",
             self.current_chapter,
-            "--all",
-            "--input",
-            self.current_input_path,
         ]
+        if self.current_input_path:
+            cmd += ["--input", self.current_input_path]
+
+        curr_stage = self._manifest_current_stage()
+        if not self.chk_fresh.isChecked() and curr_stage and curr_stage in STAGES:
+            cmd += ["--from-stage", curr_stage]
+
         if self.chk_fresh.isChecked():
             cmd += ["--fresh"]
         if self.spin_skip_last.value() > 0:
             cmd += ["--skip-last", str(self.spin_skip_last.value())]
 
+        pkg_fmt = self.cmb_pkg_format.currentText()
+        if pkg_fmt:
+            cmd += ["--package", pkg_fmt]
+
         self._run_cmd(
             cmd,
             on_done=lambda rc: self._log_sys(
-                f"Chapter {self.current_chapter} pipeline auto-run complete.",
+                f"Chapter {self.current_chapter} pipeline auto-run {'complete' if rc == 0 else 'failed'}.",
                 "ok" if rc == 0 else "err",
             ),
         )
@@ -1433,12 +1443,17 @@ class PipelineGUI(QMainWindow):
             sys.executable,
             str(PIPELINE),
             "batch",
+            "--input",
             str(target_dir),
         ]
         if self.chk_fresh.isChecked():
             cmd += ["--fresh"]
         if self.spin_skip_last.value() > 0:
             cmd += ["--skip-last", str(self.spin_skip_last.value())]
+
+        pkg_fmt = self.cmb_pkg_format.currentText()
+        if pkg_fmt:
+            cmd += ["--package", pkg_fmt]
 
         self._run_cmd(
             cmd,
