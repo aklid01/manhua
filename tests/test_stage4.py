@@ -225,6 +225,68 @@ def test_paraphrase_prompt_requires_complete_content(tmp_path):
     assert "verbatim" in instr
 
 
+def test_translation_recovery_is_separate_from_single_char_passthrough():
+    from manhua_pipeline.stages.stage4_paraphrase import (
+        _build_bundle,
+        _partition_regions_paraphrase,
+    )
+
+    recovery = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "original_text": "求……",
+        "literal_translation": "",
+        "translated": False,
+        "translation_source": "translation_recovery",
+    }
+    sfx = {
+        "region_id": "P001_R002",
+        "page_number": 1,
+        "original_text": "哈",
+        "literal_translation": "哈",
+        "translated": True,
+        "translation_source": "sfx_passthrough",
+    }
+
+    _, usable, skipped = _partition_regions_paraphrase(
+        [recovery, sfx], {}, config, log=False
+    )
+
+    assert not skipped
+    assert [r["region_id"] for r in usable] == ["P001_R001", "P001_R002"]
+    bundle = _build_bundle(usable, [], config)
+    assert bundle["regions"][0]["translation_task"] == "translate_and_paraphrase"
+    assert bundle["regions"][0]["original_text"] == "求……"
+    assert "translation_task" not in bundle["regions"][1]
+
+
+def test_translation_recovery_prompt_requires_translation_first(tmp_path):
+    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
+
+    ws = tmp_path / "workspace"
+    _setup(
+        ws,
+        [
+            {
+                "region_id": "P001_R001",
+                "page_number": 1,
+                "original_text": "求……",
+                "literal_translation": "",
+                "translated": False,
+                "translation_source": "translation_recovery",
+            }
+        ],
+    )
+    run_paraphrase(str(ws), config)
+    bundle = json.loads(
+        (ws / "stage4_paraphrase" / "paraphrase_prompt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert bundle["regions"][0]["translation_task"] == "translate_and_paraphrase"
+    assert "translate the CJK" in bundle["READ_FIRST"]
+
+
 def test_truncated_paraphrase_falls_back_to_literal():
     from manhua_pipeline.stages.stage4_paraphrase import _validate_response
 

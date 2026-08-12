@@ -387,6 +387,42 @@ def test_sfx_passthrough_partition():
     assert row["skip_reason"] is None
 
 
+def test_meaningful_translation_failure_hands_off_without_manual_override(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from manhua_pipeline.stages.stage3_translation.engine import (
+        _handle_unresolved_region,
+    )
+
+    monkeypatch.setattr(config, "TRANSLATOR_BACKEND", "ollama")
+    monkeypatch.setattr(
+        config, "TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE", True, raising=False
+    )
+    region = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "original_text": "求……",
+    }
+    handled = _handle_unresolved_region(
+        region=region,
+        initial_reason="missing_after_batch",
+        final_reason="missing_after_retry",
+        runtime=SimpleNamespace(can_prompt=True),
+        run_id="test-run",
+        chapter="chapter",
+        ws=tmp_path,
+        config=config,
+        translation_map={},
+        glossary_data={},
+    )
+
+    assert handled is True
+    assert region["translation_source"] == "translation_recovery"
+    assert not (tmp_path / "logs" / "manual_override_requests.json").exists()
+
+
 def test_short_speech_bubble_ascii_ellipsis_passthrough():
     """ASCII OCR ellipses in short speech bubbles reach paraphrase."""
     from manhua_pipeline.stages.stage3_translation import _partition_by_triage

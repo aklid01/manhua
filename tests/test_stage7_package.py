@@ -77,7 +77,12 @@ def test_pixel_budget_repartitions_final_group_for_credits(tmp_path, monkeypatch
     monkeypatch.setattr(config, "PACKAGE_PIXEL_BUDGET", 200)
     render = ws / config.STAGE_FOLDERS["render"] / "rendered"
     groups = s7._build_groups(
-        [render / "001.png", render / "002.png", render / "010.png", render / "zzz_credits.png"],
+        [
+            render / "001.png",
+            render / "002.png",
+            render / "010.png",
+            render / "zzz_credits.png",
+        ],
         config,
     )
     assert [[p.name for p in group] for group in groups] == [

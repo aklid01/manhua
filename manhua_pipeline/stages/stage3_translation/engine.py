@@ -98,6 +98,21 @@ def _handle_unresolved_region(
     translation_map: dict,
     glossary_data: dict,
 ) -> bool:
+    if (
+        getattr(config, "TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE", True)
+        and getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+    ):
+        # Keep the original OCR text on the region. Stage 4 will use it for a
+        # translation+paraphrase recovery task; this is deliberately separate
+        # from the existing single-character CJK/SFX passthrough source.
+        region["translation_source"] = "translation_recovery"
+        logger.warning(
+            "[%s] %s -> handing original CJK to Stage 4 translation recovery",
+            _STAGE_NAME,
+            region["region_id"],
+        )
+        return True
+
     request = make_override_request(
         run_id=run_id,
         chapter=chapter,
@@ -263,7 +278,13 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
             original = region.get("original_text", "")
             cjk_bits = re.findall(r"[\u3400-\u9fff]+", original)
 
-            if not cjk_bits:
+            if region.get("translation_source") == "translation_recovery":
+                logger.info(
+                    "[%s] %s handed to Stage 4 recovery - not seeding glossary.",
+                    _STAGE_NAME,
+                    region["region_id"],
+                )
+            elif not cjk_bits:
                 logger.info(
                     "[%s] %s untranslated but has no CJK (%r) - not seeding glossary.",
                     _STAGE_NAME,
@@ -320,7 +341,11 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
                 "skip_reason": skip_reason,
                 "glossary_terms_applied": applied,
                 "glossary_conflict": conflict,
-                "translation_source": trans_source,
+                "translation_source": (
+                    "translation_recovery"
+                    if region.get("translation_source") == "translation_recovery"
+                    else trans_source
+                ),
             }
         )
 
@@ -567,6 +592,8 @@ def run_translation(
     usable_ids = [r["region_id"] for r in usable]
 
     backend_name = getattr(config, "TRANSLATOR_BACKEND", "manual")
+    trivial_missing: list[str] = []
+    substantial_missing: list[str] = []
     if backend_name == "ollama" and usable_ids:
         orig_by_id = {r["region_id"]: r.get("original_text", "") for r in usable}
         missing_ids = [rid for rid in usable_ids if rid not in translation_map]
@@ -584,107 +611,120 @@ def run_translation(
         min_ratio = getattr(config, "OLLAMA_MIN_COMPLETION_RATIO", 0.95)
         max_missing = getattr(config, "OLLAMA_MAX_MISSING", 0)
 
-        if len(translation_map) == 0:
-            raise ValueError(
-                "Ollama returned zero usable translations. Not advancing. "
-                "Check model output and `ollama serve`."
-            )
+    if len(translation_map) == 0 and not (
+        getattr(config, "TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE", True)
+        and getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+        and usable
+    ):
+        raise ValueError(
+            "Ollama returned zero usable translations. Not advancing. "
+            "Check model output and `ollama serve`."
+        )
 
-        if trivial_missing:
+    if trivial_missing:
+        logger.info(
+            "[%d/%d %s] %d trivial region(s) left untranslated (SFX/noise, not blocking): %s",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            len(trivial_missing),
+            sorted(trivial_missing),
+        )
+
+    contextual_retry_enabled = getattr(config, "OLLAMA_CONTEXTUAL_RETRY_ENABLED", False)
+    if substantial_missing:
+        logger.info(
+            "[%d/%d %s] Contextual retry: %s (%d unresolved region(s))",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            "enabled"
+            if contextual_retry_enabled
+            else "disabled; handing off to Stage 4",
+            len(substantial_missing),
+        )
+
+    if substantial_missing and contextual_retry_enabled:
+        region_by_id = {r["region_id"]: r for r in usable}
+        backend_inst = backend if isinstance(backend, backends.OllamaBackend) else None
+        for rid in list(substantial_missing):
+            region = region_by_id.get(rid)
+            if not region or not backend_inst:
+                continue
+            original = orig_by_id.get(rid, "")
             logger.info(
-                "[%d/%d %s] %d trivial region(s) left untranslated (SFX/noise, not blocking): %s",
+                "[%d/%d %s] Contextual retry for %s (%r)",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
-                len(trivial_missing),
-                sorted(trivial_missing),
+                rid,
+                original,
             )
-
-        if substantial_missing and getattr(
-            config, "OLLAMA_CONTEXTUAL_RETRY_ENABLED", True
-        ):
-            region_by_id = {r["region_id"]: r for r in usable}
-            backend_inst = (
-                backend if isinstance(backend, backends.OllamaBackend) else None
-            )
-            for rid in list(substantial_missing):
-                region = region_by_id.get(rid)
-                if not region or not backend_inst:
-                    continue
-                original = orig_by_id.get(rid, "")
-                logger.info(
-                    "[%d/%d %s] Contextual retry for %s (%r)",
-                    _STAGE_INDEX,
-                    _TOTAL_STAGES,
-                    _STAGE_NAME,
-                    rid,
-                    original,
-                )
-                retry_prompt = bundle._build_contextual_retry_prompt(region, locked)
-                try:
-                    retry_raw = backend_inst._call_ollama(retry_prompt)
-                    retry_parsed = backend_inst._parse_json(retry_raw)
-                    retry_issues = validate_expected_regions(
-                        retry_parsed, {rid}, attempt=2
-                    )
-                    issue = retry_issues.get(rid)
-                    if issue and issue.status == "accepted":
-                        translation_map[rid] = issue.accepted_text
-                        substantial_missing.remove(rid)
-                        logger.info(
-                            "[%s] Contextual retry succeeded for %s: %r",
-                            _STAGE_NAME,
-                            rid,
-                            issue.accepted_text,
-                        )
-                    else:
-                        reason = issue.reason if issue else "unknown"
-                        logger.warning(
-                            "[%s] Contextual retry failed for %s: reason=%s",
-                            _STAGE_NAME,
-                            rid,
-                            reason,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "[%s] Contextual retry error for %s: %s", _STAGE_NAME, rid, exc
-                    )
-
-        if substantial_missing:
-            from manhua_pipeline.interaction import InteractionMode, RuntimePolicy
-
-            runtime = RuntimePolicy(
-                mode=InteractionMode.INTERACTIVE
-                if allow_prompt
-                else InteractionMode.NON_INTERACTIVE,
-                batch=not allow_prompt,
-            )
-            run_id = getattr(config, "_run_id", "unknown")
-            chapter = ws.name
-            region_by_id = {r["region_id"]: r for r in usable}
-
-            for rid in list(substantial_missing):
-                region = region_by_id[rid]
-                resolved = _handle_unresolved_region(
-                    region=region,
-                    initial_reason="missing_after_batch",
-                    final_reason="blank_after_contextual_retry",
-                    runtime=runtime,
-                    run_id=run_id,
-                    chapter=chapter,
-                    ws=ws,
-                    config=config,
-                    translation_map=translation_map,
-                    glossary_data=glossary_data,
-                )
-                if resolved:
+            retry_prompt = bundle._build_contextual_retry_prompt(region, locked)
+            try:
+                retry_raw = backend_inst._call_ollama(retry_prompt)
+                retry_parsed = backend_inst._parse_json(retry_raw)
+                retry_issues = validate_expected_regions(retry_parsed, {rid}, attempt=2)
+                issue = retry_issues.get(rid)
+                if issue and issue.status == "accepted":
+                    translation_map[rid] = issue.accepted_text
                     substantial_missing.remove(rid)
+                    logger.info(
+                        "[%s] Contextual retry succeeded for %s: %r",
+                        _STAGE_NAME,
+                        rid,
+                        issue.accepted_text,
+                    )
+                else:
+                    reason = issue.reason if issue else "unknown"
+                    logger.warning(
+                        "[%s] Contextual retry failed for %s: reason=%s",
+                        _STAGE_NAME,
+                        rid,
+                        reason,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Contextual retry error for %s: %s", _STAGE_NAME, rid, exc
+                )
+
+    if substantial_missing:
+        from manhua_pipeline.interaction import InteractionMode, RuntimePolicy
+
+        runtime = RuntimePolicy(
+            mode=InteractionMode.INTERACTIVE
+            if allow_prompt
+            else InteractionMode.NON_INTERACTIVE,
+            batch=not allow_prompt,
+        )
+        run_id = getattr(config, "_run_id", "unknown")
+        chapter = ws.name
+        region_by_id = {r["region_id"]: r for r in usable}
+
+        for rid in list(substantial_missing):
+            region = region_by_id[rid]
+            resolved = _handle_unresolved_region(
+                region=region,
+                initial_reason="missing_after_batch",
+                final_reason="blank_after_contextual_retry",
+                runtime=runtime,
+                run_id=run_id,
+                chapter=chapter,
+                ws=ws,
+                config=config,
+                translation_map=translation_map,
+                glossary_data=glossary_data,
+            )
+            if resolved:
+                substantial_missing.remove(rid)
 
         still_missing = [
             rid
             for rid in usable_ids
             if rid not in translation_map
             and not triage._is_trivial_region(orig_by_id.get(rid, ""), config)
+            and region_by_id.get(rid, {}).get("translation_source")
+            != "translation_recovery"
         ]
         new_substantial_total = max(1, len(usable_ids) - len(trivial_missing))
         ratio = (new_substantial_total - len(still_missing)) / new_substantial_total

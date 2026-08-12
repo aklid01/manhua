@@ -55,15 +55,10 @@ def _find_safe_seam(
     target = max(1, int(getattr(config, "IMPORT_SLICE_TARGET_HEIGHT", 5000)))
     tolerance = max(
         1,
-        int(
-            target
-            * float(getattr(config, "IMPORT_SLICE_SEAM_TOLERANCE", 0.20))
-        ),
+        int(target * float(getattr(config, "IMPORT_SLICE_SEAM_TOLERANCE", 0.20))),
     )
     band = max(1, int(getattr(config, "IMPORT_SLICE_SEAM_BAND", 24)))
-    max_density = float(
-        getattr(config, "IMPORT_SLICE_MAX_CONTENT_DENSITY", 0.02)
-    )
+    max_density = float(getattr(config, "IMPORT_SLICE_MAX_CONTENT_DENSITY", 0.02))
     low = max(band, desired - tolerance)
     high = min(height - band, desired + tolerance)
     if low > high:
@@ -283,9 +278,7 @@ def _import_folder(
     stale = [
         p
         for p in pages_dir.iterdir()
-        if p.is_file()
-        and p.suffix.lower() in _IMAGE_EXTS
-        and p.stem.isdigit()
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS and p.stem.isdigit()
     ]
     for old in stale:
         old.unlink()

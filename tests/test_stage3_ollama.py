@@ -22,6 +22,10 @@ import config
 # ---------------------------------------------------------------------------
 
 
+def test_contextual_retry_disabled_by_default():
+    assert config.OLLAMA_CONTEXTUAL_RETRY_ENABLED is False
+
+
 def _setup(ws, ocr_results, glossary=None):
     ws.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -261,8 +265,53 @@ def test_missing_region_flagged(tmp_path, ollama_config, monkeypatch):
     assert by_id["P001_R001"]["translated"] is True
     assert by_id["P001_R002"]["translated"] is False
     m = json.loads((ws / "manifest.json").read_text())
-    assert m["current_stage"] == "translate"
-    assert out is None
+    assert m["current_stage"] == "paraphrase"
+    assert by_id["P001_R002"]["translation_source"] == "translation_recovery"
+    assert out is not None
+
+
+def test_contextual_retry_is_skipped_by_default(tmp_path, ollama_config, monkeypatch):
+    calls = []
+
+    def responder(prompt):
+        calls.append(prompt)
+        return json.dumps({"P001_R001": "only one"})
+
+    _patch_call(monkeypatch, responder)
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_ocr_entry("P001_R001", "你好啊"), _ocr_entry("P001_R002", "我知道")])
+    run_translation(str(ws), ollama_config)
+
+    assert not any("Translate the supplied Chinese region" in call for call in calls)
+    by_id = {r["region_id"]: r for r in _read_translation(ws)["results"]}
+    assert by_id["P001_R002"]["translation_source"] == "translation_recovery"
+
+
+def test_contextual_retry_remains_available_when_enabled(
+    tmp_path, ollama_config, monkeypatch
+):
+    calls = []
+
+    def responder(prompt):
+        calls.append(prompt)
+        if "Translate the supplied Chinese region" in prompt:
+            return json.dumps({"P001_R002": "context fallback"})
+        return json.dumps({"P001_R001": "only one"})
+
+    monkeypatch.setattr(config, "OLLAMA_CONTEXTUAL_RETRY_ENABLED", True)
+    _patch_call(monkeypatch, responder)
+    from manhua_pipeline.stages.stage3_translation import run_translation
+
+    ws = tmp_path / "workspace"
+    _setup(ws, [_ocr_entry("P001_R001", "你好啊"), _ocr_entry("P001_R002", "我知道")])
+    run_translation(str(ws), ollama_config)
+
+    assert any("Translate the supplied Chinese region" in call for call in calls)
+    by_id = {r["region_id"]: r for r in _read_translation(ws)["results"]}
+    assert by_id["P001_R002"]["translated"] is True
+    assert by_id["P001_R002"]["literal_translation"] == "context fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -381,20 +430,33 @@ def test_below_threshold_does_not_advance(tmp_path, ollama_config, monkeypatch):
     )
     out = run_translation(str(ws), ollama_config)
 
-    assert out is None
+    assert out is not None
     m = json.loads((ws / "manifest.json").read_text())
-    assert m["current_stage"] == "translate"
+    assert m["current_stage"] == "paraphrase"
+    tr = _read_translation(ws)
+    by_id = {r["region_id"]: r for r in tr["results"]}
+    assert by_id["P001_R002"]["translation_source"] == "translation_recovery"
+    assert by_id["P001_R003"]["translation_source"] == "translation_recovery"
     assert (ws / "stage3_translation" / "translation.json").exists()
 
 
-def test_zero_translations_raises(tmp_path, ollama_config, monkeypatch):
+def test_zero_translations_hands_off_to_stage4(tmp_path, ollama_config, monkeypatch):
     _patch_call(monkeypatch, _canned({}))
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
-    with pytest.raises(ValueError):
-        run_translation(str(ws), ollama_config)
+    out = run_translation(str(ws), ollama_config)
+
+    assert out is not None
+    translation = json.loads(
+        (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
+    )
+    row = translation["results"][0]
+    assert row["translated"] is False
+    assert row["translation_source"] == "translation_recovery"
+    manifest = json.loads((ws / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["current_stage"] == "paraphrase"
 
 
 # ---------------------------------------------------------------------------

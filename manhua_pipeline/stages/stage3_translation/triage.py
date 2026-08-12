@@ -221,7 +221,10 @@ def _partition_by_triage(
         # an ellipsis to ASCII dots (for example, "求...."). Conversely, a
         # background/free-text SFX must not inherit the generic short-CJK
         # passthrough route.
-        if _is_short_speech_bubble(r, res.effective_text, config) and res.reason == "trivial":
+        if (
+            _is_short_speech_bubble(r, res.effective_text, config)
+            and res.reason == "trivial"
+        ):
             res = TriageResult("speech_bubble_passthrough", res.effective_text)
         elif res.reason == "sfx_passthrough" and _is_explicit_non_speech_region(
             r, config

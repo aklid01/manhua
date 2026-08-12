@@ -229,6 +229,20 @@ python pipeline.py resolve-overrides --chapter chapter_001
 After changing an override, rerun `translate`, `paraphrase`, `render`, and
 `qa` as appropriate.
 
+### Translation recovery and contextual retry
+
+The local Ollama translator is best-effort. When it cannot produce a valid
+translation for a meaningful region, the original CJK text is handed to Stage
+4, where the stronger paraphrase backend performs a combined
+translate-and-paraphrase recovery. This is the normal path when
+`PARAPHRASE_BACKEND = "mcp"`.
+
+Stage 3's extra one-region contextual retry is disabled by default because it
+duplicates work before the stronger Stage 4 backend runs. Enable
+`OLLAMA_CONTEXTUAL_RETRY_ENABLED = True` only when a local contextual retry is
+preferred or Stage 4 recovery is unavailable. Single-character CJK/SFX
+passthrough remains a separate route and is not affected.
+
 ### Common options
 
 | Option                  | Commands                                    | Purpose                                                                              |

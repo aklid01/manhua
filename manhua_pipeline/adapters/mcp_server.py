@@ -248,15 +248,21 @@ def paraphrase_chapter_impl(chapter: str) -> str:
     ch_dir = base / chapter
     bundle = build_paraphrase_bundle(ch_dir, config)
     lines = "\n".join(
-        f"{r['region_id']}: {r['literal_translation']}" for r in bundle["regions"]
+        (
+            f"{r['region_id']} [TRANSLATE_AND_PARAPHRASE]: {r.get('original_text', '')}"
+            if r.get("translation_task") == "translate_and_paraphrase"
+            else f"{r['region_id']}: {r['literal_translation']}"
+        )
+        for r in bundle["regions"]
     )
     glossary = bundle.get("glossary", [])
     gloss_txt = "\n".join(f"{t['source_term']} = {t['target_term']}" for t in glossary)
     return (
         _PROMPT_INSTRUCTIONS
         + ("\n\nGLOSSARY (keep exactly):\n" + gloss_txt if gloss_txt else "")
-        + "\n\nLINES (rewrite each; reply ONLY as JSON {region_id: final_english}):\n"
-        + lines
+        + "\n\nFor lines marked TRANSLATE_AND_PARAPHRASE, translate the CJK text into "
+        "English first and then paraphrase it. Rewrite normal lines as before. "
+        "Reply ONLY as JSON {region_id: final_english}:\n" + lines
     )
 
 

@@ -35,9 +35,7 @@ def _collect(render_dir: Path, config) -> list[Path]:
 def _is_credits(path: Path, config) -> bool:
     if not getattr(config, "PACKAGE_CREDITS_ENABLED", True):
         return False
-    pattern = getattr(
-        config, "PACKAGE_CREDITS_PATTERN", r"^zzz_credits(?:\.[^.]+)?$"
-    )
+    pattern = getattr(config, "PACKAGE_CREDITS_PATTERN", r"^zzz_credits(?:\.[^.]+)?$")
     try:
         return re.fullmatch(pattern, path.name, flags=re.IGNORECASE) is not None
     except re.error:
@@ -105,7 +103,10 @@ def _build_groups(images: list[Path], config) -> list[list[Path]]:
     # new protected group, matching e.g. [39,40,41] -> [39,40], [41,credits].
     last_page = final_group[-1]
     _, last_height = sizes[last_page]
-    if last_height + credit_height <= budget and last_height + credit_height <= hard_max:
+    if (
+        last_height + credit_height <= budget
+        and last_height + credit_height <= hard_max
+    ):
         final_group.pop()
         if not final_group:
             groups.pop()

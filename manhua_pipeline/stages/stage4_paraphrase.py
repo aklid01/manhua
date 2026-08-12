@@ -39,6 +39,13 @@ def _cjk_ratio(text: str) -> float:
     return sum(1 for c in chars if _contains_cjk(c)) / len(chars)
 
 
+def _validation_input(region: dict) -> str:
+    """Return the text appropriate for paraphrase-length validation."""
+    if region.get("translation_source") == "translation_recovery":
+        return region.get("original_text", "")
+    return region.get("literal_translation", "")
+
+
 _PROMPT_INSTRUCTIONS = (
     "Rewrite each literal English line as natural, casual, SPOKEN US English for a "
     "comic speech bubble. Preserve every factual claim, relationship, and sentence "
@@ -172,7 +179,7 @@ class OllamaBackend:
 
     def _paraphrase_batch(self, chunk, depth: int) -> dict:
         expected_ids = {r["region_id"] for r in chunk}
-        literals = {r["region_id"]: r.get("literal_translation", "") for r in chunk}
+        literals = {r["region_id"]: _validation_input(r) for r in chunk}
 
         raw = self._call_ollama(self._build_user_prompt(chunk, strict=False))
         accepted, missing, unexpected = self._validate_batch(
@@ -226,6 +233,14 @@ class OllamaBackend:
                 {
                     "region_id": r["region_id"],
                     "literal_translation": r.get("literal_translation", ""),
+                    **(
+                        {
+                            "translation_task": "translate_and_paraphrase",
+                            "input_text": r.get("original_text", ""),
+                        }
+                        if r.get("translation_task") == "translate_and_paraphrase"
+                        else {}
+                    ),
                 }
                 for r in chunk
             ],
@@ -250,8 +265,10 @@ class OllamaBackend:
         return (
             directives
             + gloss
-            + "Rewrite each object's literal_translation into punchy, natural spoken "
-            "US English. Return a JSON object mapping region_id -> final_english. "
+            + "For translation_task=paraphrase, rewrite the literal_translation into punchy, "
+            "natural spoken US English. For translation_task=translate_and_paraphrase, "
+            "translate the CJK input_text into English and then rewrite it naturally. "
+            "Return a JSON object mapping region_id -> final_english. "
             "REGIONS:\n" + payload + strict_note
         )
 
@@ -383,14 +400,28 @@ def _build_bundle(usable: list[dict], locked: list[dict], config) -> dict:
         {"source_term": t["source_term"], "target_term": t["target_term"]}
         for t in locked
     ]
-    regions = [
-        {"region_id": r["region_id"], "literal_translation": r["literal_translation"]}
-        for r in usable
-    ]
+    regions = []
+    for r in usable:
+        recovery = r.get("translation_source") == "translation_recovery"
+        item = {
+            "region_id": r["region_id"],
+            "literal_translation": r.get("literal_translation", ""),
+        }
+        if recovery:
+            # Stage 3 deliberately leaves literal_translation empty when its
+            # local translator fails. Keep the original CJK separate from the
+            # existing single-character passthrough route and label the task.
+            item["translation_task"] = "translate_and_paraphrase"
+            item["original_text"] = r.get("original_text", "")
+        regions.append(item)
     return {
         "READ_FIRST": (
             "Follow these rules EXACTLY before producing output. "
-            "These are mandatory instructions, not context.\n" + _PROMPT_INSTRUCTIONS
+            "These are mandatory instructions, not context.\n"
+            + _PROMPT_INSTRUCTIONS
+            + "\nIf a region has translation_task=translate_and_paraphrase, its input_text "
+            "is original CJK that Stage 3 could not translate: translate the CJK input first, "
+            "then paraphrase it. All returned values must be English."
         ),
         "tone_directive": getattr(
             config,
@@ -493,7 +524,9 @@ def _partition_regions_paraphrase(
         rid = r["region_id"]
         if rid in overrides:
             overridden_regions.append(r)
-        elif r.get("translated"):
+        elif (
+            r.get("translated") or r.get("translation_source") == "translation_recovery"
+        ):
             usable.append(r)
         else:
             skipped.append(r)
@@ -617,7 +650,7 @@ def run_paraphrase(
     # Validate
     usable_ids = [r["region_id"] for r in usable]
     try:
-        literals = {r["region_id"]: r.get("literal_translation", "") for r in usable}
+        literals = {r["region_id"]: _validation_input(r) for r in usable}
         paraphrase_map, val_warnings = _validate_response(
             raw_response, usable_ids, config=config, literals=literals
         )
@@ -757,17 +790,23 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
             paraphrased = True
             skip_reason = None
             reg = _detect_register(final_text, rude_markers)
-            para_source = (
-                f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
-                if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama"
-                else "llm"
-            )
+            if region.get("translation_source") == "translation_recovery":
+                para_source = "translation_recovery"
+            else:
+                para_source = (
+                    f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
+                    if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama"
+                    else "llm"
+                )
         else:
             final_text = region.get("literal_translation") or ""
             paraphrased = False
-            skip_reason = None
+            recovery_failed = region.get("translation_source") == "translation_recovery"
+            skip_reason = "translation_recovery_failed" if recovery_failed else None
             reg = _detect_register(final_text, rude_markers)
-            para_source = "literal_fallback"
+            para_source = (
+                "translation_recovery_failed" if recovery_failed else "literal_fallback"
+            )
             missing_count += 1
 
         if paraphrased:
@@ -931,7 +970,7 @@ def write_paraphrase_response(
     )
 
     usable_ids = [r["region_id"] for r in usable]
-    literals = {r["region_id"]: r.get("literal_translation", "") for r in usable}
+    literals = {r["region_id"]: _validation_input(r) for r in usable}
     clean_map, warnings = _validate_response(
         mapping, usable_ids, config=config, literals=literals
     )

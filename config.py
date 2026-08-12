@@ -158,6 +158,9 @@ OLLAMA_MAX_RETRIES = 3
 OLLAMA_RETRY_BACKOFF = 1.0
 OLLAMA_MIN_COMPLETION_RATIO = 0.95
 OLLAMA_MAX_MISSING = 2
+# Optional local one-region retry after a batch response misses entries.
+# Keep disabled when Stage 4 uses the stronger MCP recovery backend.
+OLLAMA_CONTEXTUAL_RETRY_ENABLED = False
 OLLAMA_TRIVIAL_CJK_CHARS = 1
 OLLAMA_NUM_CTX = 2048
 OLLAMA_KEEP_ALIVE = "15m"  # keep qwen resident across batches/retries/paraphrase
@@ -336,3 +339,7 @@ STITCH_MIN_X_OVERLAP = 0.5  # min overlap as fraction of the narrower box's widt
 STITCH_MAX_CHAIN = 4  # Max pages a single bubble may span
 STITCH_TEXT_PROBE = True  # require usable text on both halves (guard #4)
 STITCH_TEXT_MIN_CONF = 0.15  # relaxed text confidence floor for split halves
+# When the local Ollama translator cannot produce a valid result, keep the
+# original OCR text and let Stage 4 translate + paraphrase it with the stronger
+# backend. Existing single-character CJK/SFX passthrough is unaffected.
+TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE = True
