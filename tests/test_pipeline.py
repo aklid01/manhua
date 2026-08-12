@@ -2,7 +2,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import config
 from manhua_pipeline.stages import (
@@ -188,9 +188,9 @@ def test_import_folder(tmp_path):
     run_import(str(src), str(ws), config)
 
     pages_dir = ws / "pages"
-    assert (pages_dir / "001.png").exists()
-    assert (pages_dir / "002.png").exists()
-    assert (pages_dir / "003.png").exists()
+    assert (pages_dir / "001.jpg").exists()
+    assert (pages_dir / "002.jpg").exists()
+    assert (pages_dir / "003.jpg").exists()
 
     manifest_file = ws / "manifest.json"
     assert manifest_file.exists()
@@ -207,6 +207,79 @@ def test_import_folder(tmp_path):
         "00000000_00010002.jpg",
         "00000000_00010003.jpg",
     ]
+
+
+def test_import_folder_preserves_mixed_extensions(tmp_path):
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    src = tmp_path / "src"
+    src.mkdir()
+    ws = tmp_path / "workspace"
+    Image.new("RGB", (100, 100), "white").save(src / "001.jpg")
+    Image.new("RGB", (100, 100), "white").save(src / "002.png")
+    Image.new("RGB", (100, 100), "white").save(src / "003.webp")
+
+    run_import(str(src), str(ws), config)
+
+    manifest = json.loads((ws / config.MANIFEST_NAME).read_text())
+    assert [p["filename"] for p in manifest["pages"]] == [
+        "001.jpg",
+        "002.png",
+        "003.webp",
+    ]
+
+
+def test_import_slices_tall_page_at_safe_seams(tmp_path, monkeypatch):
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    src = tmp_path / "src"
+    src.mkdir()
+    ws = tmp_path / "workspace"
+    image = Image.new("RGB", (800, 10000), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((100, 1000, 700, 1800), fill="black")
+    draw.rectangle((100, 4200, 700, 5000), fill="black")
+    draw.rectangle((100, 7200, 700, 8000), fill="black")
+    image.save(src / "strip.jpg", "JPEG")
+
+    monkeypatch.setattr(config, "IMPORT_MAX_WIDTH", 0)
+    monkeypatch.setattr(config, "IMPORT_SLICE_TARGET_HEIGHT", 3000)
+    monkeypatch.setattr(config, "IMPORT_SLICE_MIN_HEIGHT", 4000)
+    monkeypatch.setattr(config, "IMPORT_SLICE_SEAM_TOLERANCE", 0.10)
+    monkeypatch.setattr(config, "IMPORT_SLICE_SEAM_BAND", 10)
+
+    run_import(str(src), str(ws), config)
+
+    manifest = json.loads((ws / config.MANIFEST_NAME).read_text())
+    assert manifest["total_pages"] == 3
+    assert [p["filename"] for p in manifest["pages"]] == [
+        "001.jpg",
+        "002.jpg",
+        "003.jpg",
+    ]
+    assert all(p["slice_count"] == 3 for p in manifest["pages"])
+    assert [p["slice_index"] for p in manifest["pages"]] == [1, 2, 3]
+    assert manifest["warning_count"] == 0
+
+
+def test_import_keeps_tall_page_when_no_safe_seam(tmp_path, monkeypatch):
+    from manhua_pipeline.stages.stage0_import import run_import
+
+    src = tmp_path / "src"
+    src.mkdir()
+    ws = tmp_path / "workspace"
+    Image.new("RGB", (800, 10000), "black").save(src / "solid.jpg", "JPEG")
+
+    monkeypatch.setattr(config, "IMPORT_MAX_WIDTH", 0)
+    monkeypatch.setattr(config, "IMPORT_SLICE_TARGET_HEIGHT", 3000)
+    monkeypatch.setattr(config, "IMPORT_SLICE_MIN_HEIGHT", 4000)
+
+    run_import(str(src), str(ws), config)
+
+    manifest = json.loads((ws / config.MANIFEST_NAME).read_text())
+    assert manifest["total_pages"] == 1
+    assert manifest["pages"][0]["slice_count"] == 1
+    assert manifest["warning_count"] == 1
 
 
 def test_import_cbz(tmp_path):
@@ -231,9 +304,9 @@ def test_import_cbz(tmp_path):
     run_import(str(cbz), str(ws), config)
 
     pages_dir = ws / "pages"
-    assert (pages_dir / "001.png").exists()
-    assert (pages_dir / "002.png").exists()
-    assert (pages_dir / "003.png").exists()
+    assert (pages_dir / "001.jpg").exists()
+    assert (pages_dir / "002.jpg").exists()
+    assert (pages_dir / "003.jpg").exists()
 
     manifest = json.loads((ws / "manifest.json").read_text())
     assert manifest["total_pages"] == 3
@@ -371,15 +444,15 @@ def test_import_idempotent_clears_stale(tmp_path):
     for i in range(1, 6):
         Image.new("RGB", (860, 1214)).save(src / f"{i:08d}.jpg", "JPEG")
     run_import(str(src), str(ws), config)
-    assert (ws / "pages" / "005.png").exists()
+    assert (ws / "pages" / "005.jpg").exists()
 
     for f in src.iterdir():
         f.unlink()
     for i in range(1, 3):
         Image.new("RGB", (860, 1214)).save(src / f"{i:08d}.jpg", "JPEG")
     run_import(str(src), str(ws), config)
-    pages = sorted((ws / "pages").glob("*.png"))
-    assert [p.name for p in pages] == ["001.png", "002.png"]
+    pages = sorted((ws / "pages").glob("*.jpg"))
+    assert [p.name for p in pages] == ["001.jpg", "002.jpg"]
     manifest = json.loads((ws / "manifest.json").read_text())
     assert manifest["total_pages"] == 2
 

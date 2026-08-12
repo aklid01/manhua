@@ -387,6 +387,55 @@ def test_sfx_passthrough_partition():
     assert row["skip_reason"] is None
 
 
+def test_short_speech_bubble_ascii_ellipsis_passthrough():
+    """ASCII OCR ellipses in short speech bubbles reach paraphrase."""
+    from manhua_pipeline.stages.stage3_translation import _partition_by_triage
+
+    region = {
+        "region_id": "P024_R001",
+        "page_number": 24,
+        "type": config.TYPE_SPEECH,
+        "render": True,
+        "is_free_text": False,
+        "original_text": "求....",
+    }
+    translatable, hard_skipped, trivial_fallback = _partition_by_triage(
+        [region], config, {}
+    )
+
+    assert translatable == []
+    assert trivial_fallback == []
+    row = hard_skipped[0]
+    assert row["translated"] is True
+    assert row["literal_translation"] == "求...."
+    assert row["translation_source"] == "speech_bubble_passthrough"
+    assert row["skip_reason"] is None
+
+
+def test_short_background_sfx_remains_trivial():
+    """Short CJK in a free-text/narration region is not promoted to paraphrase."""
+    from manhua_pipeline.stages.stage3_translation import _partition_by_triage
+
+    region = {
+        "region_id": "P024_R002",
+        "page_number": 24,
+        "type": config.TYPE_NARRATION,
+        "render": False,
+        "is_free_text": True,
+        "original_text": "求....",
+    }
+    translatable, hard_skipped, trivial_fallback = _partition_by_triage(
+        [region], config, {}
+    )
+
+    assert translatable == []
+    assert trivial_fallback == []
+    row = hard_skipped[0]
+    assert row["translated"] is False
+    assert row["literal_translation"] == ""
+    assert row["skip_reason"] == "trivial_manual_review"
+
+
 def test_short_cjk_dialogue_toggle_off(monkeypatch):
     """TRANSLATE_SHORT_CJK_DIALOGUE=False restores the strict skip."""
     from manhua_pipeline.stages.stage3_translation import triage_region

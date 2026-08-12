@@ -136,6 +136,10 @@ MCP_SERVER_NAME = "Manhua Pipeline"
 # ---- Packaging (Stage 7) ----
 VALID_PACKAGE_FORMATS = ("zip", "cbz", "tar", "pdf")
 PACKAGE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+PACKAGE_PIXEL_BUDGET = 6000
+PACKAGE_MAX_COMPOSITE_HEIGHT = 12000
+PACKAGE_CREDITS_PATTERN = r"^zzz_credits(?:\.[^.]+)?$"
+PACKAGE_CREDITS_ENABLED = True
 
 # ---- Translation ----
 TRANSLATOR_BACKEND = (
@@ -165,6 +169,11 @@ TRANSLATE_NON_CJK_DIALOGUE = False  # True restores legacy: send no-CJK regions 
 # (punctuation like ？！… or a known interjection). Set False to skip all short
 # CJK; set OLLAMA_TRIVIAL_CJK_CHARS=0 to translate every short CJK region.
 TRANSLATE_SHORT_CJK_DIALOGUE = True
+# Route short, dialogue-like CJK only when detection identifies a renderable
+# speech bubble. Free-text/narration regions (including background SFX) remain
+# on the ordinary trivial-text path.
+TRANSLATE_SHORT_SPEECH_BUBBLES = True
+SHORT_SPEECH_BUBBLE_CJK_CHARS = 1
 # Punctuation-only bubbles ("？", "！？", "…") are universal dialogue: normalize
 # and render them without an LLM call. Set False to skip them as noise.
 RENDER_PUNCT_ONLY_REGIONS = True
@@ -280,6 +289,16 @@ LAYOUT_MIN_ANCHOR_OVERLAP = 0.5  # expanded box must still cover >=50% of text b
 # Set to 0 to disable. Pillow thumbnail() only shrinks, never upscales.
 # Safe range: 1200-1500 px (OCR stays reliable; detector input is 640px anyway).
 IMPORT_MAX_WIDTH = 1500
+
+# ---- Import: safe tall-page slicing ----
+# Only pages meeting both the ratio and absolute-height thresholds are considered.
+IMPORT_SLICE_ENABLED = True
+IMPORT_SLICE_TRIGGER_RATIO = 5.0
+IMPORT_SLICE_MIN_HEIGHT = 4000
+IMPORT_SLICE_TARGET_HEIGHT = 5000
+IMPORT_SLICE_SEAM_TOLERANCE = 0.20  # fraction of target height around each boundary
+IMPORT_SLICE_SEAM_BAND = 24  # rows on either side of a candidate seam
+IMPORT_SLICE_MAX_CONTENT_DENSITY = 0.02
 
 # Ordered stage pipeline
 STAGE_ORDER = ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]

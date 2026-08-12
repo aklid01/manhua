@@ -164,6 +164,47 @@ def _translated_row(r: dict, text: str, *, source: str, glossary_terms: list) ->
     }
 
 
+def _is_renderable_speech_bubble(region: dict, config) -> bool:
+    """Return whether a region is eligible for dialogue-only short-text routing."""
+    speech_type = getattr(config, "TYPE_SPEECH", "speech_bubble")
+    return (
+        region.get("type") == speech_type
+        and region.get("render", True) is not False
+        and not region.get("is_free_text", False)
+    )
+
+
+def _is_explicit_non_speech_region(region: dict, config) -> bool:
+    """Return whether detection explicitly classifies a region as non-dialogue."""
+    speech_type = getattr(config, "TYPE_SPEECH", "speech_bubble")
+    return (
+        ("type" in region and region.get("type") != speech_type)
+        or region.get("is_free_text") is True
+        or region.get("render") is False
+    )
+
+
+def _is_short_speech_bubble(region: dict, effective_text: str, config) -> bool:
+    """Recognize short bubble dialogue without broadening background-SFX handling.
+
+    OCR commonly emits an ASCII ellipsis (``...``) for a bubble such as
+    ``求....``. That signal is intentionally accepted here, rather than in the
+    text-only triage function, so free-text/background SFX do not get promoted.
+    """
+    if not getattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", True):
+        return False
+    if not getattr(config, "TRANSLATE_SHORT_SPEECH_BUBBLES", True):
+        return False
+    if not _is_renderable_speech_bubble(region, config):
+        return False
+
+    limit = int(getattr(config, "SHORT_SPEECH_BUBBLE_CJK_CHARS", 1))
+    if _cjk_count(effective_text) > limit:
+        return False
+
+    return _has_dialogue_signal(effective_text) or "." in effective_text
+
+
 def _partition_by_triage(
     regions: list[dict], config, locked_index: dict[str, str]
 ) -> tuple[list[dict], list[dict], list[dict]]:
@@ -175,6 +216,17 @@ def _partition_by_triage(
         raw = r.get("original_text", "")
         res = triage_region(raw, config)
         r["effective_text"] = res.effective_text
+
+        # A short renderable speech bubble is dialogue even when OCR converted
+        # an ellipsis to ASCII dots (for example, "求...."). Conversely, a
+        # background/free-text SFX must not inherit the generic short-CJK
+        # passthrough route.
+        if _is_short_speech_bubble(r, res.effective_text, config) and res.reason == "trivial":
+            res = TriageResult("speech_bubble_passthrough", res.effective_text)
+        elif res.reason == "sfx_passthrough" and _is_explicit_non_speech_region(
+            r, config
+        ):
+            res = TriageResult("trivial", res.effective_text)
 
         if res.reason == "empty":
             hard_skipped.append(_skip_row(r, "no_usable_text"))
@@ -200,6 +252,15 @@ def _partition_by_triage(
                     r,
                     res.effective_text,
                     source="sfx_passthrough",
+                    glossary_terms=[],
+                )
+            )
+        elif res.reason == "speech_bubble_passthrough":
+            hard_skipped.append(
+                _translated_row(
+                    r,
+                    res.effective_text,
+                    source="speech_bubble_passthrough",
                     glossary_terms=[],
                 )
             )

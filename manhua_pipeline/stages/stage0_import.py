@@ -32,6 +32,88 @@ def _numeric_key(p: Path) -> tuple:
     return (nums, p.name)
 
 
+def _row_content_densities(image: Image.Image, config) -> list[float]:
+    """Return a cheap per-row estimate of non-background/content density."""
+    gray = image.convert("L")
+    sample_width = min(gray.width, 256)
+    if sample_width != gray.width:
+        gray = gray.resize((sample_width, gray.height), Image.Resampling.BILINEAR)
+    pixels = list(gray.getdata())
+    threshold = int(getattr(config, "IMPORT_SLICE_CONTENT_THRESHOLD", 245))
+    densities = []
+    for y in range(gray.height):
+        row = pixels[y * sample_width : (y + 1) * sample_width]
+        densities.append(sum(value < threshold for value in row) / sample_width)
+    return densities
+
+
+def _find_safe_seam(
+    image: Image.Image, desired: int, config, densities: list[float]
+) -> int | None:
+    """Find the nearest low-content horizontal seam around ``desired``."""
+    height = image.height
+    target = max(1, int(getattr(config, "IMPORT_SLICE_TARGET_HEIGHT", 5000)))
+    tolerance = max(
+        1,
+        int(
+            target
+            * float(getattr(config, "IMPORT_SLICE_SEAM_TOLERANCE", 0.20))
+        ),
+    )
+    band = max(1, int(getattr(config, "IMPORT_SLICE_SEAM_BAND", 24)))
+    max_density = float(
+        getattr(config, "IMPORT_SLICE_MAX_CONTENT_DENSITY", 0.02)
+    )
+    low = max(band, desired - tolerance)
+    high = min(height - band, desired + tolerance)
+    if low > high:
+        return None
+
+    candidates = []
+    for y in range(low, high + 1, max(1, image.width // 256)):
+        start = max(0, y - band)
+        end = min(height, y + band)
+        score = sum(densities[start:end]) / max(1, end - start)
+        if score <= max_density:
+            candidates.append((score, abs(y - desired), y))
+    if not candidates:
+        return None
+    return min(candidates)[2]
+
+
+def _safe_slice_boundaries(image: Image.Image, config) -> list[tuple[int, int]] | None:
+    """Return safe vertical slices, or None when a tall page cannot be split safely."""
+    if not getattr(config, "IMPORT_SLICE_ENABLED", True):
+        return [(0, image.height)]
+
+    height = image.height
+    width = image.width
+    trigger_ratio = float(getattr(config, "IMPORT_SLICE_TRIGGER_RATIO", 5.0))
+    min_height = int(getattr(config, "IMPORT_SLICE_MIN_HEIGHT", 4000))
+    target = int(getattr(config, "IMPORT_SLICE_TARGET_HEIGHT", 5000))
+    if (
+        width <= 0
+        or height < min_height
+        or height / width < trigger_ratio
+        or target <= 0
+    ):
+        return [(0, height)]
+
+    densities = _row_content_densities(image, config)
+    min_segment = max(1, int(target * 0.5))
+    boundaries = []
+    desired = target
+    while height - desired >= min_segment:
+        seam = _find_safe_seam(image, desired, config, densities)
+        if seam is None:
+            return None
+        boundaries.append(seam)
+        desired = seam + target
+
+    points = [0, *boundaries, height]
+    return list(zip(points, points[1:]))
+
+
 def run_import(
     input_path: str,
     workspace: str,
@@ -197,8 +279,14 @@ def _import_folder(
         _STAGE_NAME,
     )
 
-    # Clear stale pages from any prior run before writing new ones
-    stale = list(pages_dir.glob("[0-9][0-9][0-9].png"))
+    # Clear stale canonical pages from any prior run before writing new ones.
+    stale = [
+        p
+        for p in pages_dir.iterdir()
+        if p.is_file()
+        and p.suffix.lower() in _IMAGE_EXTS
+        and p.stem.isdigit()
+    ]
     for old in stale:
         old.unlink()
     if stale:
@@ -214,11 +302,11 @@ def _import_folder(
     warnings = 0
     total = len(image_files)
     strip_count = 0
+    sliced_count = 0
+    page_number = 0
 
-    # Single-pass: open once, capture dimensions + ratio, convert, save
-    for idx, src_file in enumerate(image_files, start=1):
-        dest_name = f"{idx:03d}.png"
-        dest = pages_dir / dest_name
+    # Single-pass per source image: normalize dimensions, optionally slice, save.
+    for source_index, src_file in enumerate(image_files, start=1):
         try:
             with Image.open(src_file) as im:
                 im = im.convert("RGB")
@@ -230,44 +318,76 @@ def _import_folder(
                 ratio = h / w if w else 1.0
                 if ratio > _STRIP_RATIO:
                     strip_count += 1
-                im.save(dest, "PNG")
-            log_page(
-                logger,
-                _STAGE_INDEX,
-                _TOTAL_STAGES,
-                _STAGE_NAME,
-                idx,
-                total,
-                f"{src_file.name} -> {dest_name}  ({w}x{h})",
-            )
-            pages.append(
-                {
-                    "page_number": idx,
-                    "filename": dest_name,
-                    "original_filename": src_file.name,
-                    "width": w,
-                    "height": h,
-                    "global_y_offset": None,
-                    "skip": False,
-                    "skip_reason": None,
-                }
-            )
+
+                boundaries = _safe_slice_boundaries(im, config)
+                if boundaries is None:
+                    logger.warning(
+                        "[%s] %s is unusually tall but no safe seam was found; keeping intact",
+                        _STAGE_NAME,
+                        src_file.name,
+                    )
+                    warnings += 1
+                    boundaries = [(0, h)]
+                slice_count = len(boundaries)
+                if slice_count > 1:
+                    sliced_count += 1
+
+                extension = src_file.suffix.lower()
+                for slice_index, (top, bottom) in enumerate(boundaries, start=1):
+                    page_number += 1
+                    dest_name = f"{page_number:03d}{extension}"
+                    dest = pages_dir / dest_name
+                    piece = im.crop((0, top, w, bottom))
+                    piece.save(dest)
+                    piece_width, piece_height = piece.size
+                    log_page(
+                        logger,
+                        _STAGE_INDEX,
+                        _TOTAL_STAGES,
+                        _STAGE_NAME,
+                        page_number,
+                        total,
+                        f"{src_file.name} -> {dest_name}  ({piece_width}x{piece_height})",
+                    )
+                    pages.append(
+                        {
+                            "page_number": page_number,
+                            "filename": dest_name,
+                            "original_filename": src_file.name,
+                            "source_filename": src_file.name,
+                            "source_page_number": source_index,
+                            "slice_index": slice_index,
+                            "slice_count": slice_count,
+                            "slice_top": top,
+                            "slice_bottom": bottom,
+                            "width": piece_width,
+                            "height": piece_height,
+                            "global_y_offset": None,
+                            "skip": False,
+                            "skip_reason": None,
+                        }
+                    )
         except Exception as exc:
             logger.warning(
-                "[%s] Page %03d/%03d — FAILED to read %s: %s",
+                "[%s] Source %03d/%03d — FAILED to read %s: %s",
                 _STAGE_NAME,
-                idx,
+                source_index,
                 total,
                 src_file.name,
                 exc,
             )
             warnings += 1
             # Keep entry with filename=None so downstream detects the gap
+            page_number += 1
             pages.append(
                 {
-                    "page_number": idx,
+                    "page_number": page_number,
                     "filename": None,
                     "original_filename": src_file.name,
+                    "source_filename": src_file.name,
+                    "source_page_number": source_index,
+                    "slice_index": 1,
+                    "slice_count": 1,
                     "width": 0,
                     "height": 0,
                     "global_y_offset": None,
@@ -276,21 +396,16 @@ def _import_folder(
                 }
             )
 
-    # input_format heuristic: majority-vote on strip ratio (height/width > _STRIP_RATIO=5.0).
-    # A smarter boundary (very tall pixel height OR ratio, gray zone) is deferred past v0.
+    # input_format heuristic: majority-vote on the source strip ratio.
     input_format = "strip" if strip_count > total / 2 else "paginated"
     logger.info(
-        "[%d/%d %s] Detected format: %s",
+        "[%d/%d %s] Detected format: %s (%d source page(s) sliced)",
         _STAGE_INDEX,
         _TOTAL_STAGES,
         _STAGE_NAME,
         input_format,
+        sliced_count,
     )
-    if input_format == "strip":
-        logger.warning(
-            "[%s] Strip format detected — slicing deferred (v0). Recorded in manifest.",
-            _STAGE_NAME,
-        )
 
     now = datetime.now(timezone.utc).isoformat()
     # chapter_id: use slug from source_name; "chapter_0001" style is an option but
