@@ -35,6 +35,7 @@ class DraggableTextItem(QGraphicsObject):
     """Interactive, draggable, and resizable text box with complete per-line styling."""
 
     changed = pyqtSignal()
+    change_started = pyqtSignal()
 
     HANDLE_NONE = 0
     HANDLE_TL = 1
@@ -343,6 +344,7 @@ class DraggableTextItem(QGraphicsObject):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.isSelected():
+            self.change_started.emit()
             hid = self._hit_test_handle(event.pos())
             if hid != self.HANDLE_NONE:
                 self._active_handle = hid
@@ -529,6 +531,8 @@ class TouchupCanvas(QGraphicsView):
     region_selected = pyqtSignal(QRectF)
     item_selected = pyqtSignal(object)
     item_text_edited = pyqtSignal(object, str)
+    item_change_started = pyqtSignal(object)
+    delete_requested = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -562,8 +566,10 @@ class TouchupCanvas(QGraphicsView):
         )
         self._inline_editor.focusOutEvent = self._on_inline_editor_focus_out
         self._editing_item: DraggableTextItem | None = None
+        self._editing_original_text = ""
 
         self.set_mode("select")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_mode(self, mode: str):
         self._mode = mode
@@ -584,17 +590,35 @@ class TouchupCanvas(QGraphicsView):
         self.scene.setSceneRect(QRectF(pixmap.rect()))
         self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def add_text_item(self, text: str, rect: QRectF) -> DraggableTextItem:
+    def add_text_item(
+        self, text: str, rect: QRectF, select: bool = True
+    ) -> DraggableTextItem:
         item = DraggableTextItem(text, rect)
         self.scene.addItem(item)
-        self.clearSelection()
-        item.setSelected(True)
-        self.item_selected.emit(item)
+        if select:
+            self.clearSelection()
+            item.setSelected(True)
+            self.item_selected.emit(item)
         return item
 
     def clearSelection(self):
         for it in self.scene.selectedItems():
             it.setSelected(False)
+
+    def clear_text_items(self):
+        for it in list(self.scene.items()):
+            if isinstance(it, DraggableTextItem):
+                self.scene.removeItem(it)
+
+    def text_items(self) -> list[DraggableTextItem]:
+        return [it for it in self.scene.items() if isinstance(it, DraggableTextItem)]
+
+    def deselect_all(self):
+        if self._inline_editor.isVisible():
+            self._inline_editor.setVisible(False)
+            self._editing_item = None
+        self.clearSelection()
+        self.item_selected.emit(None)
 
     # ---------------- Inline Direct Text Editing ----------------
     def mouseDoubleClickEvent(self, event):
@@ -608,6 +632,7 @@ class TouchupCanvas(QGraphicsView):
 
     def _open_inline_editor(self, item: DraggableTextItem):
         self._editing_item = item
+        self._editing_original_text = item.raw_text
         scene_rect = item.mapToScene(item._rect).boundingRect()
         view_rect = self.mapFromScene(scene_rect).boundingRect()
 
@@ -621,7 +646,9 @@ class TouchupCanvas(QGraphicsView):
         if self._editing_item and self._inline_editor.isVisible():
             new_text = self._inline_editor.toPlainText()
             item = self._editing_item
-            item.set_text(new_text)
+            if new_text != self._editing_original_text:
+                self.item_change_started.emit(item)
+                item.set_text(new_text)
             self._inline_editor.setVisible(False)
             self._editing_item = None
             item.setSelected(True)
@@ -653,10 +680,13 @@ class TouchupCanvas(QGraphicsView):
         if self._mode == "select" and event.button() == Qt.MouseButton.LeftButton:
             item = self.itemAt(event.pos())
             if isinstance(item, DraggableTextItem):
+                self.item_change_started.emit(item)
                 super().mousePressEvent(event)
                 self.item_selected.emit(item)
                 return
 
+            self.clearSelection()
+            self.item_selected.emit(None)
             self._selecting = True
             scene_pos = self.mapToScene(event.pos())
             self._select_start = scene_pos
@@ -668,11 +698,15 @@ class TouchupCanvas(QGraphicsView):
         if self._mode == "edit" and event.button() == Qt.MouseButton.LeftButton:
             item = self.itemAt(event.pos())
             if item is None or item == self.pixmap_item:
+                self.clearSelection()
+                self.item_selected.emit(None)
                 self._panning = True
                 self._pan_start = event.position()
                 self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
                 event.accept()
                 return
+            if isinstance(item, DraggableTextItem):
+                self.item_change_started.emit(item)
 
         super().mousePressEvent(event)
         selected = self.scene.selectedItems()
@@ -740,6 +774,13 @@ class TouchupCanvas(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.selection_overlay.setVisible(False)
+            self._selecting = False
+            self.deselect_all()
+            event.accept()
+            return
+
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             selected = [
                 it
@@ -747,9 +788,7 @@ class TouchupCanvas(QGraphicsView):
                 if isinstance(it, DraggableTextItem)
             ]
             if selected:
-                for it in selected:
-                    self.scene.removeItem(it)
-                self.item_selected.emit(None)
+                self.delete_requested.emit(selected)
                 event.accept()
                 return
         super().keyPressEvent(event)

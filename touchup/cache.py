@@ -56,6 +56,30 @@ class TouchupCache:
         self._save_raw(data)
         return edit_id
 
+    def replace_page_edits(
+        self, page_name: str, edits: list[dict[str, Any]]
+    ) -> list[str]:
+        data = self._load_raw()
+        pages = data.setdefault("pages", {})
+
+        now = datetime.now(timezone.utc).isoformat()
+        edit_ids = []
+        normalized = []
+        for edit in edits:
+            edit_id = edit.get("edit_id") or f"edit_{uuid.uuid4().hex[:8]}"
+            edit["edit_id"] = edit_id
+            edit["updated_at"] = now
+            edit_ids.append(edit_id)
+            normalized.append(edit)
+
+        if normalized:
+            pages[page_name] = normalized
+        elif page_name in pages:
+            del pages[page_name]
+
+        self._save_raw(data)
+        return edit_ids
+
     def delete_edit(self, page_name: str, edit_id: str) -> bool:
         data = self._load_raw()
         pages = data.get("pages", {})
