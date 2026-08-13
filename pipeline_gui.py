@@ -75,7 +75,7 @@ STAGE_DESCRIPTIONS = {
     "render": "Bubble inpainting & English typesetting",
     "qa": "Validate text coverage, sizes, & formatting",
 }
-PACKAGE_FORMATS = ["cbz", "zip", "tar", "pdf"]
+PACKAGE_FORMATS = ["cbz", "zip"]
 
 HANDOFF_HINTS = {
     "translate": (
@@ -540,7 +540,10 @@ class SettingsDialog(QDialog):
         settings = _read_settings()
         self.txt_input.setText(settings.get("input_dir", ""))
         self.txt_output.setText(settings.get("output_dir", ""))
-        self.cmb_pkg.setCurrentText(settings.get("gui_default_package", "cbz"))
+        saved_package = settings.get("gui_default_package", "cbz")
+        self.cmb_pkg.setCurrentText(
+            saved_package if saved_package in PACKAGE_FORMATS else "cbz"
+        )
         self.txt_ollama_host.setText(
             settings.get("ollama_host", "http://localhost:11434")
         )

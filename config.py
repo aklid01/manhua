@@ -134,7 +134,7 @@ GLOSSARY_NAME = "glossary.json"
 MCP_SERVER_NAME = "Manhua Pipeline"
 
 # ---- Packaging (Stage 7) ----
-VALID_PACKAGE_FORMATS = ("zip", "cbz", "tar", "pdf")
+VALID_PACKAGE_FORMATS = ("zip", "cbz")
 PACKAGE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 PACKAGE_PIXEL_BUDGET = 6000
 PACKAGE_MAX_COMPOSITE_HEIGHT = 12000

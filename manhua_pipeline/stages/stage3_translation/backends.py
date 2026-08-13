@@ -94,13 +94,16 @@ class OllamaBackend:
         merged: dict = {}
         for bi in range(n_batches):
             chunk = regions[bi * batch_size : (bi + 1) * batch_size]
+            self._batch_call_count = 0
+            self._batch_response_chars = 0
+            self._batch_unexpected_count = 0
             t_batch = time.monotonic()
             accepted = self._translate_batch(chunk, depth=0)
             merged.update(accepted)
             expected = len(chunk)
             missing = expected - len(accepted)
             logger.info(
-                "[%d/%d %s] Batch %d/%d: expected %d, accepted %d, missing %d (%.1fs)",
+                "[%d/%d %s] Batch %d/%d: expected %d, accepted %d, missing %d, unexpected %d, calls %d, response_chars %d (%.1fs)",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
@@ -109,6 +112,9 @@ class OllamaBackend:
                 expected,
                 len(accepted),
                 missing,
+                self._batch_unexpected_count,
+                self._batch_call_count,
+                self._batch_response_chars,
                 time.monotonic() - t_batch,
             )
 
@@ -125,6 +131,9 @@ class OllamaBackend:
         accepted, missing, unexpected = self._validate_batch(
             self._parse_json(raw, self), expected_ids
         )
+        self._batch_unexpected_count = getattr(
+            self, "_batch_unexpected_count", 0
+        ) + len(unexpected)
         if unexpected:
             logger.warning(
                 "[%s] Rejected %d unexpected IDs", _STAGE_NAME, len(unexpected)
@@ -134,9 +143,12 @@ class OllamaBackend:
 
         retry_chunk = [r for r in chunk if r["region_id"] in missing]
         raw = self._call_ollama(self._build_user_prompt(retry_chunk, strict=True))
-        acc2, missing, _ = self._validate_batch(
+        acc2, missing, unexpected = self._validate_batch(
             self._parse_json(raw, self), set(missing)
         )
+        self._batch_unexpected_count = getattr(
+            self, "_batch_unexpected_count", 0
+        ) + len(unexpected)
         accepted.update(acc2)
         if not missing:
             return accepted
@@ -197,6 +209,7 @@ class OllamaBackend:
         )
 
     def _call_ollama(self, user_prompt: str) -> str:
+        self._batch_call_count = getattr(self, "_batch_call_count", 0) + 1
         s = be.OllamaSettings(
             host=self.host,
             model=self.model,
@@ -207,7 +220,11 @@ class OllamaBackend:
             num_ctx=getattr(self, "num_ctx", 2048),
             keep_alive=getattr(self, "keep_alive", "0"),
         )
-        return be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
+        raw = be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
+        self._batch_response_chars = getattr(self, "_batch_response_chars", 0) + len(
+            raw
+        )
+        return raw
 
     @staticmethod
     def _validate_batch(parsed: dict, expected_ids: set) -> tuple[dict, list, list]:

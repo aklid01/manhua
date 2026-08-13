@@ -380,7 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     runall.add_argument(
         "--package",
         default=None,
-        help="Comma-separated formats to package after completion (zip,cbz,tar,pdf)",
+        help="Comma-separated formats to package after completion (zip,cbz)",
     )
 
     batch_sp = sub.add_parser("batch", help="Process a folder of CBZ chapters")
@@ -426,7 +426,7 @@ def build_parser() -> argparse.ArgumentParser:
     pkg_sp.add_argument(
         "--package",
         required=True,
-        help="Comma-separated formats to package (zip,cbz,tar,pdf)",
+        help="Comma-separated formats to package (zip,cbz)",
     )
 
     resolve_sp = sub.add_parser(

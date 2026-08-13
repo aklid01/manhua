@@ -1,8 +1,8 @@
-"""Stage 7: Packaging. Bundle rendered pages into zip/cbz/tar/pdf.
+"""Stage 7: Packaging. Bundle rendered pages into zip/cbz archives.
 Opt-in; terminal; never advances the manifest."""
 
 import re
-import tarfile
+import shutil
 import tempfile
 import time
 import zipfile
@@ -67,7 +67,15 @@ def _build_groups(images: list[Path], config) -> list[list[Path]]:
     current_height = 0
     for path in content:
         _, height = sizes[path]
-        if height > budget:
+        if height > hard_max:
+            logger.warning(
+                "[%s] Page %s is %dpx tall and exceeds the hard maximum of %dpx; keeping it intact as a standalone page.",
+                _STAGE_NAME,
+                path.name,
+                height,
+                hard_max,
+            )
+        elif height > budget:
             logger.warning(
                 "[%s] Page %s is %dpx tall and exceeds the package budget of %dpx; keeping it alone.",
                 _STAGE_NAME,
@@ -148,8 +156,19 @@ def _compose_group(group: list[Path], out: Path) -> None:
 def _materialize_groups(groups: list[list[Path]], directory: Path) -> list[Path]:
     outputs = []
     for index, group in enumerate(groups, start=1):
-        out = directory / f"{index:03d}.png"
-        _compose_group(group, out)
+        if len(group) == 1:
+            source = group[0]
+            out = directory / f"{index:03d}{source.suffix.lower()}"
+            shutil.copyfile(source, out)
+            logger.debug(
+                "[%s] Package group %03d passed through unchanged: %s",
+                _STAGE_NAME,
+                index,
+                source.name,
+            )
+        else:
+            out = directory / f"{index:03d}.png"
+            _compose_group(group, out)
         outputs.append(out)
     return outputs
 
@@ -167,26 +186,9 @@ def _write_zip(images, out):
             zf.write(img, arcname=img.name)
 
 
-def _write_tar(images, out):
-    with tarfile.open(out, "w") as tf:
-        for img in images:
-            tf.add(img, arcname=img.name)
-
-
-def _write_pdf(images, out):
-    if not images:
-        return
-    frames = [Image.open(p).convert("RGB") for p in images]
-    frames[0].save(out, format="PDF", save_all=True, append_images=frames[1:])
-    for f in frames:
-        f.close()
-
-
 _WRITERS = {
     "zip": ("zip", _write_zip),
     "cbz": ("cbz", _write_zip),
-    "tar": ("tar", _write_tar),
-    "pdf": ("pdf", _write_pdf),
 }
 
 
@@ -199,7 +201,7 @@ def run_package(workspace: str, config, formats: list[str]) -> list[Path]:
 
     emit_stage_event(ws, config, _STAGE_NAME.lower(), STAGE_STARTED, logger=logger)
 
-    valid = set(getattr(config, "VALID_PACKAGE_FORMATS", ("zip", "cbz", "tar", "pdf")))
+    valid = set(getattr(config, "VALID_PACKAGE_FORMATS", ("zip", "cbz")))
     requested = [f.lower().strip() for f in formats if f.strip()]
     for u in [f for f in requested if f not in valid]:
         logger.warning("[%s] Unknown format ignored: %r", _STAGE_NAME, u)

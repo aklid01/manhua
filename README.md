@@ -30,7 +30,7 @@ For each chapter, the application performs these steps:
    page.
 7. **QA** - reports missing text, untranslated regions, overflow, glossary
    conflicts, and rendering failures.
-8. **Package** - optionally creates ZIP, CBZ, TAR, or PDF output.
+8. **Package** - optionally creates ZIP or CBZ output.
 
 Packaging is an optional terminal operation. It does not change the chapter's
 pipeline stage in `manifest.json`.
@@ -43,12 +43,13 @@ Supported inputs:
 - ZIP archives
 - Folders containing JPG, JPEG, PNG, or WEBP images
 
-PDF import is not currently implemented. PDF output is supported after pages
-have been rendered.
+PDF import is not currently implemented.
 
 Supported package formats:
 
-`zip`, `cbz`, `tar`, and `pdf`.
+`zip` and `cbz`. CBZ is the preferred comic-reader/upload format; ZIP is
+provided for generic archive compatibility. PDF and TAR are not produced by
+Stage 7.
 
 ## How to choose a workflow
 
@@ -150,7 +151,7 @@ after the response is supplied.
 ### 3. Process a chapter
 
 ```bash
-python pipeline.py run-all --input "/path/to/chapter_001.cbz" --package cbz,pdf
+python pipeline.py run-all --input "/path/to/chapter_001.cbz" --package cbz
 ```
 
 You can also run the guided GUI:
@@ -211,7 +212,7 @@ Use `--no-resume` to skip any chapter folder that already exists.
 ### Package rendered pages
 
 ```bash
-python pipeline.py package --chapter chapter_001 --package zip,cbz,tar,pdf
+python pipeline.py package --chapter chapter_001 --package zip,cbz
 ```
 
 The package command reads images from `stage5_render/rendered/` and writes the
@@ -255,7 +256,7 @@ passthrough remains a separate route and is not affected.
 | `--fresh`               | `import`, `run-all`, `batch`                | Remove prior stage artifacts before importing.                                       |
 | `--skip-last N`         | `import`, `run-all`, `batch`                | Mark the final N pages as skipped.                                                   |
 | `--from-stage NAME`     | `run-all`                                   | Resume from `import`, `detect`, `ocr`, `translate`, `paraphrase`, `render`, or `qa`. |
-| `--package FORMATS`     | `run-all`, `batch`, `package`               | Comma-separated `zip`, `cbz`, `tar`, or `pdf`.                                       |
+| `--package FORMATS`     | `run-all`, `batch`, `package`               | Comma-separated `zip` and/or `cbz`.                                                   |
 | `--no-resume`           | `batch`                                     | Skip existing chapter folders instead of resuming them.                              |
 
 Run `python pipeline.py --help` or `python pipeline.py <command> --help` for
