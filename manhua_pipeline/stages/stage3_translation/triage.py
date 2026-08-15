@@ -185,12 +185,7 @@ def _is_explicit_non_speech_region(region: dict, config) -> bool:
 
 
 def _is_short_speech_bubble(region: dict, effective_text: str, config) -> bool:
-    """Recognize short bubble dialogue without broadening background-SFX handling.
-
-    OCR commonly emits an ASCII ellipsis (``...``) for a bubble such as
-    ``求....``. That signal is intentionally accepted here, rather than in the
-    text-only triage function, so free-text/background SFX do not get promoted.
-    """
+    """Recognize short bubble dialogue without broadening background-SFX handling."""
     if not getattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", True):
         return False
     if not getattr(config, "TRANSLATE_SHORT_SPEECH_BUBBLES", True):
@@ -202,7 +197,7 @@ def _is_short_speech_bubble(region: dict, effective_text: str, config) -> bool:
     if _cjk_count(effective_text) > limit:
         return False
 
-    return _has_dialogue_signal(effective_text) or "." in effective_text
+    return True
 
 
 def _partition_by_triage(

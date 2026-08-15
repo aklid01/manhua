@@ -448,6 +448,31 @@ def test_short_speech_bubble_ascii_ellipsis_passthrough():
     assert row["skip_reason"] is None
 
 
+def test_bare_single_cjk_speech_bubble_passthrough():
+    """A bare one-character speech bubble must not be treated as trivial SFX."""
+    from manhua_pipeline.stages.stage3_translation import _partition_by_triage
+
+    region = {
+        "region_id": "P024_R003",
+        "page_number": 24,
+        "type": config.TYPE_SPEECH,
+        "render": True,
+        "is_free_text": False,
+        "original_text": "求",
+    }
+    translatable, hard_skipped, trivial_fallback = _partition_by_triage(
+        [region], config, {}
+    )
+
+    assert translatable == []
+    assert trivial_fallback == []
+    row = hard_skipped[0]
+    assert row["translated"] is True
+    assert row["literal_translation"] == "求"
+    assert row["translation_source"] == "speech_bubble_passthrough"
+    assert row["skip_reason"] is None
+
+
 def test_short_background_sfx_remains_trivial():
     """Short CJK in a free-text/narration region is not promoted to paraphrase."""
     from manhua_pipeline.stages.stage3_translation import _partition_by_triage
