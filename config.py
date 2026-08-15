@@ -162,7 +162,10 @@ OLLAMA_MAX_MISSING = 2
 # Keep disabled when Stage 4 uses the stronger MCP recovery backend.
 OLLAMA_CONTEXTUAL_RETRY_ENABLED = False
 OLLAMA_TRIVIAL_CJK_CHARS = 1
-OLLAMA_NUM_CTX = 2048
+# following should be tested on YOUR pc/laptop for optimal values
+# current values are just for me and may not be optimal
+OLLAMA_NUM_CTX = 8192
+OLLAMA_NUM_PREDICT = 1024
 OLLAMA_KEEP_ALIVE = "15m"  # keep qwen resident across batches/retries/paraphrase
 OLLAMA_PROMPT_VERSION = "translation-v2"
 
@@ -230,6 +233,7 @@ OLLAMA_PARA_MAX_RETRIES = 3
 OLLAMA_PARA_RETRY_BACKOFF = 1.0
 OLLAMA_PARA_MIN_COMPLETION_RATIO = 0.80
 OLLAMA_PARA_NUM_CTX = 2048
+OLLAMA_PARA_NUM_PREDICT = 1024
 OLLAMA_PARA_KEEP_ALIVE = "15m"  # share the warm model with translation
 OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
 # Reject paraphrases that are suspiciously shorter than the literal translation.

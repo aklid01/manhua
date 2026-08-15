@@ -102,11 +102,22 @@ def translate_text(
             f"Text to translate:\n{clean_chinese}"
         )
 
+        options = {}
+        try:
+            import config
+
+            options["num_predict"] = getattr(config, "OLLAMA_NUM_PREDICT", 1024)
+            options["num_ctx"] = getattr(config, "OLLAMA_NUM_CTX", 2048)
+        except Exception:
+            pass
+
         req_data = {
             "model": model,
             "prompt": prompt,
             "stream": False,
         }
+        if options:
+            req_data["options"] = options
 
         req = urllib.request.Request(
             f"{host}/api/generate",

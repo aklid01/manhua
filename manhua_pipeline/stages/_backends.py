@@ -97,6 +97,7 @@ class OllamaSettings:
     backoff: float
     batch_size: int = 8
     num_ctx: int = 2048
+    num_predict: int = 1024
     keep_alive: str = "0"
 
     @classmethod
@@ -116,6 +117,7 @@ class OllamaSettings:
             backoff=g("RETRY_BACKOFF", 1.0),
             batch_size=g("BATCH_SIZE", 8),
             num_ctx=g("NUM_CTX", 2048),
+            num_predict=g("NUM_PREDICT", 1024),
             keep_alive=str(g("KEEP_ALIVE", "0")),
         )
 
@@ -150,6 +152,7 @@ def call_ollama(
         "options": {
             "temperature": s.temperature,
             "num_ctx": s.num_ctx,
+            "num_predict": s.num_predict,
         },
     }
     data = json.dumps(payload).encode("utf-8")

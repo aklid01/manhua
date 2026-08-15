@@ -72,6 +72,7 @@ class OllamaBackend:
         self.backoff = s.backoff
         self.keep_alive = s.keep_alive
         self.num_ctx = s.num_ctx
+        self.num_predict = s.num_predict
         self.system_prompt = bundle.get("READ_FIRST", "")
         glossary = bundle.get("glossary", [])
         self.gloss_txt = "\n".join(
@@ -218,6 +219,7 @@ class OllamaBackend:
             max_retries=self.max_retries,
             backoff=self.backoff,
             num_ctx=getattr(self, "num_ctx", 2048),
+            num_predict=getattr(self, "num_predict", 1024),
             keep_alive=getattr(self, "keep_alive", "0"),
         )
         raw = be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
