@@ -136,10 +136,10 @@ MCP_SERVER_NAME = "Manhua Pipeline"
 # ---- Packaging (Stage 7) ----
 VALID_PACKAGE_FORMATS = ("zip", "cbz")
 PACKAGE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
-PACKAGE_PIXEL_BUDGET = 6000
-PACKAGE_MAX_COMPOSITE_HEIGHT = 12000
-PACKAGE_CREDITS_PATTERN = r"^zzz_credits(?:\.[^.]+)?$"
-PACKAGE_CREDITS_ENABLED = True
+
+# ---- Output image format ----
+RENDER_OUTPUT_FORMAT = "jpeg"  # "jpeg" | "webp" | "png"
+RENDER_OUTPUT_QUALITY = 93     # quality for jpeg/webp (ignored for png)
 
 # ---- Translation ----
 TRANSLATOR_BACKEND = (

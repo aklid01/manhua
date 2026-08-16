@@ -4,6 +4,7 @@ Normalize supported inputs (folder/ZIP/CBZ) into ordered pages and write manifes
 """
 
 import re
+import shutil
 import tempfile
 import time
 import zipfile
@@ -302,12 +303,15 @@ def _import_folder(
     for source_index, src_file in enumerate(image_files, start=1):
         try:
             with Image.open(src_file) as im:
-                im = im.convert("RGB")
+                # Peek at header without decoding pixels.
+                src_mode = im.mode
                 w, h = im.size
                 max_w = getattr(config, "IMPORT_MAX_WIDTH", 0)
-                if max_w and w > max_w:
-                    im.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
-                    w, h = im.size
+                needs_downscale = bool(max_w and w > max_w)
+                # Modes that are already valid 3-channel RGB for downstream stages.
+                _PASSTHROUGH_MODES = {"RGB", "L", "YCbCr"}
+                needs_convert = src_mode not in _PASSTHROUGH_MODES
+
                 ratio = h / w if w else 1.0
                 if ratio > _STRIP_RATIO:
                     strip_count += 1
@@ -322,10 +326,53 @@ def _import_folder(
                     warnings += 1
                     boundaries = [(0, h)]
                 slice_count = len(boundaries)
-                if slice_count > 1:
+                needs_slice = slice_count > 1
+                if needs_slice:
                     sliced_count += 1
 
                 extension = src_file.suffix.lower()
+
+                # Fast path: copy the file byte-for-byte when no transformation is needed.
+                if not needs_convert and not needs_downscale and not needs_slice:
+                    page_number += 1
+                    dest_name = f"{page_number:03d}{extension}"
+                    dest = pages_dir / dest_name
+                    shutil.copyfile(src_file, dest)
+                    log_page(
+                        logger,
+                        _STAGE_INDEX,
+                        _TOTAL_STAGES,
+                        _STAGE_NAME,
+                        page_number,
+                        total,
+                        f"{src_file.name} -> {dest_name}  ({w}x{h}) [pass-through]",
+                    )
+                    pages.append(
+                        {
+                            "page_number": page_number,
+                            "filename": dest_name,
+                            "original_filename": src_file.name,
+                            "source_filename": src_file.name,
+                            "source_page_number": source_index,
+                            "slice_index": 1,
+                            "slice_count": 1,
+                            "slice_top": 0,
+                            "slice_bottom": h,
+                            "width": w,
+                            "height": h,
+                            "global_y_offset": None,
+                            "skip": False,
+                            "skip_reason": None,
+                        }
+                    )
+                    continue
+
+                # Decode path: mode conversion, downscale, or slicing required.
+                im = im.convert("RGB")
+                if needs_downscale:
+                    im.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
+                    w, h = im.size
+
                 for slice_index, (top, bottom) in enumerate(boundaries, start=1):
                     page_number += 1
                     dest_name = f"{page_number:03d}{extension}"

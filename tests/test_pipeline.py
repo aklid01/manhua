@@ -72,6 +72,7 @@ def test_pipeline_main_import_calls_run_import(temp_workspace):
             title_english=None,
             source=None,
             fresh=False,
+            skip_last=0,
         )
 
 

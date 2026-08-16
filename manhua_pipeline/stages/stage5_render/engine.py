@@ -331,8 +331,12 @@ def _render_single_page(
 
     rendered_dir = render_dir / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
-    out_path = rendered_dir / f"{page_num:03d}.png"
-    page_img.save(out_path)
+    fmt = getattr(config, "RENDER_OUTPUT_FORMAT", "jpeg").lower()
+    ext = "jpg" if fmt == "jpeg" else fmt
+    quality = getattr(config, "RENDER_OUTPUT_QUALITY", 93)
+    out_path = rendered_dir / f"{page_num:03d}.{ext}"
+    save_kwargs = {"quality": quality} if fmt in ("jpeg", "webp") else {}
+    page_img.save(out_path, format=fmt.upper(), **save_kwargs)
     logger.info(
         "[%d/%d %s] Page %d -> saved %s (%d drawn, %d left)",
         _STAGE_INDEX,
