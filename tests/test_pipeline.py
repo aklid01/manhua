@@ -1,5 +1,5 @@
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from PIL import Image, ImageDraw
@@ -525,6 +525,7 @@ def test_import_chapter_id_no_trailing_underscore(tmp_path):
 def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
     """Test run-all subprocess batch mode execution."""
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
+    monkeypatch.setattr(config, "SUBPROCESS_STAGES", None)
 
     manifest = {
         "chapter_id": "test_ch",
@@ -563,6 +564,8 @@ def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
             input_path=None,
             meta={"title_romanized": None, "title_en": None, "source": None},
             fresh=False,
+            skip_last=0,
+            run_id=ANY,
         )
         mock_run_sub.assert_any_call(
             "translate",
@@ -570,6 +573,8 @@ def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
             input_path=None,
             meta={"title_romanized": None, "title_en": None, "source": None},
             fresh=False,
+            skip_last=0,
+            run_id=ANY,
         )
         mock_run_sub.assert_any_call(
             "paraphrase",
@@ -577,6 +582,8 @@ def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
             input_path=None,
             meta={"title_romanized": None, "title_en": None, "source": None},
             fresh=False,
+            skip_last=0,
+            run_id=ANY,
         )
         mock_run_sub.assert_any_call(
             "render",
@@ -584,6 +591,8 @@ def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
             input_path=None,
             meta={"title_romanized": None, "title_en": None, "source": None},
             fresh=False,
+            skip_last=0,
+            run_id=ANY,
         )
         mock_run_sub.assert_any_call(
             "qa",
@@ -591,12 +600,15 @@ def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
             input_path=None,
             meta={"title_romanized": None, "title_en": None, "source": None},
             fresh=False,
+            skip_last=0,
+            run_id=ANY,
         )
 
 
 def test_pipeline_run_all_subprocess_handoff(temp_workspace, monkeypatch):
     """Test that subprocess run-all stops when a stage requires handoff."""
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
+    monkeypatch.setattr(config, "SUBPROCESS_STAGES", None)
 
     manifest = {
         "chapter_id": "test_ch",
@@ -625,6 +637,8 @@ def test_pipeline_run_all_subprocess_handoff(temp_workspace, monkeypatch):
             input_path=None,
             meta={"title_romanized": None, "title_en": None, "source": None},
             fresh=False,
+            skip_last=0,
+            run_id=ANY,
         )
 
 

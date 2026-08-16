@@ -41,18 +41,18 @@ def test_edge_touch():
 
 def test_find_pair_positive():
     det = {1: [_box(20, 585, 100, 15)], 2: [_box(25, 0, 100, 15)]}
-    pairs = s1._find_split_pairs(det, _pages(1, 2), config)
+    pairs = s1._find_split_chains(det, _pages(1, 2), config)
     assert len(pairs) == 1 and pairs[0][0] == 1 and pairs[0][1] == 2
 
 
 def test_find_pair_no_x_overlap():
     det = {1: [_box(0, 585, 40, 15)], 2: [_box(300, 0, 40, 15)]}
-    assert s1._find_split_pairs(det, _pages(1, 2), config) == []
+    assert s1._find_split_chains(det, _pages(1, 2), config) == []
 
 
 def test_find_pair_not_edge_flush():
     det = {1: [_box(20, 400, 100, 15)], 2: [_box(20, 0, 100, 15)]}
-    assert s1._find_split_pairs(det, _pages(1, 2), config) == []
+    assert s1._find_split_chains(det, _pages(1, 2), config) == []
 
 
 def test_chain_guard_pairwise_only():
@@ -61,7 +61,7 @@ def test_chain_guard_pairwise_only():
         2: [_box(10, 0, 100, 15), _box(10, 585, 100, 15)],
         3: [_box(10, 0, 100, 15)],
     }
-    pairs = s1._find_split_pairs(det, _pages(1, 2, 3), config)
+    pairs = s1._find_split_chains(det, _pages(1, 2, 3), config)
     assert len(pairs) == 1 and (pairs[0][0], pairs[0][1]) == (1, 2)
 
 
@@ -70,7 +70,7 @@ def test_non_speech_boxes_ignored():
         1: [_box(20, 585, 100, 15, typ=getattr(config, "TYPE_NARRATION", "narration"))],
         2: [_box(20, 0, 100, 15, typ=getattr(config, "TYPE_NARRATION", "narration"))],
     }
-    assert s1._find_split_pairs(det, _pages(1, 2), config) == []
+    assert s1._find_split_chains(det, _pages(1, 2), config) == []
 
 
 def test_stitch_box_prefers_parent_bubble():
@@ -100,5 +100,5 @@ def test_find_pair_rtdetr_parent_bubble_edge_touch():
         "parent_bubble": {"x": 20, "y": 0, "w": 80, "h": 100},
     }
     det = {1: [box_a], 2: [box_b]}
-    pairs = s1._find_split_pairs(det, _pages(1, 2, h=600), config)
+    pairs = s1._find_split_chains(det, _pages(1, 2, h=600), config)
     assert len(pairs) == 1 and pairs[0][0] == 1 and pairs[0][1] == 2

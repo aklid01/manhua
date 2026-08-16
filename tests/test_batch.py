@@ -110,7 +110,7 @@ def test_run_batch_classifications(tmp_path, monkeypatch):
     assert "FAIL RuntimeError | c4" in log_content
     assert "done=1 pending=1 skipped=1 failed=1" in log_content
 
-    err_files = list((base_dir / "logs").glob("error_*.log"))
+    err_files = list((base_dir / "c4" / "logs").glob("error_*.log"))
     assert len(err_files) == 1
     assert "Error: C4 blew up" in err_files[0].read_text(encoding="utf-8")
 

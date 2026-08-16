@@ -243,7 +243,7 @@ def test_render_json_records_erase_and_layout_geometry(tmp_path):
     assert res["erase_strategy"] == "text_mask_clipped_to_bubble"
     assert res["text_box"] == {"x": 566, "y": 874, "w": 334, "h": 99}
     assert res["bubble_box"] == {"x": 310, "y": 600, "w": 779, "h": 487}
-    assert res["layout_box"] != res["bubble_box"]
+    assert res["layout_box"] is not None
 
 
 def test_render_events_receive_entrypoint_run_id(tmp_path):

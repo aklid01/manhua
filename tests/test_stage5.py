@@ -115,11 +115,12 @@ def test_render_text_gated_erase(tmp_path, monkeypatch):
     }
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
-    out = Image.open(ws / "stage5_render" / "rendered" / "001.png").convert("RGB")
+    out = Image.open(ws / "stage5_render" / "rendered" / "001.jpg").convert("RGB")
     # Assert that the text inside the bubble was erased (became white)
     assert out.getpixel((75, 75)) == (255, 255, 255)
     # Assert that the green background outside the bubble was untouched
-    assert out.getpixel((45, 45)) == (0, 255, 0)
+    px = out.getpixel((30, 30))
+    assert px[1] > 200 and px[0] < 20 and px[2] < 20
     rep = json.loads((ws / "stage5_render" / "render.json").read_text(encoding="utf-8"))
     by_id = {r["region_id"]: r for r in rep["results"]}
     assert by_id["P001_R001"]["rendered"] is True
@@ -225,7 +226,7 @@ def test_render_skips_non_render_type(tmp_path, monkeypatch):
     }
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
-    out = Image.open(ws / "stage5_render" / "rendered" / "001.png").convert("RGB")
+    out = Image.open(ws / "stage5_render" / "rendered" / "001.jpg").convert("RGB")
     assert out.getpixel((75, 75)) == (0, 0, 0)  # untouched character block
     rep = json.loads((ws / "stage5_render" / "render.json").read_text(encoding="utf-8"))
     assert rep["results"][0]["action"] == "left_original_not_render_type"
@@ -254,7 +255,7 @@ def test_render_advances_manifest_and_outputs(tmp_path, monkeypatch):
     }
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
-    assert (ws / "stage5_render" / "rendered" / "001.png").exists()
+    assert (ws / "stage5_render" / "rendered" / "001.jpg").exists()
     m = json.loads((ws / "manifest.json").read_text())
     assert m["current_stage"] == "qa"
     assert "render" in m["completed_stages"]
@@ -344,11 +345,12 @@ def test_render_edge_touching_erase(tmp_path, monkeypatch):
     )
 
     stage5_render.run_render(str(ws), config)
-    out = Image.open(ws / "stage5_render" / "rendered" / "001.png").convert("RGB")
+    out = Image.open(ws / "stage5_render" / "rendered" / "001.jpg").convert("RGB")
     # Assert character touching top y=0 was erased (became white)
     assert out.getpixel((75, 10)) == (255, 255, 255)
     # Assert green outside is untouched
-    assert out.getpixel((45, 10)) == (0, 255, 0)
+    px = out.getpixel((30, 10))
+    assert px[1] > 200 and px[0] < 20 and px[2] < 20
 
 
 def test_wrap_text_literal_newlines(monkeypatch):
@@ -781,5 +783,5 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
     assert erase_text_box["y"] + erase_text_box["h"] > stitch_y
     assert r001_result["erase_box"]["y"] + r001_result["erase_box"]["h"] >= 346
 
-    rendered = Image.open(ws / "stage5_render" / "rendered" / "001.png").convert("RGB")
+    rendered = Image.open(ws / "stage5_render" / "rendered" / "001.jpg").convert("RGB")
     assert rendered.getpixel((65, 337)) == (255, 255, 255)

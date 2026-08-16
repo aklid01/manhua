@@ -6,7 +6,7 @@ import config
 import pipeline
 
 
-def test_missing_chapter_lists_available(tmp_path, monkeypatch, capsys):
+def test_missing_chapter_lists_available(tmp_path, monkeypatch, capsys, caplog):
     base = tmp_path / "SeriesA"
     (base / "Ch1").mkdir(parents=True)
     (base / "Ch1" / config.MANIFEST_NAME).write_text(json.dumps({"chapter_id": "Ch1"}))
@@ -16,7 +16,8 @@ def test_missing_chapter_lists_available(tmp_path, monkeypatch, capsys):
     rc = pipeline.main(["detect", "--chapter", "GhostCh"])
     assert rc == 2
     captured = capsys.readouterr()
-    assert "Available chapters" in captured.out or "Available chapters" in captured.err
+    all_output = captured.out + captured.err + caplog.text
+    assert "Available chapters" in all_output
 
 
 def test_qa_benign_no_text_not_failed(tmp_path):

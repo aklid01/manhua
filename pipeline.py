@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import config
+from manhua_pipeline.interaction import can_prompt_now
 from manhua_pipeline.logging_setup import get_logger, setup_logging
 from manhua_pipeline.run_context import create_run_context
 
@@ -672,8 +673,6 @@ def _run_all_from(  # noqa: C901
     formats: list[str] | None = None,
     allow_prompt: bool = True,
 ) -> int:
-    from manhua_pipeline.interaction import can_prompt_now
-
     resolved_run_id = run_id or getattr(config, "_run_id", "unknown")
     config._run_id = resolved_run_id
     order = config.STAGE_ORDER

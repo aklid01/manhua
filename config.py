@@ -143,7 +143,7 @@ RENDER_OUTPUT_QUALITY = 93     # quality for jpeg/webp (ignored for png)
 
 # ---- Translation ----
 TRANSLATOR_BACKEND = (
-    "ollama"  # "manual" | "mcp" | "ollama"  (keep mcp default until benchmark passes)
+    "ollama"  # "manual" | "mcp" | "ollama"  
 )
 TRANSLATION_PROMPT_NAME = "translation_prompt.json"
 TRANSLATION_RESPONSE_NAME = "translation_response.json"

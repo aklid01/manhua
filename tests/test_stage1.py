@@ -49,6 +49,7 @@ def _fake_predict_two_boxes(*args, **kwargs):
 
 class _YoloConfig:
     DETECTOR_BACKEND = "yolov8"
+    OVERLAY_ENABLED = True
 
     def __getattr__(self, name):
         return getattr(config, name)
@@ -283,6 +284,7 @@ def test_detection_rtdetr_backend(mock_resolve, tmp_path):
         RTDETR_CLASS_TEXT_BUBBLE = 1
         RTDETR_CLASS_TEXT_FREE = 2
         STITCH_ENABLED = False
+        OVERLAY_ENABLED = True
 
         def __getattr__(self, name):
             return getattr(config, name)
