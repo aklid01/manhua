@@ -90,18 +90,24 @@ def _plan_and_erase_region(
     else:
         fill_color = None
 
-    generic_bubble_mask = inpainting._get_bubble_mask(
-        bubble_crop,
-        bubble_box.x,
-        bubble_box.y,
-        bubble_box.w,
-        bubble_box.h,
-        page_img.width,
-        page_img.height,
-        config,
-        seed_box=local_text_box,
-        fill_color=fill_color,
-    )
+    yolo_mask = inpainting.load_region_bubble_mask(region, bubble_box)
+    if yolo_mask is not None:
+        generic_bubble_mask = yolo_mask
+        bubble_mask_source = "yolo_seg"
+    else:
+        generic_bubble_mask = inpainting._get_bubble_mask(
+            bubble_crop,
+            bubble_box.x,
+            bubble_box.y,
+            bubble_box.w,
+            bubble_box.h,
+            page_img.width,
+            page_img.height,
+            config,
+            seed_box=local_text_box,
+            fill_color=fill_color,
+        )
+        bubble_mask_source = "generic_fill"
     thought_bubble_mask = inpainting._get_radiating_thought_mask(
         bubble_crop,
         generic_bubble_mask,
@@ -112,7 +118,7 @@ def _plan_and_erase_region(
         thought_bubble_mask if thought_bubble_mask is not None else generic_bubble_mask
     )
     bubble_mask_source = (
-        "thought_radiating_inner" if thought_bubble_mask is not None else "generic_fill"
+        "thought_radiating_inner" if thought_bubble_mask is not None else bubble_mask_source
     )
 
     shared_parent = False

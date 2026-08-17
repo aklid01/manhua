@@ -30,6 +30,17 @@ RTDETR_CLASS_BUBBLE = 0
 RTDETR_CLASS_TEXT_BUBBLE = 1
 RTDETR_CLASS_TEXT_FREE = 2
 
+# ---- YOLO-seg bubble mask refinement (optional) ----
+# When enabled, Stage 1 crops each parent_bubble ROI and runs YOLO-seg on it.
+# The resulting mask is stored in detection.json and used by Stage 5 instead of
+# the heuristic _get_bubble_mask(). RT-DETR is explicitly unloaded before YOLO
+# loads so both can safely share a GPU without VRAM spikes.
+YOLO_SEG_ENABLED = True
+YOLO_SEG_MODEL = "models/best.pt"  # relative to PROJECT_ROOT
+YOLO_SEG_CONF = 0.5                # masks below this confidence are discarded
+YOLO_SEG_DEVICE = "0"            # "cpu" | "0" for GPU (RT-DETR unloaded first)
+YOLO_SEG_PAD_FRAC = 0.15           # padding fraction added around parent_bubble crop
+
 
 # ---- Region IDs ----
 # Format: P{page:03d}_R{idx:03d}  e.g. P002_R001
@@ -139,12 +150,10 @@ PACKAGE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 # ---- Output image format ----
 RENDER_OUTPUT_FORMAT = "jpeg"  # "jpeg" | "webp" | "png"
-RENDER_OUTPUT_QUALITY = 93     # quality for jpeg/webp (ignored for png)
+RENDER_OUTPUT_QUALITY = 93  # quality for jpeg/webp (ignored for png)
 
 # ---- Translation ----
-TRANSLATOR_BACKEND = (
-    "ollama"  # "manual" | "mcp" | "ollama"  
-)
+TRANSLATOR_BACKEND = "ollama"  # "manual" | "mcp" | "ollama"
 TRANSLATION_PROMPT_NAME = "translation_prompt.json"
 TRANSLATION_RESPONSE_NAME = "translation_response.json"
 

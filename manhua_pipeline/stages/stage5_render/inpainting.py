@@ -718,3 +718,27 @@ def _get_bubble_mask(
 
     mask_arr = is_white | (has_left & has_right & has_top & has_bottom)
     return Image.fromarray((mask_arr * 255).astype(np.uint8), mode="L")
+
+
+def load_region_bubble_mask(region: dict, bubble_box) -> "Image.Image | None":
+    """Decode a YOLO-seg bubble mask stored in the region by Stage 1.
+
+    Returns a PIL 'L' image sized to (bubble_box.w, bubble_box.h), or None if
+    the region has no valid mask (Stage 5 falls back to _get_bubble_mask()).
+    """
+    bm = region.get("bubble_mask")
+    if not bm or not bm.get("valid"):
+        return None
+    try:
+        import base64
+        import io
+
+        data = base64.b64decode(bm["mask_b64"])
+        mask = Image.open(io.BytesIO(data)).convert("L")
+        target = (bubble_box.w, bubble_box.h)
+        if mask.size != target:
+            mask = mask.resize(target, Image.NEAREST)
+        return mask
+    except Exception:
+        return None
+

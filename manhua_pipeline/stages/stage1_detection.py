@@ -18,12 +18,17 @@ from manhua_pipeline.logging_setup import get_logger, log_page, log_stage
 
 logger = get_logger(__name__)
 
+_DEV_SAVE_BUBBLE_CROPS = (
+    False  # DEV-ONLY: flip to True to collect crops, delete before next push
+)
+
 _STAGE_INDEX = 1
 _TOTAL_STAGES = 7
 _STAGE_NAME = "Detection"
 
 _RTDETR_MODEL = None
 _RTDETR_PROCESSOR = None
+_YOLO_SEG_MODEL = None
 
 
 def _get_rtdetr(config):
@@ -52,6 +57,135 @@ def _get_rtdetr(config):
     _RTDETR_MODEL.to(dev)
     logger.info("[%s] RT-DETR loaded (%s, cached)", _STAGE_NAME, repo)
     return _RTDETR_MODEL, _RTDETR_PROCESSOR
+
+
+def _unload_rtdetr() -> None:
+    """Release RT-DETR from memory so YOLO-seg can load on the same GPU safely."""
+    global _RTDETR_MODEL, _RTDETR_PROCESSOR
+    _RTDETR_MODEL = None
+    _RTDETR_PROCESSOR = None
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    logger.info("[%s] RT-DETR unloaded (YOLO-seg pass starting)", _STAGE_NAME)
+
+
+def _get_yolo_seg(config):
+    """Lazy-load YOLO-seg model once per subprocess."""
+    global _YOLO_SEG_MODEL
+    if _YOLO_SEG_MODEL is not None:
+        return _YOLO_SEG_MODEL
+    from ultralytics import YOLO
+    model_path = Path(getattr(config, "YOLO_SEG_MODEL", "models/best.pt"))
+    if not model_path.is_absolute():
+        model_path = config.PROJECT_ROOT / model_path
+    _YOLO_SEG_MODEL = YOLO(str(model_path))
+    logger.info("[%s] YOLO-seg loaded: %s", _STAGE_NAME, model_path)
+    return _YOLO_SEG_MODEL
+
+
+def _encode_mask_b64(pil_mask) -> str:
+    """Encode a PIL 'L' mask image as a base64 PNG string."""
+    import base64
+    import io
+    buf = io.BytesIO()
+    pil_mask.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _run_yolo_seg_all_pages(
+    regions_by_page: dict,
+    pages_meta: list,
+    ws: Path,
+    config,
+) -> None:
+    """Post-detection pass: run YOLO-seg on every parent_bubble ROI and store
+    the resulting mask in each region dict as 'bubble_mask'."""
+    import numpy as np
+
+    conf = float(getattr(config, "YOLO_SEG_CONF", 0.5))
+    pad_frac = float(getattr(config, "YOLO_SEG_PAD_FRAC", 0.15))
+    device = str(getattr(config, "YOLO_SEG_DEVICE", "cpu"))
+
+    model = _get_yolo_seg(config)
+    page_by_num = {p["page_number"]: p for p in pages_meta}
+    pdir = ws / config.STAGE_FOLDERS["pages"]
+    total_masked = 0
+
+    for page_num, regions in regions_by_page.items():
+        page_meta = page_by_num.get(page_num)
+        if not page_meta or not page_meta.get("filename"):
+            continue
+        img_path = pdir / page_meta["filename"]
+        if not img_path.exists():
+            continue
+        eligible = [
+            r for r in regions
+            if r.get("parent_bubble") and r.get("type") == config.TYPE_SPEECH
+        ]
+        if not eligible:
+            continue
+
+        with Image.open(img_path).convert("RGB") as image:
+            W, H = image.size
+            for region in eligible:
+                pb = region["parent_bubble"]
+                px, py, pw, ph = pb["x"], pb["y"], pb["w"], pb["h"]
+                pad_x = int(pw * pad_frac)
+                pad_y = int(ph * pad_frac)
+                x1 = max(0, px - pad_x)
+                y1 = max(0, py - pad_y)
+                x2 = min(W, px + pw + pad_x)
+                y2 = min(H, py + ph + pad_y)
+                crop = image.crop((x1, y1, x2, y2))
+                crop_w, crop_h = crop.size
+
+                try:
+                    results = model.predict(
+                        crop, conf=conf, imgsz=640, device=device, verbose=False
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] YOLO-seg failed on %s: %s",
+                        _STAGE_NAME, region.get("region_id"), exc,
+                    )
+                    continue
+
+                result = results[0]
+                masks = getattr(result, "masks", None)
+                boxes = getattr(result, "boxes", None)
+                if masks is None or not len(getattr(masks, "data", [])):
+                    continue
+
+                best_idx, best_conf = 0, 0.0
+                if boxes is not None:
+                    for i, box in enumerate(boxes):
+                        c = float(box.conf[0])
+                        if c > best_conf:
+                            best_conf, best_idx = c, i
+
+                mask_np = masks.data[best_idx].cpu().numpy()
+                mask_at_crop = Image.fromarray(
+                    (mask_np * 255).astype(np.uint8), mode="L"
+                ).resize((crop_w, crop_h), Image.NEAREST)
+
+                off_x, off_y = px - x1, py - y1
+                mask_pb = mask_at_crop.crop((off_x, off_y, off_x + pw, off_y + ph))
+
+                region["bubble_mask"] = {
+                    "mask_b64": _encode_mask_b64(mask_pb),
+                    "confidence": round(best_conf, 4),
+                    "valid": True,
+                }
+                total_masked += 1
+
+    logger.info(
+        "[%d/%d %s] YOLO-seg: %d region(s) refined with bubble masks",
+        _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, total_masked,
+    )
 
 
 def _mk_region(
@@ -89,6 +223,30 @@ def _mk_region(
         ),
         "text_direction": "horizontal",
     }
+
+
+def _save_bubble_crops_dev(  # DEV-ONLY
+    img_path: Path,
+    bubbles: list,
+    crops_dir: Path,
+    page_num: int,  # DEV-ONLY
+) -> None:  # DEV-ONLY
+    """Save raw parent-bubble ROI crops for YOLO-seg training data."""  # DEV-ONLY
+    crops_dir.mkdir(parents=True, exist_ok=True)  # DEV-ONLY
+    with Image.open(img_path) as im:  # DEV-ONLY
+        for i, b in enumerate(bubbles):  # DEV-ONLY
+            x, y, w, h = b["x"], b["y"], b["w"], b["h"]  # DEV-ONLY
+            pad_x = int(w * 0.15)
+            pad_y = int(h * 0.15)
+            crop = im.crop(
+                (
+                    max(0, x - pad_x),
+                    max(0, y - pad_y),
+                    min(im.width, x + w + pad_x),
+                    min(im.height, y + h + pad_y),
+                )
+            )
+            crop.save(crops_dir / f"{page_num:03d}_bubble_{i:02d}.png")  # DEV-ONLY
 
 
 def _draw_debug_overlay_rtdetr(
@@ -215,6 +373,11 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
                 is_free_text=box["is_free_text"],
             )
         )
+
+    if _DEV_SAVE_BUBBLE_CROPS and bubbles:  # DEV-ONLY
+        _save_bubble_crops_dev(
+            img_path, bubbles, overlays_dir.parent / "dev_crops", page_num
+        )  # DEV-ONLY
 
     if getattr(config, "OVERLAY_ENABLED", True):
         _draw_debug_overlay_rtdetr(img_path, regions, bubbles, overlays_dir, page_num)
@@ -850,6 +1013,13 @@ def run_detection(workspace: str, config) -> Path:
         ws, manifest, per_page_regions, model, config, overlays_dir
     )
     manifest["pages"] = new_pages_meta
+
+    # 3c. YOLO-seg bubble mask refinement (optional) — runs after all RT-DETR pages
+    # are done. RT-DETR is explicitly unloaded first to free VRAM before YOLO loads.
+    if getattr(config, "YOLO_SEG_ENABLED", False) and backend == "rtdetr":
+        _unload_rtdetr()
+        _run_yolo_seg_all_pages(new_regions_by_page, new_pages_meta, ws, config)
+
     regions = [r for pg in sorted(new_regions_by_page) for r in new_regions_by_page[pg]]
 
     # 4. Save output detection.json
