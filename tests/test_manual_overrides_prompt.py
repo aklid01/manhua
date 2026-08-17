@@ -68,9 +68,7 @@ def test_run_all_forces_inprocess_for_translate_when_interactive(
         json.dumps({"chapter_id": "test_ch", "current_stage": "translate"})
     )
 
-    monkeypatch.setattr(
-        "pipeline.can_prompt_now", lambda *, batch=False: True
-    )
+    monkeypatch.setattr("pipeline.can_prompt_now", lambda *, batch=False: True)
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
 
     subprocess_calls = []
@@ -112,9 +110,7 @@ def test_batch_command_never_prompts(monkeypatch, temp_workspace):
         json.dumps({"chapter_id": "test_ch", "current_stage": "translate"})
     )
 
-    monkeypatch.setattr(
-        "pipeline.can_prompt_now", lambda *, batch=False: True
-    )
+    monkeypatch.setattr("pipeline.can_prompt_now", lambda *, batch=False: True)
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
     monkeypatch.setattr(config, "SUBPROCESS_STAGES", None)
 

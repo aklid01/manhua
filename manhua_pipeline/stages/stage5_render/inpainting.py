@@ -741,4 +741,3 @@ def load_region_bubble_mask(region: dict, bubble_box) -> "Image.Image | None":
         return mask
     except Exception:
         return None
-

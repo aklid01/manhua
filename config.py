@@ -37,9 +37,9 @@ RTDETR_CLASS_TEXT_FREE = 2
 # loads so both can safely share a GPU without VRAM spikes.
 YOLO_SEG_ENABLED = True
 YOLO_SEG_MODEL = "models/best.pt"  # relative to PROJECT_ROOT
-YOLO_SEG_CONF = 0.5                # masks below this confidence are discarded
-YOLO_SEG_DEVICE = "0"            # "cpu" | "0" for GPU (RT-DETR unloaded first)
-YOLO_SEG_PAD_FRAC = 0.15           # padding fraction added around parent_bubble crop
+YOLO_SEG_CONF = 0.5  # masks below this confidence are discarded
+YOLO_SEG_DEVICE = "0"  # "cpu" | "0" for GPU (RT-DETR unloaded first)
+YOLO_SEG_PAD_FRAC = 0.15  # padding fraction added around parent_bubble crop
 
 
 # ---- Region IDs ----

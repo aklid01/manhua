@@ -118,7 +118,9 @@ def _plan_and_erase_region(
         thought_bubble_mask if thought_bubble_mask is not None else generic_bubble_mask
     )
     bubble_mask_source = (
-        "thought_radiating_inner" if thought_bubble_mask is not None else bubble_mask_source
+        "thought_radiating_inner"
+        if thought_bubble_mask is not None
+        else bubble_mask_source
     )
 
     shared_parent = False

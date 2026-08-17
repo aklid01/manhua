@@ -66,6 +66,7 @@ def _unload_rtdetr() -> None:
     _RTDETR_PROCESSOR = None
     try:
         import torch
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     except Exception:
@@ -79,6 +80,7 @@ def _get_yolo_seg(config):
     if _YOLO_SEG_MODEL is not None:
         return _YOLO_SEG_MODEL
     from ultralytics import YOLO
+
     model_path = Path(getattr(config, "YOLO_SEG_MODEL", "models/best.pt"))
     if not model_path.is_absolute():
         model_path = config.PROJECT_ROOT / model_path
@@ -91,6 +93,7 @@ def _encode_mask_b64(pil_mask) -> str:
     """Encode a PIL 'L' mask image as a base64 PNG string."""
     import base64
     import io
+
     buf = io.BytesIO()
     pil_mask.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode("ascii")
@@ -123,7 +126,8 @@ def _run_yolo_seg_all_pages(
         if not img_path.exists():
             continue
         eligible = [
-            r for r in regions
+            r
+            for r in regions
             if r.get("parent_bubble") and r.get("type") == config.TYPE_SPEECH
         ]
         if not eligible:
@@ -150,7 +154,9 @@ def _run_yolo_seg_all_pages(
                 except Exception as exc:
                     logger.warning(
                         "[%s] YOLO-seg failed on %s: %s",
-                        _STAGE_NAME, region.get("region_id"), exc,
+                        _STAGE_NAME,
+                        region.get("region_id"),
+                        exc,
                     )
                     continue
 
@@ -184,7 +190,10 @@ def _run_yolo_seg_all_pages(
 
     logger.info(
         "[%d/%d %s] YOLO-seg: %d region(s) refined with bubble masks",
-        _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME, total_masked,
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        total_masked,
     )
 
 
