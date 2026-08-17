@@ -310,6 +310,7 @@ Most settings are in `config.py`. The most commonly changed values are:
 | Paraphrasing | `PARAPHRASE_BACKEND`, `OLLAMA_PARA_MODEL`, `OLLAMA_PARA_HOST`            |
 | OCR          | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`   |
 | Detection    | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `DETECTOR_USE_GPU` |
+| YOLO-seg     | `YOLO_SEG_ENABLED`, `YOLO_SEG_MODEL`, `YOLO_SEG_CONF`, `YOLO_SEG_DEVICE`, `YOLO_SEG_PAD_FRAC` |
 | Rendering    | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                |
 | QA           | `SUCCESS_MAX`, `REVIEW_MAX`                                              |
 | Packaging    | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                            |
@@ -323,6 +324,25 @@ but falls back to CPU when a compatible GPU runtime is unavailable.
 The default detector backend is RT-DETR, with YOLOv8 available as an alternate backend. Detection can skip text-free regions such as watermarks, sound effects, and credits.
 
 OCR uses PaddleOCR with the configured `OCR_ENGINE` and Chinese language model. The current configuration prefers the Transformers engine and falls back to the Paddle engine if initialization fails. Low-confidence reads can be retried with progressively stronger preprocessing. Suspicious empty or punctuation-only dialogue regions are written to `stage2_ocr/ocr_review.json` for optional manual correction.
+
+### Optional YOLO-seg bubble mask refinement
+
+For precise speech bubble boundary masks during erasing and rendering, the pipeline includes an optional two-stage refinement pass:
+
+1. RT-DETR detects speech bubbles and narration bounding boxes.
+2. If `YOLO_SEG_ENABLED = True`, RT-DETR is unloaded from GPU memory, and a custom YOLO instance segmentation model runs on padded crops of each bubble region.
+3. The resulting binary mask is base64-encoded into `stage1_detection/detection.json`.
+4. Stage 5 (Render) uses the YOLO mask to cleanly erase bubble interiors without bleeding into background art or character linework.
+
+To enable YOLO-seg refinement:
+
+```python
+# config.py
+YOLO_SEG_ENABLED = True
+YOLO_SEG_MODEL = "models/best.pt"  # path relative to project root
+YOLO_SEG_CONF = 0.5
+YOLO_SEG_DEVICE = "0"  # "0" for GPU, "cpu" for CPU
+```
 
 ## Translation and paraphrase handoffs
 
