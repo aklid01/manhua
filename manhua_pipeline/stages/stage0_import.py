@@ -3,6 +3,7 @@
 Normalize supported inputs (folder/ZIP/CBZ) into ordered pages and write manifest.
 """
 
+import os
 import re
 import shutil
 import tempfile
@@ -25,6 +26,7 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Import"
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 _STRIP_RATIO = 5.0
+_PASSTHROUGH_MODES = {"RGB", "L", "YCbCr"}
 
 
 def _numeric_key(p: Path) -> tuple:
@@ -35,17 +37,17 @@ def _numeric_key(p: Path) -> tuple:
 
 def _row_content_densities(image: Image.Image, config) -> list[float]:
     """Return a cheap per-row estimate of non-background/content density."""
+    import numpy as np
+
     gray = image.convert("L")
     sample_width = min(gray.width, 256)
     if sample_width != gray.width:
         gray = gray.resize((sample_width, gray.height), Image.Resampling.BILINEAR)
-    pixels = list(gray.getdata())
     threshold = int(getattr(config, "IMPORT_SLICE_CONTENT_THRESHOLD", 245))
-    densities = []
-    for y in range(gray.height):
-        row = pixels[y * sample_width : (y + 1) * sample_width]
-        densities.append(sum(value < threshold for value in row) / sample_width)
-    return densities
+    arr = np.frombuffer(gray.tobytes(), dtype=np.uint8).reshape(
+        gray.height, sample_width
+    )
+    return (arr < threshold).mean(axis=1).tolist()
 
 
 def _find_safe_seam(
@@ -298,6 +300,7 @@ def _import_folder(
     strip_count = 0
     sliced_count = 0
     page_number = 0
+    max_w = getattr(config, "IMPORT_MAX_WIDTH", 0)
 
     # Single-pass per source image: normalize dimensions, optionally slice, save.
     for source_index, src_file in enumerate(image_files, start=1):
@@ -306,10 +309,7 @@ def _import_folder(
                 # Peek at header without decoding pixels.
                 src_mode = im.mode
                 w, h = im.size
-                max_w = getattr(config, "IMPORT_MAX_WIDTH", 0)
                 needs_downscale = bool(max_w and w > max_w)
-                # Modes that are already valid 3-channel RGB for downstream stages.
-                _PASSTHROUGH_MODES = {"RGB", "L", "YCbCr"}
                 needs_convert = src_mode not in _PASSTHROUGH_MODES
 
                 ratio = h / w if w else 1.0
@@ -337,7 +337,10 @@ def _import_folder(
                     page_number += 1
                     dest_name = f"{page_number:03d}{extension}"
                     dest = pages_dir / dest_name
-                    shutil.copyfile(src_file, dest)
+                    try:
+                        os.link(src_file, dest)
+                    except OSError:
+                        shutil.copyfile(src_file, dest)
                     log_page(
                         logger,
                         _STAGE_INDEX,
