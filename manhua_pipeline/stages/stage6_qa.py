@@ -372,10 +372,7 @@ def run_qa(workspace: str, config) -> Path:
     render_map = {r["region_id"]: r for r in render_results if "region_id" in r}
 
     all_region_ids = (
-        set(ocr_map.keys())
-        | set(tr_map.keys())
-        | set(para_map.keys())
-        | set(render_map.keys())
+        ocr_map.keys() | tr_map.keys() | para_map.keys() | render_map.keys()
     )
 
     # Page rendering failure check (skip if render.json missing to avoid double-counting)
@@ -384,7 +381,7 @@ def run_qa(workspace: str, config) -> Path:
         has_critical = has_critical or page_crit
 
     # Analyze regions
-    sorted_region_ids = sorted(list(all_region_ids))
+    sorted_region_ids = sorted(all_region_ids)
     r_warnings, needs_attention, category_counts = _process_region_analysis(
         sorted_region_ids, ocr_map, tr_map, para_map, render_map
     )
@@ -430,11 +427,16 @@ def run_qa(workspace: str, config) -> Path:
 
     # Summary fields & Write qa.json
     total_pages = len(manifest.get("pages", []))
-    summary_drawn = sum(1 for r in render_results if r.get("rendered"))
-    summary_left = sum(1 for r in render_results if not r.get("rendered"))
-    summary_overflow = sum(1 for r in render_results if r.get("overflow"))
+    summary_drawn = summary_left = summary_overflow = 0
+    for r in render_results:
+        if r.get("rendered"):
+            summary_drawn += 1
+        else:
+            summary_left += 1
+        if r.get("overflow"):
+            summary_overflow += 1
     ocr_review_regions = [
-        r.get("region_id") for r in ocr_data.get("results", []) if r.get("ocr_review")
+        r.get("region_id") for r in ocr_results if r.get("ocr_review")
     ]
 
     qa_dir = ws / config.STAGE_FOLDERS["qa"]
@@ -485,11 +487,12 @@ def run_qa(workspace: str, config) -> Path:
     manifest["updated_at"] = now
     save_manifest(workspace, config, manifest)
 
-    for w in warnings_list:
-        from manhua_pipeline.events import PipelineEvent
-        from manhua_pipeline.io.event_emitter import get_event_emitter
+    from manhua_pipeline.events import PipelineEvent
+    from manhua_pipeline.io.event_emitter import get_event_emitter
 
-        get_event_emitter(ws, config, logger=logger).emit(
+    emitter = get_event_emitter(ws, config, logger=logger)
+    for w in warnings_list:
+        emitter.emit(
             PipelineEvent(
                 event=QA_ISSUE_DETECTED,
                 run_id=getattr(config, "_run_id", "unknown"),

@@ -13,8 +13,11 @@ logger = get_logger(__name__)
 _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME = 7, 7, "Package"
 
 
+_DIGIT_RE = re.compile(r"\d+")
+
+
 def _natural_key(p: Path) -> tuple:
-    nums = tuple(int(n) for n in re.findall(r"\d+", p.name))
+    nums = tuple(int(n) for n in _DIGIT_RE.findall(p.name))
     return nums if nums else (float("inf"),)
 
 
@@ -36,7 +39,7 @@ def _base_name(ws: Path, manifest: dict) -> str:
 
 
 def _write_zip(images: list[Path], out: Path) -> None:
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
         for img in images:
             zf.write(img, arcname=img.name)
 
@@ -58,9 +61,13 @@ def run_package(workspace: str, config, formats: list[str]) -> list[Path]:
 
     valid = set(getattr(config, "VALID_PACKAGE_FORMATS", ("zip", "cbz")))
     requested = [f.lower().strip() for f in formats if f.strip()]
-    for u in [f for f in requested if f not in valid]:
-        logger.warning("[%s] Unknown format ignored: %r", _STAGE_NAME, u)
-    requested = [f for f in requested if f in valid]
+    filtered = []
+    for f in requested:
+        if f in valid:
+            filtered.append(f)
+        else:
+            logger.warning("[%s] Unknown format ignored: %r", _STAGE_NAME, f)
+    requested = filtered
     if not requested:
         logger.info("[%s] No valid formats — nothing to package.", _STAGE_NAME)
         return []
