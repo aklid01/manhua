@@ -5,6 +5,7 @@ Records original Chinese + confidence; flags needs_correction below threshold.
 """
 
 import atexit
+import gc
 import json
 import time
 from datetime import datetime, timezone
@@ -53,8 +54,6 @@ def _close_ocr():
                     except Exception:
                         pass
     try:
-        import gc
-
         gc.collect()
     except Exception:
         pass
@@ -220,6 +219,7 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
             len(texts),
             len(scores),
         )
+    watermark_regex = getattr(config, "WATERMARK_REGEX", [])
     lines, confidences, filtered_any = [], [], False
     for index, txt in enumerate(texts):
         if txt is None:
@@ -229,7 +229,7 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
             continue
         conf = float(scores[index]) if index < len(scores) else 0.0
         is_wm = False
-        for rx in getattr(config, "WATERMARK_REGEX", []):
+        for rx in watermark_regex:
             if rx.search(txt):
                 is_wm = True
                 break
@@ -362,59 +362,61 @@ def _write_ocr_review(ws, ocr_dir, config, results, pages_map, region_by_id, pri
     return len(flagged)
 
 
-def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
-    """Run OCR on a single region and return the mapped result dictionary."""
+def _ocr_region(
+    region: dict, page: dict, page_im: "Image.Image", ocr_engine, config
+) -> dict:
+    """Run OCR on a single region and return the mapped result dictionary.
+
+    ``page_im`` must already be open; the caller is responsible for the context manager.
+    """
     page_num = region["page_number"]
-    img_path = ws / config.STAGE_FOLDERS["pages"] / page["filename"]
-    if not img_path.exists():
-        raise FileNotFoundError(f"Page file not found: {img_path}")
+    W, H = page_im.size
+    ocr_review_enabled = getattr(config, "OCR_REVIEW_ENABLED", True)
+    review_types = _review_types(config)
 
-    # Load page size
-    with Image.open(img_path) as page_im:
-        W, H = page_im.size
-        # Clamp bbox coordinates
-        x, y, w, h = (
-            region["read_region"]["x"],
-            region["read_region"]["y"],
-            region["read_region"]["w"],
-            region["read_region"]["h"],
+    # Clamp bbox coordinates
+    x, y, w, h = (
+        region["read_region"]["x"],
+        region["read_region"]["y"],
+        region["read_region"]["w"],
+        region["read_region"]["h"],
+    )
+    x0 = max(0, x)
+    y0 = max(0, y)
+    x1 = min(W, x + w)
+    y1 = min(H, y + h)
+
+    status = "success"
+    if x1 <= x0 or y1 <= y0:
+        original_text, mean_conf, min_conf, watermark_filtered = (
+            "",
+            0.0,
+            0.0,
+            False,
         )
-        x0 = max(0, x)
-        y0 = max(0, y)
-        x1 = min(W, x + w)
-        y1 = min(H, y + h)
-
-        status = "success"
-        if x1 <= x0 or y1 <= y0:
-            original_text, mean_conf, min_conf, watermark_filtered = (
-                "",
-                0.0,
-                0.0,
-                False,
-            )
-            status = "no_text"
-        else:
-            crop_im = page_im.crop((x0, y0, x1, y1))
-            original_text, mean_conf, min_conf, watermark_filtered = _read_best(
-                ocr_engine, crop_im, config
-            )
-            # Suspicious dialogue bubble (punct-only/empty) -> force the
-            # preprocessing ladder before giving up (normal retry is
-            # confidence-gated and will not fire here).
-            if (
-                getattr(config, "OCR_REVIEW_ENABLED", True)
-                and region.get("type") in _review_types(config)
-                and not watermark_filtered
-                and _is_punct_or_empty(original_text)
-            ):
-                forced = _read_forced_ladder(ocr_engine, crop_im, config)
-                if forced is not None and not _is_punct_or_empty(forced[0]):
-                    original_text, mean_conf, min_conf, watermark_filtered = forced
-            if not original_text.strip():
-                if watermark_filtered:
-                    status = "watermark_only"
-                else:
-                    status = "no_prediction" if mean_conf == 0.0 else "no_text"
+        status = "no_text"
+    else:
+        crop_im = page_im.crop((x0, y0, x1, y1))
+        original_text, mean_conf, min_conf, watermark_filtered = _read_best(
+            ocr_engine, crop_im, config
+        )
+        # Suspicious dialogue bubble (punct-only/empty) -> force the
+        # preprocessing ladder before giving up (normal retry is
+        # confidence-gated and will not fire here).
+        if (
+            ocr_review_enabled
+            and region.get("type") in review_types
+            and not watermark_filtered
+            and _is_punct_or_empty(original_text)
+        ):
+            forced = _read_forced_ladder(ocr_engine, crop_im, config)
+            if forced is not None and not _is_punct_or_empty(forced[0]):
+                original_text, mean_conf, min_conf, watermark_filtered = forced
+        if not original_text.strip():
+            if watermark_filtered:
+                status = "watermark_only"
+            else:
+                status = "no_prediction" if mean_conf == 0.0 else "no_text"
 
     # Edge touching computation
     eps = config.EDGE_TOUCH_EPS
@@ -442,8 +444,8 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
     # no actual words (punct-only or empty), not a watermark, not a split-edge
     # region. Very likely a PaddleOCR dropped-character failure.
     ocr_review = (
-        getattr(config, "OCR_REVIEW_ENABLED", True)
-        and region.get("type") in _review_types(config)
+        ocr_review_enabled
+        and region.get("type") in review_types
         and not watermark_filtered
         and not edge_touching
         and _is_punct_or_empty(original_text)
@@ -482,7 +484,7 @@ def _ocr_region(region: dict, page: dict, ocr_engine, config, ws: Path) -> dict:
 
 
 def _process_single_region_ocr(
-    region: dict, page: dict, ocr_engine, config, ws: Path
+    region: dict, page: dict, page_im: "Image.Image", ocr_engine, config
 ) -> tuple:
     """Run OCR for a single region, log progress details, handle exceptions gracefully.
 
@@ -491,7 +493,7 @@ def _process_single_region_ocr(
     """
     page_num = region["page_number"]
     try:
-        res = _ocr_region(region, page, ocr_engine, config, ws)
+        res = _ocr_region(region, page, page_im, ocr_engine, config)
         # Log details per read region
         if res["needs_correction"] and not (
             res["edge_touching"] and not res["has_usable_text"]
@@ -627,51 +629,57 @@ def run_ocr(workspace: str, config) -> Path:
     needs_correction_count = 0
     edge_touching_count = 0
 
-    # Group by page for clear page-based logging
     pages_map = {p["page_number"]: p for p in manifest.get("pages", [])}
     region_by_id = {r["region_id"]: r for r in detection.get("regions", [])}
+    skip_free_text = getattr(config, "RTDETR_SKIP_TEXT_FREE", False)
 
+    # Group regions by page so each page image is opened exactly once.
+    regions_by_page: dict[int, list] = {}
     for region in detection.get("regions", []):
-        page_num = region["page_number"]
+        regions_by_page.setdefault(region["page_number"], []).append(region)
+
+    for page_num, page_regions in sorted(regions_by_page.items()):
         page = pages_map.get(page_num)
-
         if not page or page.get("skip") or page.get("filename") is None:
-            logger.warning(
-                "[%s] Region %s references skipped/missing page %s",
-                _STAGE_NAME,
-                region["region_id"],
-                page_num,
-            )
+            for region in page_regions:
+                logger.warning(
+                    "[%s] Region %s references skipped/missing page %s",
+                    _STAGE_NAME,
+                    region["region_id"],
+                    page_num,
+                )
             continue
-        if getattr(config, "RTDETR_SKIP_TEXT_FREE", False) and region.get(
-            "is_free_text"
-        ):
-            continue
-        res, is_warning = _process_single_region_ocr(
-            region, page, ocr_engine, config, ws
-        )
-        if res["region_id"] in ocr_corrections:
-            res["original_text"] = ocr_corrections[res["region_id"]]
-            res["status"] = "manual_review"
-            res["ocr_source"] = "manual_review"
-            res["ocr_review"] = False
-            res["ocr_review_reason"] = None
-            res["has_usable_text"] = True
-            res["needs_correction"] = False
-            is_warning = False
-            logger.info(
-                "[%s] %s: applied manual OCR correction.",
-                _STAGE_NAME,
-                res["region_id"],
-            )
-        results.append(res)
 
-        if is_warning:
-            warnings += 1
-        if res["needs_correction"]:
-            needs_correction_count += 1
-        if res["edge_touching"]:
-            edge_touching_count += 1
+        img_path = ws / config.STAGE_FOLDERS["pages"] / page["filename"]
+        with Image.open(img_path) as page_im:
+            for region in page_regions:
+                if skip_free_text and region.get("is_free_text"):
+                    continue
+                res, is_warning = _process_single_region_ocr(
+                    region, page, page_im, ocr_engine, config
+                )
+                if res["region_id"] in ocr_corrections:
+                    res["original_text"] = ocr_corrections[res["region_id"]]
+                    res["status"] = "manual_review"
+                    res["ocr_source"] = "manual_review"
+                    res["ocr_review"] = False
+                    res["ocr_review_reason"] = None
+                    res["has_usable_text"] = True
+                    res["needs_correction"] = False
+                    is_warning = False
+                    logger.info(
+                        "[%s] %s: applied manual OCR correction.",
+                        _STAGE_NAME,
+                        res["region_id"],
+                    )
+                results.append(res)
+
+                if is_warning:
+                    warnings += 1
+                if res["needs_correction"]:
+                    needs_correction_count += 1
+                if res["edge_touching"]:
+                    edge_touching_count += 1
 
     # Output OCR JSON
     from importlib.metadata import version
