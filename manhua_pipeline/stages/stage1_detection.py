@@ -89,6 +89,41 @@ def _get_yolo_seg(config):
     return _YOLO_SEG_MODEL
 
 
+def _save_seg_failure(
+    crop: Image.Image,
+    img_path: Path,
+    ws: Path,
+    page_num: int,
+    region: dict,
+    config,
+) -> None:
+    if not getattr(config, "YOLO_SEG_SAVE_FAILURES", False):
+        return
+    try:
+        import shutil
+
+        fail_dir = Path(getattr(config, "YOLO_SEG_FAILURES_DIR", "debug/seg_failures"))
+        if not fail_dir.is_absolute():
+            fail_dir = config.PROJECT_ROOT / fail_dir
+        crops_dir = fail_dir / "crops"
+        pages_dir = fail_dir / "pages"
+        crops_dir.mkdir(parents=True, exist_ok=True)
+        pages_dir.mkdir(parents=True, exist_ok=True)
+
+        chapter_name = ws.name
+        reg_id = region.get("region_id", f"P{page_num:03d}")
+        crop_filename = f"{chapter_name}_{reg_id}.png"
+        crop.save(crops_dir / crop_filename)
+
+        page_ext = img_path.suffix or ".png"
+        page_filename = f"{chapter_name}_P{page_num:03d}{page_ext}"
+        target_page_path = pages_dir / page_filename
+        if not target_page_path.exists():
+            shutil.copy2(img_path, target_page_path)
+    except Exception as exc:
+        logger.warning("[%s] Failed saving seg failure sample: %s", _STAGE_NAME, exc)
+
+
 def _encode_mask_b64(pil_mask) -> str:
     """Encode a PIL 'L' mask image as a base64 PNG string."""
     import base64
@@ -158,12 +193,14 @@ def _run_yolo_seg_all_pages(
                         region.get("region_id"),
                         exc,
                     )
+                    _save_seg_failure(crop, img_path, ws, page_num, region, config)
                     continue
 
                 result = results[0]
                 masks = getattr(result, "masks", None)
                 boxes = getattr(result, "boxes", None)
                 if masks is None or not len(getattr(masks, "data", [])):
+                    _save_seg_failure(crop, img_path, ws, page_num, region, config)
                     continue
 
                 best_idx, best_conf = 0, 0.0

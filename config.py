@@ -40,6 +40,8 @@ YOLO_SEG_MODEL = "models/best.pt"  # relative to PROJECT_ROOT
 YOLO_SEG_CONF = 0.5  # masks below this confidence are discarded
 YOLO_SEG_DEVICE = "0"  # "cpu" | "0" for GPU (RT-DETR unloaded first)
 YOLO_SEG_PAD_FRAC = 0.15  # padding fraction added around parent_bubble crop
+YOLO_SEG_SAVE_FAILURES = True
+YOLO_SEG_FAILURES_DIR = "debug/seg_failures"
 
 
 # ---- Region IDs ----
@@ -159,7 +161,7 @@ TRANSLATION_RESPONSE_NAME = "translation_response.json"
 
 # ---- Ollama (local translation backend) ----
 OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_TRANSLATE_MODEL = "qwen2.5:3b-instruct"
+OLLAMA_TRANSLATE_MODEL = "translategemma:4b" # testing
 OLLAMA_BATCH_SIZE = 8
 OLLAMA_TIMEOUT = 120
 OLLAMA_TEMPERATURE = 0.2

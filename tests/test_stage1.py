@@ -486,3 +486,29 @@ def test_ios_does_not_merge_across_classes():
     ]
     kept = _dedupe_raw_boxes(regions, _Cfg())
     assert len(kept) == 2
+
+
+def test_save_seg_failure(tmp_path):
+    from PIL import Image
+    from manhua_pipeline.stages.stage1_detection import _save_seg_failure
+
+    crop = Image.new("RGB", (100, 100), color=(255, 0, 0))
+    img_path = tmp_path / "page_001.png"
+    crop.save(img_path)
+
+    ws = tmp_path / "chapter_01"
+    ws.mkdir()
+    region = {"region_id": "P001_R001"}
+
+    class _Cfg:
+        YOLO_SEG_SAVE_FAILURES = True
+        YOLO_SEG_FAILURES_DIR = str(tmp_path / "seg_failures")
+        PROJECT_ROOT = tmp_path
+
+    _save_seg_failure(crop, img_path, ws, 1, region, _Cfg())
+
+    crop_out = tmp_path / "seg_failures" / "crops" / "chapter_01_P001_R001.png"
+    page_out = tmp_path / "seg_failures" / "pages" / "chapter_01_P001.png"
+    assert crop_out.exists()
+    assert page_out.exists()
+
