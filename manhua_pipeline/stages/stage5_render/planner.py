@@ -1,3 +1,5 @@
+# Region rendering planner coordinating erasure, typography layout, and drawing.
+
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -13,6 +15,7 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Render"
 
 
+# Compute bounding geometry, erase original artwork, and prepare rendering plan
 def _plan_and_erase_region(
     region: dict,
     page_img: Image.Image,
@@ -157,10 +160,6 @@ def _plan_and_erase_region(
 
     erase_bubble_mask = bubble_mask
     if stitched_erase:
-        # A stitched text box can include source glyphs that the radiating
-        # bubble mask classifies as part of the ray ring. The full OCR box is
-        # the authoritative erase area; keep the measured mask for layout but
-        # use a padded text rectangle for this seam-crossing erase.
         erase_bubble_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
 
     min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.40))
@@ -257,10 +256,6 @@ def _plan_and_erase_region(
         )
         fallback_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
         if erase_meta.get("repaired_with_image_inpaint"):
-            # The original color mask is unsafe for placement too: its holes
-            # are what forced text toward the right edge. Keep the repaired
-            # image, but give typography the full parent-panel rectangle as a
-            # neutral layout mask.
             bubble_mask = inpainting._solid_rect_mask(bubble_box, bubble_box)
             bubble_mask_source = "image_inpaint_layout"
         else:
@@ -427,6 +422,7 @@ def _plan_and_erase_region(
     return plan
 
 
+# Draw text lines according to precalculated typography placements
 def _draw_region_plan(
     plan: RenderPlan,
     draw: ImageDraw.ImageDraw,
@@ -450,6 +446,7 @@ def _draw_region_plan(
         )
 
 
+# Emit telemetry events and build summary dictionary for rendered plan
 def _finalize_plan(
     plan: RenderPlan,
     *,

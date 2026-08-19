@@ -1,7 +1,4 @@
-"""Stage 0: Import.
-
-Normalize supported inputs (folder/ZIP/CBZ) into ordered pages and write manifest.
-"""
+# Stage 0: Normalize supported inputs (folder/ZIP/CBZ) into ordered pages and write manifest.
 
 import os
 import re
@@ -29,14 +26,14 @@ _STRIP_RATIO = 5.0
 _PASSTHROUGH_MODES = {"RGB", "L", "YCbCr"}
 
 
+# Numeric sorting key extracting embedded integer runs from filename
 def _numeric_key(p: Path) -> tuple:
-    """Sort key: tuple of integer runs from filename, raw name as stable tiebreak."""
     nums = tuple(int(n) for n in re.findall(r"\d+", p.name))
     return (nums, p.name)
 
 
+# Compute per-row non-background content density across image height
 def _row_content_densities(image: Image.Image, config) -> list[float]:
-    """Return a cheap per-row estimate of non-background/content density."""
     import numpy as np
 
     gray = image.convert("L")
@@ -50,10 +47,10 @@ def _row_content_densities(image: Image.Image, config) -> list[float]:
     return (arr < threshold).mean(axis=1).tolist()
 
 
+# Locate optimal low-content horizontal seam near desired split height
 def _find_safe_seam(
     image: Image.Image, desired: int, config, densities: list[float]
 ) -> int | None:
-    """Find the nearest low-content horizontal seam around ``desired``."""
     height = image.height
     target = max(1, int(getattr(config, "IMPORT_SLICE_TARGET_HEIGHT", 5000)))
     tolerance = max(
@@ -79,8 +76,8 @@ def _find_safe_seam(
     return min(candidates)[2]
 
 
+# Calculate safe vertical slice boundaries for oversized webtoon strips
 def _safe_slice_boundaries(image: Image.Image, config) -> list[tuple[int, int]] | None:
-    """Return safe vertical slices, or None when a tall page cannot be split safely."""
     if not getattr(config, "IMPORT_SLICE_ENABLED", True):
         return [(0, image.height)]
 
@@ -112,6 +109,7 @@ def _safe_slice_boundaries(image: Image.Image, config) -> list[tuple[int, int]] 
     return list(zip(points, points[1:]))
 
 
+# Normalize input images/archives into numbered pages and write manifest
 def run_import(
     input_path: str,
     workspace: str,
@@ -122,14 +120,11 @@ def run_import(
     fresh: bool = False,
     skip_last: int = 0,
 ) -> Path:
-    """Normalize input into ordered pages and write manifest.json."""
     t0 = time.monotonic()
     src = Path(input_path)
     ws = Path(workspace)
 
     if fresh:
-        import shutil
-
         logger.info(
             "[%s] Running --fresh: cleaning prior chapter artifacts in %s",
             _STAGE_NAME,
@@ -179,7 +174,6 @@ def run_import(
     }
 
     if src.suffix.lower() in {".cbz", ".zip"}:
-        # Pass the archive stem so chapter_id never comes from the temp dir
         manifest = _import_cbz(src, ws, pages_dir, config, t0, src.stem, meta)
     elif src.is_dir():
         manifest = _import_folder(src, ws, pages_dir, config, t0, src.name, meta)
@@ -229,6 +223,7 @@ def run_import(
     return out
 
 
+# Unpack CBZ/ZIP archive into temporary folder and run import
 def _import_cbz(
     src: Path,
     ws: Path,
@@ -245,6 +240,7 @@ def _import_cbz(
         return _import_folder(tmp_path, ws, pages_dir, config, t0, source_name, meta)
 
 
+# Process image directory, convert modes, slice tall strips, and build manifest
 def _import_folder(
     src: Path,
     ws: Path,
@@ -277,7 +273,6 @@ def _import_folder(
         _STAGE_NAME,
     )
 
-    # Clear stale canonical pages from any prior run before writing new ones.
     stale = [
         p
         for p in pages_dir.iterdir()
@@ -302,11 +297,9 @@ def _import_folder(
     page_number = 0
     max_w = getattr(config, "IMPORT_MAX_WIDTH", 0)
 
-    # Single-pass per source image: normalize dimensions, optionally slice, save.
     for source_index, src_file in enumerate(image_files, start=1):
         try:
             with Image.open(src_file) as im:
-                # Peek at header without decoding pixels.
                 src_mode = im.mode
                 w, h = im.size
                 needs_downscale = bool(max_w and w > max_w)
@@ -332,7 +325,6 @@ def _import_folder(
 
                 extension = src_file.suffix.lower()
 
-                # Fast path: copy the file byte-for-byte when no transformation is needed.
                 if not needs_convert and not needs_downscale and not needs_slice:
                     page_number += 1
                     dest_name = f"{page_number:03d}{extension}"
@@ -370,7 +362,6 @@ def _import_folder(
                     )
                     continue
 
-                # Decode path: mode conversion, downscale, or slicing required.
                 im = im.convert("RGB")
                 if needs_downscale:
                     im.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
@@ -412,7 +403,7 @@ def _import_folder(
                     )
         except Exception as exc:
             logger.warning(
-                "[%s] Source %03d/%03d — FAILED to read %s: %s",
+                "[%s] Source %03d/%03d - FAILED to read %s: %s",
                 _STAGE_NAME,
                 source_index,
                 total,
@@ -420,7 +411,6 @@ def _import_folder(
                 exc,
             )
             warnings += 1
-            # Keep entry with filename=None so downstream detects the gap
             page_number += 1
             pages.append(
                 {
@@ -439,7 +429,6 @@ def _import_folder(
                 }
             )
 
-    # input_format heuristic: majority-vote on the source strip ratio.
     input_format = "strip" if strip_count > total / 2 else "paginated"
     logger.info(
         "[%d/%d %s] Detected format: %s (%d source page(s) sliced)",
@@ -451,8 +440,6 @@ def _import_folder(
     )
 
     now = datetime.now(timezone.utc).isoformat()
-    # chapter_id: use slug from source_name; "chapter_0001" style is an option but
-    # slug is kept here for simplicity — downstream can reformat if needed.
     return {
         "chapter_id": _chapter_id_from(source_name),
         "source_archive": source_name,
@@ -473,8 +460,8 @@ def _import_folder(
     }
 
 
+# Derive sanitized chapter ID slug from filename or folder name
 def _chapter_id_from(name: str) -> str:
-    """Derive a chapter_id slug from the source filename/folder name."""
     slug = name.lower().replace(" ", "_")
     for ch in (".", "-", "(", ")"):
         slug = slug.replace(ch, "_")

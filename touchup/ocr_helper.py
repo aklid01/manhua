@@ -110,11 +110,11 @@ def _parse_legacy_result(
     return lines
 
 
+# Runs OCR on selected crop and returns detected text lines with global coordinates.
 def extract_text_and_boxes(
     image: Image.Image,
     box_xyxy: tuple[int, int, int, int],
 ) -> tuple[str, list[dict]]:
-    """Runs OCR on the selected crop and returns detected text lines with global coordinates."""
     x1, y1, x2, y2 = [int(v) for v in box_xyxy]
     w, h = image.size
     x1, y1 = max(0, min(w, x1)), max(0, min(h, y1))
@@ -132,7 +132,7 @@ def extract_text_and_boxes(
         return "", [{"text": "", "box": (x1, y1, x2, y2), "score": 1.0}]
 
     lines = []
-    # 1. Try PaddleX v3 predict API
+    # Try PaddleX v3 predict API first, then fall back to legacy ocr()
     try:
         results = engine.predict(crop_bgr)
         res = next(iter(results), None)
@@ -140,7 +140,6 @@ def extract_text_and_boxes(
             lines = _parse_predict_result(res, x1, y1, x2, y2)
     except Exception as exc_predict:
         logger.warning("PaddleOCR predict() call failed: %s", exc_predict)
-        # 2. Fallback to legacy ocr() call
         try:
             results = engine.ocr(crop_rgb)
             lines = _parse_legacy_result(results, x1, y1, x2, y2)

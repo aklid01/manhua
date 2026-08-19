@@ -7,8 +7,8 @@ from typing import Any
 logger = logging.getLogger("touchup.translator")
 
 
+# Load glossary terms from series or parent directory if present.
 def load_glossary(series_dir: Path | str | None) -> list[dict[str, Any]]:
-    """Attempts to find and load glossary.json in the series directory."""
     if not series_dir:
         return []
     path = Path(series_dir) / "glossary.json"
@@ -26,9 +26,9 @@ def load_glossary(series_dir: Path | str | None) -> list[dict[str, Any]]:
     return []
 
 
+# Resolve active or preferred Ollama model from config or Ollama API.
 def resolve_ollama_model(host: str = "http://localhost:11434") -> str:
-    """Finds the active or preferred Ollama model from config or localhost tags."""
-    # 1. Try reading config.py
+    # Try reading model name from config.py
     try:
         import config
 
@@ -39,7 +39,7 @@ def resolve_ollama_model(host: str = "http://localhost:11434") -> str:
     except Exception:
         pass
 
-    # 2. Query Ollama /api/tags for installed models
+    # Query Ollama /api/tags for installed models
     try:
         req = urllib.request.Request(f"{host}/api/tags")
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -57,50 +57,58 @@ def resolve_ollama_model(host: str = "http://localhost:11434") -> str:
     return "qwen2.5:3b-instruct"
 
 
-def translate_text(
-    chinese_text: str,
-    series_dir: Path | str | None = None,
-    host: str = "http://localhost:11434",
-) -> str:
-    """Translates Chinese text into English using Ollama API and series glossary."""
-    if not chinese_text.strip():
-        return ""
-
-    # Check for exact glossary match first
-    terms = load_glossary(series_dir)
-    clean_chinese = chinese_text.strip()
+def _find_glossary_match(terms: list[dict[str, Any]], clean_chinese: str) -> str | None:
     for term in terms:
         if isinstance(term, dict):
             src = term.get("source_term", "")
             tgt = term.get("target_term", "")
             if src and src == clean_chinese and tgt:
                 return tgt
+    return None
+
+
+def _build_translation_prompt(terms: list[dict[str, Any]], clean_chinese: str) -> str:
+    glossary_lines = [
+        f"- {t.get('source_term')}: {t.get('target_term')}"
+        for t in terms
+        if isinstance(t, dict) and t.get("source_term") and t.get("target_term")
+    ]
+    glossary_context = (
+        "Apply these glossary terms when applicable:\n"
+        + "\n".join(glossary_lines[:20])
+        + "\n\n"
+        if glossary_lines
+        else ""
+    )
+    return (
+        "You are an expert comic and webtoon translator. Translate this Chinese manhua text "
+        "into clean, natural, immersive English. Maintain gaming/UI/cultivation terminology.\n"
+        "Return ONLY the direct English translation without explanations, notes, or quotes.\n\n"
+        f"{glossary_context}"
+        f"Text to translate:\n{clean_chinese}"
+    )
+
+
+# Translate Chinese text into English using Ollama API and series glossary.
+def translate_text(
+    chinese_text: str,
+    series_dir: Path | str | None = None,
+    host: str = "http://localhost:11434",
+) -> str:
+    clean_chinese = chinese_text.strip()
+    if not clean_chinese:
+        return ""
+
+    # Check for exact glossary match first
+    terms = load_glossary(series_dir)
+    exact_match = _find_glossary_match(terms, clean_chinese)
+    if exact_match:
+        return exact_match
 
     # Query Ollama endpoint
     try:
         model = resolve_ollama_model(host)
-
-        glossary_context = ""
-        if terms:
-            glossary_lines = [
-                f"- {t.get('source_term')}: {t.get('target_term')}"
-                for t in terms
-                if isinstance(t, dict) and t.get("source_term") and t.get("target_term")
-            ]
-            if glossary_lines:
-                glossary_context = (
-                    "Apply these glossary terms when applicable:\n"
-                    + "\n".join(glossary_lines[:20])
-                    + "\n\n"
-                )
-
-        prompt = (
-            "You are an expert comic and webtoon translator. Translate this Chinese manhua text "
-            "into clean, natural, immersive English. Maintain gaming/UI/cultivation terminology.\n"
-            "Return ONLY the direct English translation without explanations, notes, or quotes.\n\n"
-            f"{glossary_context}"
-            f"Text to translate:\n{clean_chinese}"
-        )
+        prompt = _build_translation_prompt(terms, clean_chinese)
 
         options = {}
         try:

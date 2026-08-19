@@ -1,3 +1,4 @@
+import json
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,11 +18,13 @@ from touchup.segmenter import SAMSegmenter
 from touchup.translator import load_glossary, translate_text
 
 
+# Fixture providing QApplication instance for Qt-based UI tests
 @pytest.fixture(scope="module")
 def qt_app():
     return QApplication.instance() or QApplication([])
 
 
+# Fixture providing initialized TouchupApp window
 @pytest.fixture
 def touchup_window(qt_app):
     window = TouchupApp()
@@ -30,10 +33,12 @@ def touchup_window(qt_app):
     window.deleteLater()
 
 
+# Helper to extract RGB tuple from QColor
 def _rgb(color: QColor) -> tuple[int, int, int]:
     return color.red(), color.green(), color.blue()
 
 
+# Verify touch-up cache saves, updates, queries, and deletes per-page edits
 def test_touchup_cache(tmp_path):
     cache = TouchupCache(tmp_path)
     edit = {
@@ -61,6 +66,7 @@ def test_touchup_cache(tmp_path):
     assert len(cache.get_edits("001.png")) == 0
 
 
+# Verify selecting text bubble synchronizes toolbar controls and resets target line
 def test_touchup_selection_syncs_selected_bubble_and_resets_target(touchup_window):
     first = touchup_window.canvas.add_text_item("first\nline", QRectF(10, 10, 120, 80))
     first.set_line_style(
@@ -97,6 +103,7 @@ def test_touchup_selection_syncs_selected_bubble_and_resets_target(touchup_windo
     assert _rgb(touchup_window._text_color) == (0, 229, 255)
 
 
+# Verify changing font size updates size without clobbering color, stroke, or alignment
 def test_touchup_size_change_does_not_overwrite_other_style(touchup_window):
     item = touchup_window.canvas.add_text_item("styled", QRectF(10, 10, 120, 80))
     item.set_line_style(
@@ -123,6 +130,7 @@ def test_touchup_size_change_does_not_overwrite_other_style(touchup_window):
     assert line["direction"] == "vertical"
 
 
+# Verify mixed styles across lines show mixed indicator until explicitly modified
 def test_touchup_mixed_state_does_not_flatten_until_field_changes(touchup_window):
     item = touchup_window.canvas.add_text_item("one\ntwo", QRectF(10, 10, 160, 100))
     item.set_line_style(
@@ -158,6 +166,7 @@ def test_touchup_mixed_state_does_not_flatten_until_field_changes(touchup_window
     assert _rgb(item._lines_data[1]["color"]) == (0, 229, 255)
 
 
+# Verify cached per-line styles (colors, stroke, alignment) restore correctly from cache
 def test_touchup_cached_line_styles_survive_restore(touchup_window, tmp_path):
     touchup_window.cache = TouchupCache(tmp_path)
     touchup_window.current_image_path = tmp_path / "001.png"
@@ -216,6 +225,7 @@ def test_touchup_cached_line_styles_survive_restore(touchup_window, tmp_path):
     assert _rgb(restored._lines_data[1]["stroke_color"]) == (120, 10, 20)
 
 
+# Verify inpainter mask creation and background inpainting on text boxes
 def test_inpainter_text_erasure():
     img = Image.new("RGB", (200, 200), color=(255, 200, 100))
     draw = ImageDraw.Draw(img)
@@ -233,11 +243,11 @@ def test_inpainter_text_erasure():
 
     inpainted_img, out_mask = inpaint_text_regions(img, text_boxes, sam_mask=sam_mask)
     assert inpainted_img.size == (200, 200)
-    # Text region should no longer be pure black
     pixel = inpainted_img.getpixel((75, 75))
     assert pixel != (0, 0, 0)
 
 
+# Verify SAM segmenter generates 2D boolean mask from bounding box prompt
 def test_sam_segmenter_box():
     segmenter = SAMSegmenter()
     img = Image.new("RGB", (100, 100), color=(255, 255, 255))
@@ -249,6 +259,7 @@ def test_sam_segmenter_box():
     assert mask.dtype == bool
 
 
+# Verify glossary lookup loads terms and performs exact matches during translation
 def test_glossary_lookup(tmp_path):
     glossary = {
         "version": "v1",
@@ -256,7 +267,6 @@ def test_glossary_lookup(tmp_path):
             {"source_term": "万灵药", "target_term": "Panacea"},
         ],
     }
-    import json
 
     (tmp_path / "glossary.json").write_text(json.dumps(glossary), encoding="utf-8")
 

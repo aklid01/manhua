@@ -6,7 +6,7 @@ from typing import Any
 
 
 class TouchupCache:
-    """Manages local cache for touchup edits per page or chapter."""
+    # Manages local JSON cache for touchup edits per page or chapter.
 
     def __init__(self, directory: Path | str):
         self.directory = Path(directory)
@@ -45,7 +45,7 @@ class TouchupCache:
 
         edit_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Update existing or append
+        # Update existing edit entry or append a new one
         for idx, existing in enumerate(edits):
             if existing.get("edit_id") == edit_id:
                 edits[idx] = edit_dict

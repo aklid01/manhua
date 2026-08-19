@@ -1,9 +1,4 @@
-"""Stage 3: Translation package.
-
-Literal translation via a pluggable backend. v0 = manual JSON handoff.
-Emits translation_prompt.json; ingests translation_response.json on re-run.
-Enforces locked glossary terms; utilizes mcp by default.
-"""
+# Stage 3: Literal translation package and exported symbol bindings.
 
 import sys
 from types import ModuleType
@@ -66,7 +61,6 @@ from manhua_pipeline.stages.stage3_translation.triage import (
 )
 
 _SUBMODULE_MAP = {
-    # triage
     "_CJK_RE": triage,
     "_FULLWIDTH_MAP": triage,
     "_DIALOGUE_SIGNAL_PUNCT": triage,
@@ -85,25 +79,21 @@ _SUBMODULE_MAP = {
     "_skip_row": triage,
     "_translated_row": triage,
     "_partition_by_triage": triage,
-    # backends
     "TranslatorBackend": backends,
     "ManualBackend": backends,
     "McpBackend": backends,
     "OllamaBackend": backends,
     "_get_backend": backends,
-    # glossary
     "_locked_terms": glossary,
     "_build_locked_index": glossary,
     "_resolve_locked_glossary": glossary,
     "_enforce_glossary": glossary,
-    # bundle
     "_PROMPT_INSTRUCTIONS": bundle,
     "_build_bundle": bundle,
     "_validate_response": bundle,
     "_build_contextual_retry_prompt": bundle,
     "build_translation_bundle": bundle,
     "write_translation_response": bundle,
-    # engine
     "_partition_regions_translation": engine,
     "_handle_unresolved_region": engine,
     "_load_raw_overrides": engine,
@@ -113,6 +103,7 @@ _SUBMODULE_MAP = {
 }
 
 
+# Dynamic module proxy synchronizing attribute updates into submodules
 class _Stage3Module(ModuleType):
     def __setattr__(self, name, value):
         super().__setattr__(name, value)

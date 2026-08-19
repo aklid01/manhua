@@ -1,3 +1,5 @@
+# Persistent settings management and series base directory resolution.
+
 import json
 from pathlib import Path
 
@@ -8,8 +10,8 @@ logger = get_logger(__name__)
 SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "settings.json"
 
 
+# Load settings from settings.json
 def load_settings() -> dict:
-    """Load settings from settings.json, returning empty dict on failure/missing."""
     if not SETTINGS_PATH.exists():
         return {}
     try:
@@ -20,40 +22,36 @@ def load_settings() -> dict:
         return {}
 
 
+# Save settings dictionary to settings.json
 def save_settings(settings: dict) -> None:
-    """Save settings dictionary to settings.json."""
     try:
         with SETTINGS_PATH.open("w", encoding="utf-8") as fh:
             json.dump(settings, fh, ensure_ascii=False, indent=2)
     except Exception as exc:
         logger.warning("Failed to save settings to %s: %s", SETTINGS_PATH, exc)
-        pass
 
 
+# Retrieve saved series output directory from settings
 def get_output_dir() -> str:
-    """Get the saved output_dir from settings."""
     return load_settings().get("output_dir", "")
 
 
+# Persist configured series output directory to settings
 def set_output_dir(path: str) -> None:
-    """Set and persist the output_dir to settings."""
     settings = load_settings()
     settings["output_dir"] = str(Path(path).resolve())
     save_settings(settings)
 
 
+# Resolve series base directory via CLI argument, saved setting, or prompt
 def resolve_base_dir(args, config) -> Path:
-    """Resolve the series base directory following the priority order."""
-    # 1. Check CLI args if available
     if args and getattr(args, "output_dir", None):
         return Path(args.output_dir).resolve()
 
-    # 2. Check saved settings
     output_dir = get_output_dir()
     if output_dir:
         return Path(output_dir).resolve()
 
-    # 3. Prompt user (interactive input)
     try:
         ans = input(
             "Where should chapters be stored? This is your series folder: "
@@ -77,6 +75,7 @@ _CREDITS_DEFAULTS = {
 }
 
 
+# Retrieve credits dictionary merged with defaults
 def get_credits() -> dict:
     saved = load_settings().get("credits", {}) or {}
     return {**_CREDITS_DEFAULTS, **{k: v for k, v in saved.items() if v}}

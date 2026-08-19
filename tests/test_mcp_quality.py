@@ -1,3 +1,5 @@
+# Unit tests for FastMCP paraphrase prompt directives and quality logging.
+
 import json
 import logging
 from pathlib import Path
@@ -5,6 +7,7 @@ from pathlib import Path
 import config
 
 
+# Helper to set up mock chapter workspace for MCP tests
 def _mk_chapter(base: Path, name: str, awaiting="translate"):
     ch = base / name
     ch.mkdir(parents=True, exist_ok=True)
@@ -69,6 +72,7 @@ def _mk_chapter(base: Path, name: str, awaiting="translate"):
         )
 
 
+# Verify paraphrase bundle front-loads instructions in READ_FIRST field
 def test_bundle_front_loads_directive(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
     from manhua_pipeline.stages import stage4_paraphrase as s4
@@ -87,6 +91,7 @@ def test_bundle_front_loads_directive(tmp_path, monkeypatch):
     assert s4._PROMPT_INSTRUCTIONS.strip()[:20] in bundle["READ_FIRST"]
 
 
+# Verify MCP tool docstring emphasizes rewrite rules and submission tool
 def test_get_paraphrase_bundle_docstring_has_rule():
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -97,6 +102,7 @@ def test_get_paraphrase_bundle_docstring_has_rule():
     assert "SUBMIT_PARAPHRASE" in up
 
 
+# Verify paraphrase chapter prompt embeds instructions and regions
 def test_paraphrase_prompt_embeds_directive_and_lines(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
     from manhua_pipeline.stages import stage4_paraphrase as s4
@@ -113,6 +119,7 @@ def test_paraphrase_prompt_embeds_directive_and_lines(tmp_path, monkeypatch):
     assert "JSON" in text.upper()
 
 
+# Verify bundle and prompt directives share common instruction source snippet
 def test_directive_single_source(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
     from manhua_pipeline.stages import stage4_paraphrase as s4
@@ -129,6 +136,7 @@ def test_directive_single_source(tmp_path, monkeypatch):
     assert snippet in text
 
 
+# Verify paraphrase submission logs count of successfully written entries
 def test_submit_logs_written_count(tmp_path, monkeypatch, caplog):
     from manhua_pipeline.adapters import mcp_server as srv
 

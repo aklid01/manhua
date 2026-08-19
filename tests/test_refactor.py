@@ -1,25 +1,41 @@
+# Unit tests for chapter isolation, settings persistence, glossary inheritance, and rendering.
+
 import json
 
 import pytest
+from PIL import Image, ImageFont
 
 import config
+import manhua_pipeline.stages.stage3_translation as s3
+import manhua_pipeline.stages.stage4_paraphrase as s4
+import manhua_pipeline.stages.stage5_render as s5
+import pipeline
+from manhua_pipeline.io import settings as st
+from manhua_pipeline.io.glossary_series import (
+    load_series_glossary,
+    series_glossary_path,
+)
+from manhua_pipeline.io.overrides import load_overrides
+from manhua_pipeline.stages import stage5_render
+from manhua_pipeline.stages.stage0_import import run_import
 
 
+# Fixture disabling subprocess execution for synchronous in-process test runs
 @pytest.fixture(autouse=True)
 def disable_batch_subprocess(monkeypatch):
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", False)
 
 
+# Verify base directory prompt saves to settings.json and reuses value without re-prompting
 def test_settings_prompt_saved_and_reused(tmp_path, monkeypatch):
-    from manhua_pipeline.io import settings as st
-
     monkeypatch.setattr(st, "SETTINGS_PATH", tmp_path / "settings.json")
     monkeypatch.setattr("builtins.input", lambda *_: str(tmp_path / "SeriesA"))
-    base = st.resolve_base_dir(args=None, config=config)  # prompts, saves
+    base = st.resolve_base_dir(args=None, config=config)
     assert base == (tmp_path / "SeriesA")
     saved = json.loads((tmp_path / "settings.json").read_text())
     assert saved["output_dir"] == str(tmp_path / "SeriesA")
-    # second call reuses without prompting
+
+    # Second call reuses without prompting
     monkeypatch.setattr(
         "builtins.input",
         lambda *_: (_ for _ in ()).throw(AssertionError("should not prompt")),
@@ -27,36 +43,22 @@ def test_settings_prompt_saved_and_reused(tmp_path, monkeypatch):
     assert st.resolve_base_dir(args=None, config=config) == (tmp_path / "SeriesA")
 
 
+# Verify distinct chapters import into separate directories with isolated manifests
 def test_two_chapters_isolated(tmp_path):
-    import json
-
-    from PIL import Image
-
-    from manhua_pipeline.stages.stage0_import import run_import
-
     base = tmp_path / "SeriesA"
     for stem in ("chap_a", "chap_b"):
         src = tmp_path / stem
         src.mkdir()
         Image.new("RGB", (860, 1214)).save(src / "00000000_00010000.jpg")
-        run_import(
-            str(src), str(base / stem), config
-        )  # base/stem is the chapter dir now
+        run_import(str(src), str(base / stem), config)
     assert (base / "chap_a" / "manifest.json").exists()
     assert (base / "chap_b" / "manifest.json").exists()
     ma = json.loads((base / "chap_a" / "manifest.json").read_text())
     assert "chap_a" in ma["chapter_id"]
 
 
+# Verify series-level glossary terms are loaded and accessible by chapters
 def test_series_glossary_inherited(tmp_path):
-    import json
-
-    import config
-    from manhua_pipeline.io.glossary_series import (
-        load_series_glossary,
-        series_glossary_path,
-    )
-
     base = tmp_path / "SeriesA"
     base.mkdir()
     p = series_glossary_path(base, config)
@@ -88,11 +90,8 @@ def test_series_glossary_inherited(tmp_path):
     assert {"yu_lili", "lin_yi"} <= ids
 
 
+# Verify fresh import flag clears previous stage intermediate files
 def test_fresh_clears_chapter_artifacts(tmp_path):
-    from PIL import Image
-
-    from manhua_pipeline.stages.stage0_import import run_import
-
     base = tmp_path / "SeriesA"
     src = tmp_path / "chap_a"
     src.mkdir()
@@ -105,13 +104,8 @@ def test_fresh_clears_chapter_artifacts(tmp_path):
     assert not (ch / "stage3_translation" / "translation_response.json").exists()
 
 
+# Verify rendered pages preserve original source filenames and extensions
 def test_render_original_filenames(tmp_path, monkeypatch):
-    import json
-
-    from PIL import Image, ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -180,6 +174,7 @@ def test_render_original_filenames(tmp_path, monkeypatch):
     assert (ch / "stage5_render" / "rendered" / "001.jpg").exists()
 
 
+# Verify per-chapter overrides.json files remain completely independent
 def test_two_chapters_independent_overrides_and_overlays(tmp_path):
     ch1 = tmp_path / "chap_a"
     ch2 = tmp_path / "chap_b"
@@ -187,7 +182,6 @@ def test_two_chapters_independent_overrides_and_overlays(tmp_path):
     ch2.mkdir()
     (ch1 / "overrides.json").write_text('{"P001_R001": "override_a"}')
     (ch2 / "overrides.json").write_text('{"P001_R001": "override_b"}')
-    from manhua_pipeline.io.overrides import load_overrides
 
     ov1 = load_overrides(ch1, config)
     ov2 = load_overrides(ch2, config)
@@ -195,35 +189,23 @@ def test_two_chapters_independent_overrides_and_overlays(tmp_path):
     assert ov2["P001_R001"] == "override_b"
 
 
+# Verify pipeline run_all halts execution when a stage returns None (awaiting handoff)
 def test_run_all_stops_at_handoff(tmp_path, monkeypatch):
-    import pipeline
-
     calls = []
-    import manhua_pipeline.stages.stage3_translation as s3
-    import manhua_pipeline.stages.stage4_paraphrase as s4
-    import manhua_pipeline.stages.stage5_render as s5
 
     monkeypatch.setattr(
         s3,
         "run_translation",
         lambda ws, cfg, **kw: calls.append("t") or None,
-    )  # None => awaiting handoff
+    )
     monkeypatch.setattr(s4, "run_paraphrase", lambda ws, cfg, **kw: calls.append("p"))
     monkeypatch.setattr(s5, "run_render", lambda ws, cfg, **kw: calls.append("r"))
     pipeline._run_all_from(tmp_path, config, start="translate")
-    assert calls == [
-        "t"
-    ]  # stopped after translation returned None; later stages NOT called
+    assert calls == ["t"]
 
 
+# Verify default bold font asset resolves and renders successfully
 def test_bold_font_resolves_and_renders(tmp_path):
-    import json
-
-    from PIL import Image
-
-    import config
-    from manhua_pipeline.stages import stage5_render
-
     assert "ComicNeue-Bold.ttf" in str(config.FONT_PATH)
 
     ch = tmp_path / "chap_a"

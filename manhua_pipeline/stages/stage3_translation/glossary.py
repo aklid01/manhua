@@ -1,3 +1,5 @@
+# Locked glossary term matching, resolution, and compliance checking for Stage 3.
+
 from manhua_pipeline.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -7,10 +9,12 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Translation"
 
 
+# Extract locked terms from glossary dictionary
 def _locked_terms(glossary: dict) -> list[dict]:
     return [t for t in glossary.get("terms", []) if t.get("locked")]
 
 
+# Build lookup dictionary mapping locked source terms to target translations
 def _build_locked_index(locked: list[dict]) -> dict[str, str]:
     return {
         t["source_term"]: t["target_term"]
@@ -19,6 +23,7 @@ def _build_locked_index(locked: list[dict]) -> dict[str, str]:
     }
 
 
+# Resolve matching regions directly using locked glossary dictionary
 def _resolve_locked_glossary(
     regions: list[dict], locked_index: dict[str, str]
 ) -> tuple[dict[str, str], list[dict]]:
@@ -42,6 +47,7 @@ def _resolve_locked_glossary(
     return resolved, remaining
 
 
+# Verify locked glossary terms in translation and track applied term IDs and conflicts
 def _enforce_glossary(
     original_zh: str, translation: str, locked: list[dict]
 ) -> tuple[str, list[str], bool]:

@@ -1,3 +1,5 @@
+# Translation pipeline engine orchestrating triage, backends, overrides, and glossary locking.
+
 import json
 import re
 import time
@@ -30,6 +32,7 @@ _STAGE_NAME = "Translation"
 _CJK_BLOCK_RE = re.compile(r"[\u3400-\u9fff]+")
 
 
+# Partition chapter regions into overridden, usable, and skipped sets
 def _partition_regions_translation(
     all_results: list[dict], overrides: dict, config, log: bool = True
 ) -> tuple[list[dict], list[dict], list[dict]]:
@@ -86,6 +89,7 @@ def _partition_regions_translation(
     return overridden_regions, usable, skipped
 
 
+# Route unresolved translation region to Stage 4 recovery or manual prompt
 def _handle_unresolved_region(
     *,
     region: dict,
@@ -103,9 +107,6 @@ def _handle_unresolved_region(
         getattr(config, "TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE", True)
         and getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
     ):
-        # Keep the original OCR text on the region. Stage 4 will use it for a
-        # translation+paraphrase recovery task; this is deliberately separate
-        # from the existing single-character CJK/SFX passthrough source.
         region["translation_source"] = "translation_recovery"
         logger.warning(
             "[%s] %s -> handing original CJK to Stage 4 translation recovery",
@@ -180,6 +181,7 @@ def _handle_unresolved_region(
     return False
 
 
+# Load raw overrides JSON dictionary from disk
 def _load_raw_overrides(path) -> dict:
     if not path.exists():
         return {}
@@ -190,6 +192,7 @@ def _load_raw_overrides(path) -> dict:
         return {}
 
 
+# Context container holding data and configuration for translation output writing
 @dataclass
 class TranslationWriteContext:
     ws: Path
@@ -208,6 +211,7 @@ class TranslationWriteContext:
     glossary_resolved_ids: frozenset = frozenset()
 
 
+# Write translation.json artifact and update manifest stage progress
 def _write_output(ctx: TranslationWriteContext) -> Path:
     ws, config, manifest = ctx.ws, ctx.config, ctx.manifest
     ocr_data, glossary_data, translation_map = (
@@ -438,6 +442,7 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
     return out_path
 
 
+# Execute full Stage 3 translation workflow over OCR regions
 def run_translation(
     workspace: str, config, *, allow_prompt: bool = False
 ) -> Path | None:
@@ -533,7 +538,7 @@ def run_translation(
 
     if not usable:
         logger.info(
-            "[%d/%d %s] No usable regions needing LLM translation — completing without handoff.",
+            "[%d/%d %s] No usable regions needing LLM translation - completing without handoff.",
             _STAGE_INDEX,
             _TOTAL_STAGES,
             _STAGE_NAME,

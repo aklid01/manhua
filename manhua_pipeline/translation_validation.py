@@ -1,8 +1,4 @@
-"""Pure validation and structured outcomes for translation responses.
-
-Validation never calls input(), writes files, or manipulates UI.
-All rejection reasons are preserved as typed fields.
-"""
+# Pure validation and structured outcome evaluation for translation responses.
 
 import re
 from dataclasses import dataclass
@@ -29,14 +25,17 @@ _FULLWIDTH_MAP = {
 }
 
 
+# Check if string contains any CJK ideographs
 def _contains_cjk(text: str) -> bool:
     return bool(_CJK_RE.search(text or ""))
 
 
+# Count number of CJK characters in string
 def _cjk_char_count(text: str) -> int:
     return sum(1 for c in (text or "") if _contains_cjk(c))
 
 
+# Calculate ratio of CJK characters to total non-whitespace characters
 def _cjk_ratio(text: str) -> float:
     chars = [c for c in text if not c.isspace()]
     if not chars:
@@ -47,16 +46,19 @@ def _cjk_ratio(text: str) -> float:
 _ESCAPED_NEWLINE_RE = re.compile(r"\\(?:r\\n|n|r)", re.IGNORECASE)
 
 
+# Normalize escaped newline characters to actual newlines
 def normalize_newlines(text: str) -> str:
     if not text:
         return text
     return _ESCAPED_NEWLINE_RE.sub("\n", text)
 
 
+# Convert fullwidth CJK punctuation to ASCII equivalents
 def normalize_punct(text: str) -> str:
     return "".join(_FULLWIDTH_MAP.get(c, c) for c in text)
 
 
+# Container for region translation validation result and error details
 @dataclass(frozen=True)
 class TranslationIssue:
     region_id: str
@@ -69,6 +71,7 @@ class TranslationIssue:
     source: str = "ollama"
 
 
+# Validate parsed translation dictionary against expected region IDs
 def validate_expected_regions(
     parsed: dict,
     expected_ids: set[str],
@@ -76,17 +79,6 @@ def validate_expected_regions(
     attempt: int = 1,
     source: str = "ollama",
 ) -> dict[str, TranslationIssue]:
-    """Validate a parsed response dict against expected region IDs.
-
-    Each rejection reason is preserved distinctly:
-      missing_key        - region_id absent from parsed dict
-      non_string_value   - value is not a str
-      empty_string       - value is ""
-      whitespace_only    - value is non-empty but all whitespace
-      cjk_ratio_exceeded - >30% Han ideographs remain in translation
-
-    Accepted entries are normalized and stored in accepted_text.
-    """
     results: dict[str, TranslationIssue] = {}
 
     for region_id in expected_ids:
@@ -161,12 +153,8 @@ def validate_expected_regions(
     return results
 
 
+# Check whether region contains meaningful CJK dialogue beyond trivial noise
 def is_meaningful_region(original_text: str, config) -> bool:
-    """True if a region has CJK content that is meaningful (not trivially short/empty).
-
-    Short CJK text is NOT trivial by length alone - 2-3 character names are
-    meaningful and must not be silently dropped.
-    """
     text = (original_text or "").strip()
     if not text:
         return False
@@ -174,6 +162,4 @@ def is_meaningful_region(original_text: str, config) -> bool:
     n = _cjk_char_count(text)
     if n == 0:
         return False
-    # Only 0-char regions or single-char noise below the threshold are non-meaningful.
-    # The threshold MUST stay at 1 (default) - raising it to 3 would silently drop names.
     return n > thresh

@@ -1,3 +1,5 @@
+# Scanlator credits page selection, text fitting, and image generation.
+
 import random
 from pathlib import Path
 
@@ -10,6 +12,7 @@ logger = get_logger(__name__)
 _STAGE_NAME = "Render"
 
 
+# Iteratively scale down font size to fit within maximum width bounds
 def _fit_font(draw, text, font_path, max_pt, max_w):
     pt = max_pt
     while pt >= 10:
@@ -20,6 +23,7 @@ def _fit_font(draw, text, font_path, max_pt, max_w):
     return ImageFont.truetype(font_path, 10)
 
 
+# Sample background colors near coordinate to derive fill color
 def _sample_bg(im, cx, cy, W, H, align):
     offs = (0.02, 0.10, 0.18) if align == "left" else (-0.12, -0.06, 0.06, 0.12)
     pts = []
@@ -32,6 +36,7 @@ def _sample_bg(im, cx, cy, W, H, align):
     return tuple(sorted(c[i] for c in pts)[len(pts) // 2] for i in range(3))
 
 
+# Render final chapter scanlator credits page from template
 def _render_credits_page(render_dir: Path, config, page_size) -> Path | None:
     try:
         credits = get_credits()

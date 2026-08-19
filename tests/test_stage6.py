@@ -1,8 +1,11 @@
+# Unit tests for Stage 6 Quality Assurance validation, warning categorization, and review flags.
+
 import json
 
 import config
 
 
+# Helper to configure mock workspace with OCR, translation, paraphrase, and render stage outputs
 def _setup(ws, ocr=None, tr=None, para=None, render=None, manifest_extra=None):
     ws.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -37,6 +40,7 @@ def _setup(ws, ocr=None, tr=None, para=None, render=None, manifest_extra=None):
     _w("stage5_render", "render.json", render or {"results": [], "outputs": []})
 
 
+# Verify flawless chapter passes QA with SUCCESS verdict and zero warnings
 def test_qa_clean_success(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -92,6 +96,7 @@ def test_qa_clean_success(tmp_path):
     assert m["status"] == "SUCCESS"
 
 
+# Verify chapters with multiple unrendered regions trigger REVIEW status and overrides template
 def test_qa_review_and_overrides_stub(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -134,6 +139,7 @@ def test_qa_review_and_overrides_stub(tmp_path):
     assert stub["P001_R001"] == ""
 
 
+# Verify existing manual overrides are preserved when QA runs
 def test_qa_preserves_existing_overrides(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -172,6 +178,7 @@ def test_qa_preserves_existing_overrides(tmp_path):
     assert stub["P001_R001"] == "My manual text"
 
 
+# Verify missing stage artifact triggers FAILED status
 def test_qa_missing_artifact_failed(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -190,6 +197,7 @@ def test_qa_missing_artifact_failed(tmp_path):
     assert any(w["category"] == "missing_artifact" for w in qa["warnings"])
 
 
+# Verify QA checks dictionary accurately tallies individual warning categories
 def test_qa_category_counts(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -243,11 +251,11 @@ def test_qa_category_counts(tmp_path):
     assert qa["checks"].get("glossary_conflict", 0) == 1
 
 
+# Verify QA correctly evaluates rendered pages without false failures when page list is absent
 def test_qa_render_page_fallback_no_false_failure(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
     ws = tmp_path / "workspace"
-    # render.json has NO top-level pages/outputs list — only per-region results with page_number+rendered
     render = {
         "results": [
             {
@@ -294,15 +302,15 @@ def test_qa_render_page_fallback_no_false_failure(tmp_path):
     )
     run_qa(str(ws), config)
     qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
-    assert qa["status"] == "SUCCESS"  # NOT falsely FAILED
+    assert qa["status"] == "SUCCESS"
     assert qa["checks"]["rendering_failure"] == 0
 
 
+# Verify successfully translated/rendered mid-confidence regions are not added to overrides stub
 def test_qa_midconf_not_in_overrides(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
     ws = tmp_path / "workspace"
-    # needs_correction True (0.3-0.7 band) BUT it translated, paraphrased, and rendered fine
     _setup(
         ws,
         ocr={
@@ -350,17 +358,15 @@ def test_qa_midconf_not_in_overrides(tmp_path):
     )
     run_qa(str(ws), config)
     qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
-    # low_ocr_confidence still counted as a warning...
     assert qa["checks"]["low_ocr_confidence"] == 1
-    # ...but the region is NOT in needs_attention (it rendered fine)
     assert all(item["region_id"] != "P001_R001" for item in qa["needs_attention"])
-    # overrides stub therefore not created for it (or created without this id)
     ov = ws / "overrides.json"
     if ov.exists():
         stub = json.loads(ov.read_text(encoding="utf-8"))
         assert "P001_R001" not in stub
 
 
+# Verify missing render artifact is reported as a single critical error without duplicate warnings
 def test_qa_missing_render_single_critical(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -387,9 +393,10 @@ def test_qa_missing_render_single_critical(tmp_path):
     qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
     assert qa["status"] == "FAILED"
     assert qa["checks"]["missing_artifact"] >= 1
-    assert qa["checks"]["rendering_failure"] == 0  # not double-counted
+    assert qa["checks"]["rendering_failure"] == 0
 
 
+# Verify missing paraphrase region is treated as informational and does not trigger failure
 def test_qa_missing_paraphrase_is_info(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -439,11 +446,12 @@ def test_qa_missing_paraphrase_is_info(tmp_path):
     )
     run_qa(str(ws), config)
     qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
-    assert qa["checks"].get("missing_paraphrase", 0) == 1  # still visible in checks
-    assert qa["status"] == "SUCCESS"  # but not counted toward verdict
+    assert qa["checks"].get("missing_paraphrase", 0) == 1
+    assert qa["status"] == "SUCCESS"
     assert qa["total_warnings"] == 0
 
 
+# Verify clean QA run marks manifest current_stage as complete
 def test_qa_marks_complete(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -497,13 +505,8 @@ def test_qa_marks_complete(tmp_path):
     assert "qa" in m["completed_stages"]
 
 
+# Verify flagged OCR review regions are listed as informational without failing verdict
 def test_qa_ocr_review_informational(tmp_path):
-    """A flagged ocr_review region is LISTED (info) but does NOT affect the
-    SUCCESS/REVIEW/FAILED verdict, and its ids/file are surfaced in summary.
-
-    Mirrors the P022_R002 "诶？"->"？" case: OCR dropped a char, patch #4 rendered
-    "?" (translated via punct_passthrough), Stage 2 queued it for manual review.
-    """
     from manhua_pipeline.stages.stage6_qa import run_qa
 
     ws = tmp_path / "workspace"
@@ -558,24 +561,21 @@ def test_qa_ocr_review_informational(tmp_path):
     run_qa(str(ws), config)
     qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
 
-    # Verdict stays clean (info does not count as a warning)
     assert qa["status"] == "SUCCESS"
     assert qa["total_warnings"] == 0
 
-    # Listed as an info warning under the ocr_review category
     ocr_rev = [w for w in qa["warnings"] if w["category"] == "ocr_review"]
     assert len(ocr_rev) == 1
     assert ocr_rev[0]["severity"] == "info"
     assert ocr_rev[0]["region_id"] == "P022_R002"
 
-    # Surfaced in summary with a pointer to the review file
     assert qa["summary"]["ocr_review_count"] == 1
     assert qa["summary"]["ocr_review_regions"] == ["P022_R002"]
     assert qa["summary"]["ocr_review_file"].endswith("ocr_review.json")
 
 
+# Verify QA summary reflects zero OCR review count when no regions are flagged
 def test_qa_no_ocr_review_when_none_flagged(tmp_path):
-    """When nothing is flagged, summary count is 0 and file pointer is None."""
     from manhua_pipeline.stages.stage6_qa import run_qa
 
     ws = tmp_path / "workspace"

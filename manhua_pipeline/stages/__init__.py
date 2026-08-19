@@ -1,1 +1,1 @@
-"""Pipeline stages."""
+# Pipeline stages package.

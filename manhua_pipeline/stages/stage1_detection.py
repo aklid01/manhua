@@ -1,9 +1,4 @@
-"""Stage 1: Detection.
-
-YOLO bubble detection. v0 = speech_bubble + narration only.
-Model: ogkalu/comic-speech-bubble-detector-yolov8m.
-Outputs detection.json and optional visual debug overlays.
-"""
+# Stage 1: Comic speech bubble and narration text region detection.
 
 import json
 import shutil
@@ -19,9 +14,7 @@ from manhua_pipeline.logging_setup import get_logger, log_page, log_stage
 
 logger = get_logger(__name__)
 
-_DEV_SAVE_BUBBLE_CROPS = (
-    False  # DEV-ONLY: flip to True to collect crops, delete before next push
-)
+_DEV_SAVE_BUBBLE_CROPS = False
 
 _STAGE_INDEX = 1
 _TOTAL_STAGES = 7
@@ -32,8 +25,8 @@ _RTDETR_PROCESSOR = None
 _YOLO_SEG_MODEL = None
 
 
+# Lazy-load RT-DETR model and image processor
 def _get_rtdetr(config):
-    """Lazy-load the RT-DETR detector once per process."""
     global _RTDETR_MODEL, _RTDETR_PROCESSOR
     if _RTDETR_MODEL is not None:
         return _RTDETR_MODEL, _RTDETR_PROCESSOR
@@ -60,8 +53,8 @@ def _get_rtdetr(config):
     return _RTDETR_MODEL, _RTDETR_PROCESSOR
 
 
+# Unload RT-DETR from GPU memory and clear cache
 def _unload_rtdetr() -> None:
-    """Release RT-DETR from memory so YOLO-seg can load on the same GPU safely."""
     global _RTDETR_MODEL, _RTDETR_PROCESSOR
     _RTDETR_MODEL = None
     _RTDETR_PROCESSOR = None
@@ -75,8 +68,8 @@ def _unload_rtdetr() -> None:
     logger.info("[%s] RT-DETR unloaded (YOLO-seg pass starting)", _STAGE_NAME)
 
 
+# Lazy-load YOLO segmentation model
 def _get_yolo_seg(config):
-    """Lazy-load YOLO-seg model once per subprocess."""
     global _YOLO_SEG_MODEL
     if _YOLO_SEG_MODEL is not None:
         return _YOLO_SEG_MODEL
@@ -90,6 +83,7 @@ def _get_yolo_seg(config):
     return _YOLO_SEG_MODEL
 
 
+# Save failed segmentation crop and page sample for debugging
 def _save_seg_failure(
     crop: Image.Image,
     img_path: Path,
@@ -123,8 +117,8 @@ def _save_seg_failure(
         logger.warning("[%s] Failed saving seg failure sample: %s", _STAGE_NAME, exc)
 
 
+# Encode PIL grayscale mask image as base64 PNG string
 def _encode_mask_b64(pil_mask) -> str:
-    """Encode a PIL 'L' mask image as a base64 PNG string."""
     import base64
     import io
 
@@ -133,14 +127,13 @@ def _encode_mask_b64(pil_mask) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+# Post-detection pass applying YOLO segmentation to refine speech bubble masks
 def _run_yolo_seg_all_pages(
     regions_by_page: dict,
     pages_meta: list,
     ws: Path,
     config,
 ) -> None:
-    """Post-detection pass: run YOLO-seg on every parent_bubble ROI and store
-    the resulting mask in each region dict as 'bubble_mask'."""
     import numpy as np
 
     conf = float(getattr(config, "YOLO_SEG_CONF", 0.5))
@@ -241,10 +234,10 @@ def _run_yolo_seg_all_pages(
     )
 
 
+# Construct region dictionary adhering to downstream schema
 def _mk_region(
     config, page_num, idx, rec, *, type_, parent_bubble, is_free_text
 ) -> dict:
-    """Build a region dict matching the schema downstream expects."""
     x, y, w, h = rec["x"], rec["y"], rec["w"], rec["h"]
     eb = parent_bubble if parent_bubble else {"x": x, "y": y, "w": w, "h": h}
     style_hint = "narration" if type_ == config.TYPE_NARRATION else "round"
@@ -278,17 +271,17 @@ def _mk_region(
     }
 
 
-def _save_bubble_crops_dev(  # DEV-ONLY
+# Save raw parent bubble ROI crops for training data
+def _save_bubble_crops_dev(
     img_path: Path,
     bubbles: list,
     crops_dir: Path,
-    page_num: int,  # DEV-ONLY
-) -> None:  # DEV-ONLY
-    """Save raw parent-bubble ROI crops for YOLO-seg training data."""  # DEV-ONLY
-    crops_dir.mkdir(parents=True, exist_ok=True)  # DEV-ONLY
-    with Image.open(img_path) as im:  # DEV-ONLY
-        for i, b in enumerate(bubbles):  # DEV-ONLY
-            x, y, w, h = b["x"], b["y"], b["w"], b["h"]  # DEV-ONLY
+    page_num: int,
+) -> None:
+    crops_dir.mkdir(parents=True, exist_ok=True)
+    with Image.open(img_path) as im:
+        for i, b in enumerate(bubbles):
+            x, y, w, h = b["x"], b["y"], b["w"], b["h"]
             pad_x = int(w * 0.15)
             pad_y = int(h * 0.15)
             crop = im.crop(
@@ -299,24 +292,22 @@ def _save_bubble_crops_dev(  # DEV-ONLY
                     min(im.height, y + h + pad_y),
                 )
             )
-            crop.save(crops_dir / f"{page_num:03d}_bubble_{i:02d}.png")  # DEV-ONLY
+            crop.save(crops_dir / f"{page_num:03d}_bubble_{i:02d}.png")
 
 
+# Render bounding boxes and parent bubble links for RT-DETR debug overlay
 def _draw_debug_overlay_rtdetr(
     img_path: Path, sorted_boxes: list, bubbles: list, overlays_dir: Path, page_num: int
 ) -> None:
-    """Draw bounding boxes and labels for RT-DETR (bubbles in green, speech regions in red, narration in blue)."""
     with Image.open(img_path) as im:
         overlay = im.copy()
         draw = ImageDraw.Draw(overlay)
 
-        # 1. Draw parent bubble containers (green)
         for b in bubbles:
             bx, by, bw, bh = b["x"], b["y"], b["w"], b["h"]
             draw.rectangle([bx, by, bx + bw, by + bh], outline=(0, 255, 0), width=2)
             draw.text((bx + 5, by + 5), f"bubble ({b['conf']:.2f})", fill=(0, 255, 0))
 
-        # 2. Draw sorted detected regions (speech/narration)
         for box in sorted_boxes:
             bx, by, bw, bh = (
                 box["bbox"]["x"],
@@ -325,7 +316,7 @@ def _draw_debug_overlay_rtdetr(
                 box["bbox"]["h"],
             )
             if box["type"] == "speech_bubble":
-                color = (255, 0, 0)  # Red for speech
+                color = (255, 0, 0)
                 label = f"{box['region_id']} ({box['confidence']:.2f})"
                 if box.get("parent_bubble"):
                     pb = box["parent_bubble"]
@@ -333,7 +324,7 @@ def _draw_debug_overlay_rtdetr(
                     tx, ty = bx + bw // 2, by + bh // 2
                     draw.line([(tx, ty), (px, py)], fill=(255, 255, 0), width=1)
             else:
-                color = (0, 0, 255)  # Blue for narration/SFX
+                color = (0, 0, 255)
                 label = f"{box['region_id']} (SFX, {box['confidence']:.2f})"
 
             draw.rectangle([bx, by, bx + bw, by + bh], outline=color, width=3)
@@ -347,9 +338,8 @@ def _draw_debug_overlay_rtdetr(
         overlay.save(dest_overlay)
 
 
+# Execute RT-DETR detection on single page and map speech and narration regions
 def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
-    """RT-DETR detection for one page. Emits sorted regions mapping text_bubble (speech)
-    and text_free (narration), maintaining parent bubble associations."""
     import torch
     from PIL import Image
 
@@ -363,7 +353,7 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
     inputs = processor(images=image, return_tensors="pt").to(model.device)
     with torch.no_grad():
         outputs = model(**inputs)
-    target = torch.tensor([image.size[::-1]]).to(model.device)  # (H, W)
+    target = torch.tensor([image.size[::-1]]).to(model.device)
     det = processor.post_process_object_detection(
         outputs, target_sizes=target, threshold=getattr(config, "RTDETR_CONF", 0.30)
     )[0]
@@ -406,7 +396,6 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
                 best, best_area = b, area
         return best
 
-    # Dedup then sort in reading order
     raw_boxes = _dedupe_raw_boxes(raw_boxes, config)
     page_height = image.height
     band = page_height * config.READING_ORDER_BAND_FRACTION
@@ -427,10 +416,10 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
             )
         )
 
-    if _DEV_SAVE_BUBBLE_CROPS and bubbles:  # DEV-ONLY
+    if _DEV_SAVE_BUBBLE_CROPS and bubbles:
         _save_bubble_crops_dev(
             img_path, bubbles, overlays_dir.parent / "dev_crops", page_num
-        )  # DEV-ONLY
+        )
 
     if getattr(config, "OVERLAY_ENABLED", True):
         _draw_debug_overlay_rtdetr(img_path, regions, bubbles, overlays_dir, page_num)
@@ -438,12 +427,8 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
     return regions
 
 
+# Generator yielding bounding box coordinates, confidence, and class ID from YOLO result
 def _iter_boxes(result):
-    """Decoupled helper to iterate boxes from an ultralytics YOLO prediction result.
-
-    Yields:
-        tuple: (xyxy coordinates [x1, y1, x2, y2], confidence score float, class_id int)
-    """
     for box in getattr(result, "boxes", []):
         xyxy = box.xyxy
         if hasattr(xyxy, "tolist"):
@@ -463,14 +448,14 @@ def _iter_boxes(result):
         yield xyxy, conf, cls_id
 
 
+# Sort bounding boxes top-to-bottom and left-to-right within vertical bands
 def _reading_order_sort(boxes, band_height):
-    """Sort boxes primarily top-to-bottom, then left-to-right within a vertical band."""
     bh = max(1.0, band_height)
     return sorted(boxes, key=lambda b: (round(b["y"] / bh), b["x"]))
 
 
+# Compute intersection-over-union metric for two bounding boxes
 def _iou(a: dict, b: dict) -> float:
-    """Intersection-over-union of two {x, y, w, h} bbox dicts."""
     ax0, ay0, ax1, ay1 = a["x"], a["y"], a["x"] + a["w"], a["y"] + a["h"]
     bx0, by0, bx1, by1 = b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]
     iw = max(0, min(ax1, bx1) - max(ax0, bx0))
@@ -482,13 +467,8 @@ def _iou(a: dict, b: dict) -> float:
     return inter / union if union > 0 else 0.0
 
 
+# Compute intersection-over-smaller metric for two bounding boxes
 def _ios(a: dict, b: dict) -> float:
-    """Intersection over the SMALLER box's area.
-
-    Catches near-duplicate detections that IoU misses when the two boxes
-    differ in size or are offset (e.g. one detection slightly smaller/shifted
-    than the other of the same panel).
-    """
     ax0, ay0, ax1, ay1 = a["x"], a["y"], a["x"] + a["w"], a["y"] + a["h"]
     bx0, by0, bx1, by1 = b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]
 
@@ -503,12 +483,8 @@ def _ios(a: dict, b: dict) -> float:
     return inter / smaller if smaller > 0 else 0.0
 
 
+# Filter near-duplicate overlapping bounding boxes keeping highest confidence
 def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
-    """Drop near-duplicate detections of the same class on the same page.
-
-    Keeps the highest-confidence box in each duplicate cluster. Runs before
-    reading-order sort and ID assignment so IDs stay contiguous.
-    """
     iou_thresh = float(getattr(config, "DEDUP_IOU_THRESHOLD", 0.90))
     ios_thresh = float(getattr(config, "DEDUP_IOS_THRESHOLD", 0.85))
 
@@ -572,13 +548,12 @@ def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
     return kept
 
 
+# Resolve local model path or download weights from Hugging Face
 def _resolve_model(model_name_or_path: str, config) -> str:
-    """Resolve a model name/path. If it is a Hugging Face repo ID, download the .pt file."""
     path = Path(model_name_or_path)
     if path.exists():
         return str(path)
 
-    # Check if it looks like a Hugging Face model repository: "username/repo"
     if "/" in model_name_or_path and not model_name_or_path.endswith(".pt"):
         logger.info(
             "[%s] Model path not found locally. Attempting to download weights from Hugging Face: %s",
@@ -613,8 +588,8 @@ def _resolve_model(model_name_or_path: str, config) -> str:
     return model_name_or_path
 
 
+# Transform raw YOLO bounding box predictions into candidate region dictionaries
 def _process_predictions(result, page_num: int, page_height: int) -> list:
-    """Process prediction results into a list of raw box dictionaries."""
     names = getattr(result, "names", {})
     raw_boxes = []
     for xyxy, conf, cls_id in _iter_boxes(result):
@@ -660,10 +635,10 @@ def _process_predictions(result, page_num: int, page_height: int) -> list:
     return raw_boxes
 
 
+# Render bounding boxes and region labels onto debug overlay image
 def _draw_debug_overlay(
     img_path: Path, sorted_boxes: list, overlays_dir: Path, page_num: int
 ) -> None:
-    """Draw bounding boxes and labels onto a copy of the page image."""
     with Image.open(img_path) as im:
         overlay = im.copy()
         draw = ImageDraw.Draw(overlay)
@@ -681,10 +656,10 @@ def _draw_debug_overlay(
         overlay.save(dest_overlay)
 
 
+# Run YOLO model detection on single page image
 def _detect_page_regions(
     page: dict, model, config, ws: Path, overlays_dir: Path
 ) -> list:
-    """Detect regions on a single page, draw overlay, and return mapped clean regions."""
     page_num = page["page_number"]
     img_path = ws / config.STAGE_FOLDERS["pages"] / page["filename"]
     if not img_path.exists():
@@ -731,39 +706,39 @@ def _detect_page_regions(
     return page_regions
 
 
-# ---- Stitching helpers (Feature 4) ----
-
-
+# Extract {x, y, w, h} rectangle dictionary from region
 def _xywh(box) -> dict:
     r = box.get("read_region") or box.get("bbox") or box
     return {"x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"]}
 
 
+# Resolve boundary rectangle for page stitching edge tests
 def _stitch_box(box) -> dict:
-    """Geometry box for split detection: prefer the bubble container (it's what touches the
-    page edge). Falls back to read_region/bbox for the old YOLO detector (no parent_bubble)."""
     pb = box.get("parent_bubble")
     if pb and all(k in pb for k in ("x", "y", "w", "h")):
         return {"x": pb["x"], "y": pb["y"], "w": pb["w"], "h": pb["h"]}
     return _xywh(box)
 
 
+# Check if rectangle touches or extends past bottom edge of page
 def _box_touches_bottom(r, page_h, eps) -> bool:
     return (r["y"] + r["h"]) >= (page_h - eps)
 
 
+# Check if rectangle touches top edge of page
 def _box_touches_top(r, eps) -> bool:
     return r["y"] <= eps
 
 
+# Calculate horizontal overlap ratio between two rectangles
 def _x_overlap_frac(a, b) -> float:
     inter = max(0, min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"]))
     narrower = min(a["w"], b["w"]) or 1
     return inter / narrower
 
 
+# Verify whether bottom bubble of page A continues into top bubble of page B
 def _pages_link(a, b, det_by_page, config) -> bool:
-    """True if page a's bottom speech bubble continues into page b's top speech bubble."""
     eps = getattr(config, "STITCH_EDGE_EPS", 6)
     min_ov = getattr(config, "STITCH_MIN_X_OVERLAP", 0.5)
     ha = a.get("height") or 0
@@ -795,8 +770,8 @@ def _pages_link(a, b, det_by_page, config) -> bool:
     return False
 
 
+# Find consecutive sequences of pages split across a shared speech bubble
 def _find_split_chains(det_by_page, pages_meta, config) -> list[list[int]]:
-    """Greedy consecutive chains of page numbers to merge, e.g. [[5,6,7],[12,13]]. Cap = STITCH_MAX_CHAIN."""
     max_chain = getattr(config, "STITCH_MAX_CHAIN", 4)
     order = [p for p in pages_meta if not p.get("skip") and p.get("filename")]
     chains, i = [], 0
@@ -819,6 +794,7 @@ def _find_split_chains(det_by_page, pages_meta, config) -> list[list[int]]:
     return chains
 
 
+# Check if split bubble half contains readable text above confidence threshold
 def _half_has_text(ws, page_meta, box, config, ocr_engine) -> bool:
     from manhua_pipeline.stages.stage2_ocr import _preprocess_variant, _read_crop
 
@@ -833,8 +809,8 @@ def _half_has_text(ws, page_meta, box, config, ocr_engine) -> bool:
     return bool(text.strip()) and mean >= stitch_floor
 
 
+# Verify if either side of split bubble connection contains OCR text
 def _link_has_text(ws, page_a, page_b, det_by_page, config, ocr_engine) -> bool:
-    """True if bottom bubble of page_a OR top bubble of page_b linked in split has text."""
     eps = getattr(config, "STITCH_EDGE_EPS", 6)
     min_ov = getattr(config, "STITCH_MIN_X_OVERLAP", 0.5)
     ha = page_a.get("height") or 0
@@ -859,8 +835,8 @@ def _link_has_text(ws, page_a, page_b, det_by_page, config, ocr_engine) -> bool:
     return False
 
 
+# Concatenate linked vertical pages into single combined image
 def _merge_page_chain(ws, head_page, other_pages, config) -> tuple:
-    """Concat head + others vertically into head's filename slot. Returns (W, H, first_seam_y)."""
     pdir = ws / config.STAGE_FOLDERS["pages"]
     imgs = [Image.open(pdir / head_page["filename"]).convert("RGB")]
     imgs += [Image.open(pdir / p["filename"]).convert("RGB") for p in other_pages]
@@ -874,12 +850,10 @@ def _merge_page_chain(ws, head_page, other_pages, config) -> tuple:
     return W, H, imgs[0].height
 
 
+# Execute page stitching and renumbering on detected split chains
 def _apply_stitching(
     ws, manifest: dict, per_page_regions: dict, model, config, overlays_dir
 ):
-    """per_page_regions: {page_number: [region,...]} from the just-completed detection.
-    Returns (new_pages_meta, new_regions_by_page) with merges applied + everything
-    renumbered sequentially. No-op when disabled or no confirmed splits."""
     pages_meta = manifest.get("pages", [])
     if not getattr(config, "STITCH_ENABLED", False):
         return pages_meta, per_page_regions
@@ -955,8 +929,8 @@ def _apply_stitching(
     return new_pages, new_regions
 
 
+# Execute full chapter detection stage using configured YOLO or RT-DETR backend
 def run_detection(workspace: str, config) -> Path:
-    """Run bubble and narration detection over all usable pages."""
     t0 = time.monotonic()
     ws = Path(workspace)
     logger.info(
@@ -977,7 +951,6 @@ def run_detection(workspace: str, config) -> Path:
     if not manifest:
         raise ValueError("Manifest not found. Run import first.")
 
-    # 1. Resolve paths
     detect_dir = ws / config.STAGE_FOLDERS["detection"]
     detect_dir.mkdir(parents=True, exist_ok=True)
     overlays_dir = detect_dir / "overlays"
@@ -985,7 +958,6 @@ def run_detection(workspace: str, config) -> Path:
     if overlay_enabled:
         overlays_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Load model once (lazy-load via ultralytics YOLO)
     backend = getattr(config, "DETECTOR_BACKEND", "yolov8")
     logger.info(
         "[%d/%d %s] Detector backend: %s",
@@ -1015,7 +987,6 @@ def run_detection(workspace: str, config) -> Path:
     warnings = 0
     per_page_regions = {}
 
-    # 3. Iterate usable pages
     for page in manifest.get("pages", []):
         page_num = page["page_number"]
         if page.get("skip") or page.get("filename") is None:
@@ -1054,7 +1025,7 @@ def run_detection(workspace: str, config) -> Path:
             )
         except Exception as exc:
             logger.warning(
-                "[%s] Page %03d — failed detection: %s",
+                "[%s] Page %03d - failed detection: %s",
                 _STAGE_NAME,
                 page_num,
                 exc,
@@ -1062,21 +1033,17 @@ def run_detection(workspace: str, config) -> Path:
             per_page_regions[page_num] = []
             warnings += 1
 
-    # 3b. Stitching sub-step (Feature 4) — before writing detection.json
     new_pages_meta, new_regions_by_page = _apply_stitching(
         ws, manifest, per_page_regions, model, config, overlays_dir
     )
     manifest["pages"] = new_pages_meta
 
-    # 3c. YOLO-seg bubble mask refinement (optional) — runs after all RT-DETR pages
-    # are done. RT-DETR is explicitly unloaded first to free VRAM before YOLO loads.
     if getattr(config, "YOLO_SEG_ENABLED", False) and backend == "rtdetr":
         _unload_rtdetr()
         _run_yolo_seg_all_pages(new_regions_by_page, new_pages_meta, ws, config)
 
     regions = [r for pg in sorted(new_regions_by_page) for r in new_regions_by_page[pg]]
 
-    # 4. Save output detection.json
     now = datetime.now(timezone.utc).isoformat()
     output_json = {
         "chapter_id": manifest.get("chapter_id", "unknown_chapter"),
@@ -1092,7 +1059,6 @@ def run_detection(workspace: str, config) -> Path:
     with detection_json_path.open("w", encoding="utf-8") as fh:
         json.dump(output_json, fh, ensure_ascii=False, indent=2)
 
-    # 5. Update Manifest
     completed = manifest.get("completed_stages", [])
     if "detect" not in completed:
         completed.append("detect")

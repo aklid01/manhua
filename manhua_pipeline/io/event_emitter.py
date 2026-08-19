@@ -1,3 +1,5 @@
+# Thread-safe JSONL event emission and logger integration.
+
 import json
 import logging
 from pathlib import Path
@@ -20,15 +22,8 @@ _LOGGABLE_FIELDS = (
 )
 
 
+# Thread-safe structured event emitter writing to Python logger and JSONL event log
 class EventEmitter:
-    """Thread-safe structured event emitter that logs to a Python logger and
-    appends JSON Lines to an event sink file.
-
-    Note: the thread lock is sufficient for multi-threaded execution. For
-    multi-process batch runs, use one event file per run/chapter and aggregate
-    afterwards, or switch to a process-safe queue.
-    """
-
     def __init__(
         self,
         *,
@@ -44,6 +39,7 @@ class EventEmitter:
         self._lock = Lock()
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Sanitize event payload according to source text retention settings
     def _sanitized(self, event: "PipelineEvent") -> dict:
         payload = event.to_dict()
         if not self.include_source_text:
@@ -52,6 +48,7 @@ class EventEmitter:
             payload["original_text"] = payload["original_text"][: self.max_text_chars]
         return payload
 
+    # Format event log line and append JSON event to output file
     def emit(self, event: "PipelineEvent") -> None:
         payload = self._sanitized(event)
 
@@ -74,13 +71,13 @@ class EventEmitter:
                 handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+# Initialize and return EventEmitter for target workspace
 def get_event_emitter(
     workspace: Path | str,
     config: object,
     logger: logging.Logger | None = None,
     include_source_text: bool = False,
 ) -> EventEmitter:
-    """Get an EventEmitter for a given workspace and config."""
     ws = Path(workspace)
     logs_dir = ws / getattr(config, "STAGE_FOLDERS", {}).get("logs", "logs")
     event_path = logs_dir / "events.jsonl"
@@ -92,6 +89,7 @@ def get_event_emitter(
     )
 
 
+# Helper to emit stage lifecycle event
 def emit_stage_event(
     workspace: Path | str,
     config: object,
@@ -104,7 +102,6 @@ def emit_stage_event(
     metadata: dict | None = None,
     level: str = "INFO",
 ) -> None:
-    """Emit a stage lifecycle event (e.g. STAGE_STARTED, STAGE_COMPLETED)."""
     ws = Path(workspace)
     ch = chapter or ws.name
     rid = run_id or getattr(config, "_run_id", "unknown")

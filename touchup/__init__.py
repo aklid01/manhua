@@ -1,4 +1,4 @@
-"""Touch-up editor module for manual segmentation, inpainting, OCR, and typesetting."""
+# Touch-up editor module for manual segmentation, inpainting, OCR, and typesetting.
 
 from .cache import TouchupCache
 from .inpainter import inpaint_text_regions

@@ -1,15 +1,20 @@
+# Unit tests for Stage 3 translation batching, glossary locking, triage, and SFX passthrough.
+
 import json
+from types import SimpleNamespace
 
 import pytest
 
 import config
 
 
+# Fixture forcing manual translation backend for offline isolation
 @pytest.fixture(autouse=True)
 def _force_manual_backend(monkeypatch):
     monkeypatch.setattr(config, "TRANSLATOR_BACKEND", "manual", raising=False)
 
 
+# Helper to configure mock workspace with manifest, OCR data, and optional glossary
 def _setup(ws, ocr_results, glossary=None):
     ws.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -39,6 +44,7 @@ def _setup(ws, ocr_results, glossary=None):
         )
 
 
+# Helper to construct mock OCR region result dictionary
 def _ocr_entry(rid, text, usable=True):
     return {
         "region_id": rid,
@@ -58,6 +64,7 @@ def _ocr_entry(rid, text, usable=True):
     }
 
 
+# Verify manual translator backend emits prompt file and awaits user response
 def test_translation_manual_awaits_response(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -71,6 +78,7 @@ def test_translation_manual_awaits_response(tmp_path):
     assert m["current_stage"] == "translate"
 
 
+# Verify translation prompt includes only usable OCR text regions
 def test_translation_prompt_only_usable(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -92,6 +100,7 @@ def test_translation_prompt_only_usable(tmp_path):
     assert ids == ["P001_R001"]
 
 
+# Verify translation stage ingests manual response file and updates manifest
 def test_translation_ingests_response(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -123,6 +132,7 @@ def test_translation_ingests_response(tmp_path):
     assert "translate" in m["completed_stages"]
 
 
+# Verify exact locked glossary terms translate directly without invoking backend
 def test_translation_glossary_locked_term(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -133,7 +143,7 @@ def test_translation_glossary_locked_term(tmp_path):
         "terms": [
             {
                 "term_id": "jingli",
-                "source_term": "\u7ecf\u7406",
+                "source_term": "经理",
                 "target_term": "Manager",
                 "category": "title",
                 "locked": True,
@@ -143,12 +153,8 @@ def test_translation_glossary_locked_term(tmp_path):
             }
         ],
     }
-    _setup(ws, [_ocr_entry("P001_R001", "\u7ecf\u7406")], glossary=glossary)
-    # Locked glossary pre-resolution: the region is resolved before the backend is called.
-    # The response file with a conflicting value is never applied.
+    _setup(ws, [_ocr_entry("P001_R001", "经理")], glossary=glossary)
     out = run_translation(str(ws), config)
-    # With manual backend and a locked exact match, the region goes to usable_for_backend=[]
-    # so the backend isn't called and translation completes directly from the locked entry.
     assert out is not None
     tr = json.loads(
         (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
@@ -159,6 +165,7 @@ def test_translation_glossary_locked_term(tmp_path):
     assert r["translation_source"] == "locked_glossary"
 
 
+# Verify translation stage advances when all regions are marked unusable
 def test_translation_all_unusable_completes(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -174,6 +181,7 @@ def test_translation_all_unusable_completes(tmp_path):
     assert m["current_stage"] == "paraphrase"
 
 
+# Verify locked glossary terms preserve exact target translations
 def test_translation_glossary_conflict_does_not_mutate(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -184,7 +192,7 @@ def test_translation_glossary_conflict_does_not_mutate(tmp_path):
         "terms": [
             {
                 "term_id": "jingli",
-                "source_term": "\u7ecf\u7406",
+                "source_term": "经理",
                 "target_term": "Manager",
                 "category": "title",
                 "locked": True,
@@ -194,20 +202,19 @@ def test_translation_glossary_conflict_does_not_mutate(tmp_path):
             }
         ],
     }
-    _setup(ws, [_ocr_entry("P001_R001", "\u7ecf\u7406")], glossary=glossary)
+    _setup(ws, [_ocr_entry("P001_R001", "经理")], glossary=glossary)
     out = run_translation(str(ws), config)
-    # Locked glossary pre-resolution: "Manager" is applied directly.
-    # The locked value wins - no conflict can arise and no backend is consulted.
     assert out is not None
     tr = json.loads(
         (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
     )
     r = tr["results"][0]
     assert r["translated"] is True
-    assert r["literal_translation"] == "Manager"  # locked value, NOT defaced
-    assert r["glossary_conflict"] is False  # no conflict: backend was never consulted
+    assert r["literal_translation"] == "Manager"
+    assert r["glossary_conflict"] is False
 
 
+# Verify translation output records active glossary version tag
 def test_translation_glossary_version_from_glossary(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -225,6 +232,7 @@ def test_translation_glossary_version_from_glossary(tmp_path):
     assert tr["glossary_version"] == "v3"
 
 
+# Verify manual overrides rescue unusable OCR regions
 def test_translation_override_rescues_unusable(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -246,6 +254,7 @@ def test_translation_override_rescues_unusable(tmp_path):
     assert m["current_stage"] == "paraphrase"
 
 
+# Verify empty/whitespace overrides are ignored
 def test_translation_empty_override_ignored(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -263,6 +272,7 @@ def test_translation_empty_override_ignored(tmp_path):
     assert r.get("translation_source") in (None, "")
 
 
+# Verify overrides for non-existent regions are discarded
 def test_translation_unknown_override_ignored(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -281,6 +291,7 @@ def test_translation_unknown_override_ignored(tmp_path):
     assert ids == ["P001_R001"]
 
 
+# Verify translation operates normally when no overrides file exists
 def test_translation_no_overrides_file_unchanged(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -291,6 +302,7 @@ def test_translation_no_overrides_file_unchanged(tmp_path):
     assert (ws / "stage3_translation" / "translation_prompt.json").exists()
 
 
+# Verify batch response normalizes escaped newlines
 def test_validate_batch_newline_normalization():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
@@ -302,6 +314,7 @@ def test_validate_batch_newline_normalization():
     assert unexpected == []
 
 
+# Verify CJK character counting and trivial region classification
 def test_cjk_char_count_and_is_trivial_region():
     from manhua_pipeline.stages.stage3_translation import (
         _cjk_char_count,
@@ -314,64 +327,41 @@ def test_cjk_char_count_and_is_trivial_region():
 
     assert _is_trivial_region("一", config) is True
     assert _is_trivial_region("你好", config) is False
-    # Non-CJK (Latin) text is trivial: triage hard-skips it upstream, so it
-    # is correctly non-blocking here. (Was stale: expected False.)
     assert _is_trivial_region("ABC", config) is True
 
 
+# Verify short CJK interjections and SFX route to sfx_passthrough
 def test_short_cjk_dialogue_triage():
-    """Single-CJK interjections/SFX bypass translation and go to paraphrase directly.
-
-    These chars are real dialogue but the translation model (small/local) returns empty
-    for them consistently. They are routed sfx_passthrough: translated=True with the raw
-    CJK as literal_translation so the stronger paraphrase model handles them in context.
-    """
     from manhua_pipeline.stages.stage3_translation import triage_region
 
-    # Single-CJK interjections with dialogue punct -> sfx_passthrough (not translatable)
-    assert triage_region("诶？", config).reason == "sfx_passthrough"  # interjection + ?
-    assert triage_region("诶?", config).reason == "sfx_passthrough"  # ASCII ?
-    assert triage_region("啊！", config).reason == "sfx_passthrough"  # interjection + !
-    assert (
-        triage_region("嗯", config).reason == "sfx_passthrough"
-    )  # bare known interjection
+    assert triage_region("诶？", config).reason == "sfx_passthrough"
+    assert triage_region("诶?", config).reason == "sfx_passthrough"
+    assert triage_region("啊！", config).reason == "sfx_passthrough"
+    assert triage_region("嗯", config).reason == "sfx_passthrough"
 
-    # Regressions: chap 64 p23 (额……) and chap 62 p3 (呼)
-    assert (
-        triage_region("额……", config).reason == "sfx_passthrough"
-    )  # hesitation + ellipsis
-    assert triage_region("额", config).reason == "sfx_passthrough"  # bare hesitation
-    assert triage_region("呼", config).reason == "sfx_passthrough"  # bare exhale
-    assert (
-        triage_region("哈", config).reason == "sfx_passthrough"
-    )  # chap 62 p3 reported case
+    assert triage_region("额……", config).reason == "sfx_passthrough"
+    assert triage_region("额", config).reason == "sfx_passthrough"
+    assert triage_region("呼", config).reason == "sfx_passthrough"
+    assert triage_region("哈", config).reason == "sfx_passthrough"
 
-    # Other breath / exclamation chars
-    assert triage_region("嗷", config).reason == "sfx_passthrough"  # pain cry
-    assert triage_region("噗", config).reason == "sfx_passthrough"  # pfft
-    assert triage_region("吼", config).reason == "sfx_passthrough"  # roar
+    assert triage_region("嗷", config).reason == "sfx_passthrough"
+    assert triage_region("噗", config).reason == "sfx_passthrough"
+    assert triage_region("吼", config).reason == "sfx_passthrough"
 
-    # Onomatopoeia sound effects
-    assert triage_region("砰", config).reason == "sfx_passthrough"  # bang
-    assert triage_region("啪", config).reason == "sfx_passthrough"  # slap
-    assert triage_region("咚", config).reason == "sfx_passthrough"  # thud
+    assert triage_region("砰", config).reason == "sfx_passthrough"
+    assert triage_region("啪", config).reason == "sfx_passthrough"
+    assert triage_region("咚", config).reason == "sfx_passthrough"
 
-    # Genuine debris / non-dialogue single chars -> still trivial (skipped)
-    assert triage_region("一", config).reason == "trivial"  # numeral one, no signal
-    assert triage_region("王", config).reason == "trivial"  # lone char, no signal
+    assert triage_region("一", config).reason == "trivial"
+    assert triage_region("王", config).reason == "trivial"
 
-    # Multi-CJK -> normal translatable path unchanged
     assert triage_region("滚吧！", config).reason == "translatable"
     assert triage_region("", config).reason == "empty"
     assert triage_region("Hello", config).reason == "no_cjk"
 
 
+# Verify sfx_passthrough regions are passed to paraphrase with raw CJK text
 def test_sfx_passthrough_partition():
-    """sfx_passthrough regions are emitted as translated=True rows carrying raw CJK.
-
-    This is the key contract: stage4 sees them as 'usable' (translated=True) and
-    the paraphrase model receives the raw CJK as literal_translation.
-    """
     from manhua_pipeline.stages.stage3_translation import _partition_by_triage
 
     region = {"region_id": "P003_R003", "page_number": 3, "original_text": "哈"}
@@ -382,16 +372,15 @@ def test_sfx_passthrough_partition():
     assert trivial_fallback == []
     row = hard_skipped[0]
     assert row["translated"] is True
-    assert row["literal_translation"] == "哈"  # raw CJK passed to paraphrase
+    assert row["literal_translation"] == "哈"
     assert row["translation_source"] == "sfx_passthrough"
     assert row["skip_reason"] is None
 
 
+# Verify failed meaningful translations hand off to paraphrase when configured
 def test_meaningful_translation_failure_hands_off_without_manual_override(
     tmp_path, monkeypatch
 ):
-    from types import SimpleNamespace
-
     from manhua_pipeline.stages.stage3_translation.engine import (
         _handle_unresolved_region,
     )
@@ -423,8 +412,8 @@ def test_meaningful_translation_failure_hands_off_without_manual_override(
     assert not (tmp_path / "logs" / "manual_override_requests.json").exists()
 
 
+# Verify short speech bubbles with ASCII ellipses route to paraphrase
 def test_short_speech_bubble_ascii_ellipsis_passthrough():
-    """ASCII OCR ellipses in short speech bubbles reach paraphrase."""
     from manhua_pipeline.stages.stage3_translation import _partition_by_triage
 
     region = {
@@ -448,8 +437,8 @@ def test_short_speech_bubble_ascii_ellipsis_passthrough():
     assert row["skip_reason"] is None
 
 
+# Verify bare single-character speech bubbles pass through to paraphrase
 def test_bare_single_cjk_speech_bubble_passthrough():
-    """A bare one-character speech bubble must not be treated as trivial SFX."""
     from manhua_pipeline.stages.stage3_translation import _partition_by_triage
 
     region = {
@@ -473,8 +462,8 @@ def test_bare_single_cjk_speech_bubble_passthrough():
     assert row["skip_reason"] is None
 
 
+# Verify short CJK in non-speech narration remains classified as trivial
 def test_short_background_sfx_remains_trivial():
-    """Short CJK in a free-text/narration region is not promoted to paraphrase."""
     from manhua_pipeline.stages.stage3_translation import _partition_by_triage
 
     region = {
@@ -497,20 +486,16 @@ def test_short_background_sfx_remains_trivial():
     assert row["skip_reason"] == "trivial_manual_review"
 
 
+# Verify disabling TRANSLATE_SHORT_CJK_DIALOGUE reverts to trivial skipping
 def test_short_cjk_dialogue_toggle_off(monkeypatch):
-    """TRANSLATE_SHORT_CJK_DIALOGUE=False restores the strict skip."""
     from manhua_pipeline.stages.stage3_translation import triage_region
 
     monkeypatch.setattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", False, raising=False)
     assert triage_region("诶？", config).reason == "trivial"
 
 
+# Verify punctuation-only bubbles pass through with ASCII-normalized punctuation
 def test_punct_only_region_passthrough():
-    """Punctuation-only bubbles ("？") render deterministically, no LLM call.
-
-    Regression guard for P022_R002: PaddleOCR dropped "诶" leaving "？".
-    Rendering "?" is still correct; it must NOT be dropped as no_cjk noise.
-    """
     from manhua_pipeline.stages.stage3_translation import (
         _partition_by_triage,
         triage_region,
@@ -518,9 +503,9 @@ def test_punct_only_region_passthrough():
 
     for t in ("？", "?", "！？", "?!", "……"):
         assert triage_region(t, config).reason == "punct_only", t
-    assert triage_region("，", config).reason == "no_cjk"  # lone comma, no signal
-    assert triage_region("Hello?", config).reason == "no_cjk"  # has letters
-    assert triage_region("一", config).reason == "trivial"  # CJK numeral
+    assert triage_region("，", config).reason == "no_cjk"
+    assert triage_region("Hello?", config).reason == "no_cjk"
+    assert triage_region("一", config).reason == "trivial"
 
     region = {"region_id": "P022_R002", "page_number": 22, "original_text": "？"}
     translatable, hard_skipped, trivial_fallback = _partition_by_triage(
@@ -533,6 +518,7 @@ def test_punct_only_region_passthrough():
     assert row["translation_source"] == "punct_passthrough"
 
 
+# Verify disabling RENDER_PUNCT_ONLY_REGIONS treats punctuation-only bubbles as no_cjk
 def test_punct_only_toggle_off(monkeypatch):
     from manhua_pipeline.stages.stage3_translation import triage_region
 
@@ -540,14 +526,8 @@ def test_punct_only_toggle_off(monkeypatch):
     assert triage_region("？", config).reason == "no_cjk"
 
 
+# Verify low-confidence real dialogue interjections are preserved via sfx_passthrough
 def test_low_confidence_real_dialogue_not_dropped(tmp_path):
-    """Regions with real CJK dialogue and has_usable_text=False must not be dropped.
-
-    Regression guard for the "啊……" case: OCR read one CJK char at low confidence,
-    so has_usable_text=False. Single-CJK interjections now take the sfx_passthrough
-    route - they bypass translation entirely and land in translation.json as
-    translated=True, source="sfx_passthrough". The region must never be silently dropped.
-    """
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
@@ -555,7 +535,7 @@ def test_low_confidence_real_dialogue_not_dropped(tmp_path):
         "region_id": "P001_R001",
         "page_number": 1,
         "type": "speech_bubble",
-        "original_text": "\u554a\u2026\u2026",
+        "original_text": "啊……",
         "text_direction": "horizontal",
         "ocr_confidence": 0.15,
         "ocr_confidence_min": 0.15,
@@ -571,15 +551,11 @@ def test_low_confidence_real_dialogue_not_dropped(tmp_path):
     run_translation(str(ws), config)
 
     trans_path = ws / "stage3_translation" / "translation.json"
-    assert trans_path.exists(), "translation.json must be written"
+    assert trans_path.exists()
     data = json.loads(trans_path.read_text(encoding="utf-8"))
     region = next(
         (r for r in data.get("results", []) if r["region_id"] == "P001_R001"), None
     )
-    assert region is not None, "P001_R001 must appear in translation.json results"
-    assert region["translated"] is True, (
-        "sfx_passthrough must mark the region as translated=True so stage4 picks it up"
-    )
-    assert region["translation_source"] == "sfx_passthrough", (
-        "single-CJK interjection must bypass the LLM and be marked sfx_passthrough"
-    )
+    assert region is not None
+    assert region["translated"] is True
+    assert region["translation_source"] == "sfx_passthrough"

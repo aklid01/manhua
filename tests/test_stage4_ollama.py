@@ -1,20 +1,24 @@
-"""Offline tests for the Stage 4 Ollama paraphrase backend.
-
-All Ollama HTTP calls are monkeypatched via OllamaBackend._call_ollama, so these
-tests never touch the network and require no running `ollama serve`.
-"""
+# Unit tests for Ollama backend Stage 4 dialogue paraphrasing.
 
 import json
+import urllib.error
 
 import pytest
 
 import config
+from manhua_pipeline.stages import stage4_paraphrase
+from manhua_pipeline.stages._backends import (
+    OllamaSettings,
+    validate_ollama_settings,
+)
+from manhua_pipeline.stages.stage4_paraphrase import (
+    OllamaBackend,
+    _get_backend,
+    run_paraphrase,
+)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-
+# Helper to set up workspace with manifest and translation results
 def _setup(ws, trans_results, glossary=None):
     ws.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -45,11 +49,12 @@ def _setup(ws, trans_results, glossary=None):
         )
 
 
+# Helper to construct mock translation region result dictionary
 def _trans_entry(rid, literal, translated=True):
     return {
         "region_id": rid,
         "page_number": 1,
-        "original_text": "\u539f\u6587",
+        "original_text": "原文",
         "literal_translation": literal,
         "translated": translated,
         "skip_reason": None if translated else "no_usable_text",
@@ -59,6 +64,7 @@ def _trans_entry(rid, literal, translated=True):
     }
 
 
+# Fixture configuring Ollama paraphrase settings
 @pytest.fixture
 def ollama_config(monkeypatch):
     monkeypatch.setattr(config, "PARAPHRASE_BACKEND", "ollama", raising=False)
@@ -80,47 +86,37 @@ def ollama_config(monkeypatch):
     return config
 
 
+# Helper to mock OllamaBackend._call_ollama with custom responder
 def _patch_call(monkeypatch, responder):
-    from manhua_pipeline.stages import stage4_paraphrase as s4
-
     monkeypatch.setattr(
-        s4.OllamaBackend,
+        stage4_paraphrase.OllamaBackend,
         "_call_ollama",
         lambda self, user_prompt: responder(user_prompt),
     )
-    return s4
+    return stage4_paraphrase
 
 
+# Helper returning canned JSON dictionary responder
 def _canned(mapping):
     payload = json.dumps(mapping, ensure_ascii=False)
     return lambda _prompt: payload
 
 
+# Helper to read and deserialize paraphrase.json
 def _read_paraphrase(ws):
     return json.loads(
         (ws / "stage4_paraphrase" / "paraphrase.json").read_text(encoding="utf-8")
     )
 
 
-# ---------------------------------------------------------------------------
-# 1. Backend selection
-# ---------------------------------------------------------------------------
-
-
+# Verify _get_backend returns OllamaBackend instance for paraphrase stage
 def test_get_backend_returns_ollama(ollama_config):
-    from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend, _get_backend
-
     assert isinstance(_get_backend(ollama_config), OllamaBackend)
 
 
-# ---------------------------------------------------------------------------
-# 2. Successful paraphrase written + manifest advances
-# ---------------------------------------------------------------------------
-
-
+# Verify valid paraphrase response writes output and advances manifest
 def test_successful_paraphrase_written(tmp_path, ollama_config, monkeypatch):
     _patch_call(monkeypatch, _canned({"P001_R001": "Get lost!"}))
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(ws, [_trans_entry("P001_R001", "Get out of here!")])
@@ -135,11 +131,7 @@ def test_successful_paraphrase_written(tmp_path, ollama_config, monkeypatch):
     assert m["current_stage"] == "render"
 
 
-# ---------------------------------------------------------------------------
-# 3. Multiple batches -> every region rewritten once
-# ---------------------------------------------------------------------------
-
-
+# Verify multi-batch paraphrasing processes all regions
 def test_multiple_batches(tmp_path, ollama_config, monkeypatch):
     calls = {"n": 0}
 
@@ -152,7 +144,6 @@ def test_multiple_batches(tmp_path, ollama_config, monkeypatch):
         return json.dumps(out)
 
     _patch_call(monkeypatch, responder)
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(
@@ -173,15 +164,10 @@ def test_multiple_batches(tmp_path, ollama_config, monkeypatch):
     assert calls["n"] >= 2
 
 
-# ---------------------------------------------------------------------------
-# 4. Code-fenced JSON + parser helpers
-# ---------------------------------------------------------------------------
-
-
+# Verify code-fenced JSON responses parse correctly
 def test_code_fenced_json_parses(tmp_path, ollama_config, monkeypatch):
     fenced = "```json\n" + json.dumps({"P001_R001": "Fenced!"}) + "\n```"
     _patch_call(monkeypatch, lambda _p: fenced)
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(ws, [_trans_entry("P001_R001", "x")])
@@ -191,9 +177,8 @@ def test_code_fenced_json_parses(tmp_path, ollama_config, monkeypatch):
     assert pa["results"][0]["final_text"] == "Fenced!"
 
 
+# Verify static JSON parsing handles valid, markdown-fenced, and invalid inputs
 def test_parse_json_static_helpers():
-    from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
-
     assert OllamaBackend._parse_json('```json\n{"a": "b"}\n```') == {"a": "b"}
     assert OllamaBackend._parse_json('prose {"a": "b"} tail') == {"a": "b"}
     assert OllamaBackend._parse_json("garbage") == {}
@@ -201,11 +186,7 @@ def test_parse_json_static_helpers():
     assert OllamaBackend._parse_json("[1,2,3]") == {}
 
 
-# ---------------------------------------------------------------------------
-# 5. Invalid JSON -> strict retry recovers
-# ---------------------------------------------------------------------------
-
-
+# Verify invalid JSON responses trigger retry and recover
 def test_invalid_json_recovers(tmp_path, ollama_config, monkeypatch):
     state = {"first": True}
 
@@ -220,7 +201,6 @@ def test_invalid_json_recovers(tmp_path, ollama_config, monkeypatch):
         return json.dumps(out)
 
     _patch_call(monkeypatch, responder)
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(ws, [_trans_entry("P001_R001", "a"), _trans_entry("P001_R002", "b")])
@@ -233,14 +213,9 @@ def test_invalid_json_recovers(tmp_path, ollama_config, monkeypatch):
     assert by_id["P001_R002"]["paraphrased"] is True
 
 
-# ---------------------------------------------------------------------------
-# 6. Missing paraphrase -> literal fallback
-# ---------------------------------------------------------------------------
-
-
+# Verify missing paraphrase regions fall back to literal translation
 def test_missing_falls_back_to_literal(tmp_path, ollama_config, monkeypatch):
     _patch_call(monkeypatch, _canned({"P001_R001": "Nice one!"}))
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(
@@ -257,14 +232,8 @@ def test_missing_falls_back_to_literal(tmp_path, ollama_config, monkeypatch):
     assert by_id["P001_R002"]["paraphrase_source"] == "literal_fallback"
 
 
-# ---------------------------------------------------------------------------
-# 7. Echo of literal is ALLOWED (not dropped)
-# ---------------------------------------------------------------------------
-
-
+# Verify verbatim repetitions of literal translation are accepted as valid paraphrases
 def test_echo_of_literal_allowed():
-    from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
-
     literals = {"P001_R001": "ACME Corp", "P001_R002": "hello there"}
     parsed = {"P001_R001": "ACME Corp", "P001_R002": "hey!"}
     accepted, missing, _ = OllamaBackend._validate_batch(
@@ -274,14 +243,8 @@ def test_echo_of_literal_allowed():
     assert missing == []
 
 
-# ---------------------------------------------------------------------------
-# 8. Unexpected IDs rejected; invalid values dropped
-# ---------------------------------------------------------------------------
-
-
+# Verify extraneous region IDs not in the batch are rejected
 def test_unexpected_ids_rejected():
-    from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
-
     parsed = {"P001_R001": "good", "P999_R999": "ghost"}
     accepted, missing, unexpected = OllamaBackend._validate_batch(
         parsed, {"P001_R001"}, {"P001_R001": "g"}
@@ -291,9 +254,8 @@ def test_unexpected_ids_rejected():
     assert missing == []
 
 
+# Verify null, numeric, list, or empty values are dropped
 def test_invalid_values_dropped():
-    from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
-
     parsed = {
         "P001_R001": "",
         "P001_R002": "   ",
@@ -308,19 +270,12 @@ def test_invalid_values_dropped():
     assert set(missing) == expected - {"P001_R006"}
 
 
-# ---------------------------------------------------------------------------
-# 9. Connectivity failure -> clear RuntimeError
-# ---------------------------------------------------------------------------
-
-
+# Verify Ollama connection failures raise descriptive RuntimeError
 def test_connectivity_failure_raises(tmp_path, ollama_config, monkeypatch):
-    import urllib.error
-
     def boom(req, timeout=None):
         raise urllib.error.URLError("refused")
 
     monkeypatch.setattr("urllib.request.urlopen", boom)
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(ws, [_trans_entry("P001_R001", "a")])
@@ -332,11 +287,7 @@ def test_connectivity_failure_raises(tmp_path, ollama_config, monkeypatch):
     assert "ollama serve" in msg
 
 
-# ---------------------------------------------------------------------------
-# 10. Empty input -> no Ollama call, completes via short-circuit
-# ---------------------------------------------------------------------------
-
-
+# Verify chapters with zero usable regions bypass backend API calls
 def test_empty_input_no_call(tmp_path, ollama_config, monkeypatch):
     called = {"n": 0}
 
@@ -345,7 +296,6 @@ def test_empty_input_no_call(tmp_path, ollama_config, monkeypatch):
         return "{}"
 
     _patch_call(monkeypatch, responder)
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(ws, [_trans_entry("P001_R001", "", translated=False)])
@@ -357,16 +307,10 @@ def test_empty_input_no_call(tmp_path, ollama_config, monkeypatch):
     assert m["current_stage"] == "render"
 
 
-# ---------------------------------------------------------------------------
-# 11. Soft completion gate: below ratio -> writes but does NOT advance
-# ---------------------------------------------------------------------------
-
-
+# Verify completion ratio below threshold writes output without advancing stage
 def test_below_threshold_does_not_advance(tmp_path, ollama_config, monkeypatch):
     monkeypatch.setattr(config, "OLLAMA_PARA_BATCH_SIZE", 10, raising=False)
-    # 1 of 3 = 0.33 < 0.80
     _patch_call(monkeypatch, _canned({"P001_R001": "one"}))
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(
@@ -385,17 +329,8 @@ def test_below_threshold_does_not_advance(tmp_path, ollama_config, monkeypatch):
     assert (ws / "stage4_paraphrase" / "paraphrase.json").exists()
 
 
-# ---------------------------------------------------------------------------
-# 12. Config validation + provenance metadata
-# ---------------------------------------------------------------------------
-
-
+# Verify invalid Ollama host, model, or batch size configurations raise ValueError
 def test_config_validation(monkeypatch):
-    from manhua_pipeline.stages._backends import (
-        OllamaSettings,
-        validate_ollama_settings,
-    )
-
     def _validate_ollama_para_config(cfg):
         s = OllamaSettings.from_config(cfg, prefix="OLLAMA_PARA")
         validate_ollama_settings(s, "OLLAMA_PARA")
@@ -427,9 +362,9 @@ def test_config_validation(monkeypatch):
         _validate_ollama_para_config(config)
 
 
+# Verify paraphrase output metadata records backend model and prompt version
 def test_provenance_recorded(tmp_path, ollama_config, monkeypatch):
     _patch_call(monkeypatch, _canned({"P001_R001": "hi!"}))
-    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
     ws = tmp_path / "workspace"
     _setup(ws, [_trans_entry("P001_R001", "a")])

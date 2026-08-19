@@ -1,12 +1,10 @@
+# Pipeline event taxonomy and structured event dataclass.
+
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# Event taxonomy - stable machine-readable contracts; message text may evolve.
-# ---------------------------------------------------------------------------
-
-# Backend and parsing
+# Backend request and JSON parsing events
 BACKEND_REQUEST_STARTED = "BACKEND_REQUEST_STARTED"
 BACKEND_REQUEST_SUCCEEDED = "BACKEND_REQUEST_SUCCEEDED"
 BACKEND_REQUEST_FAILED = "BACKEND_REQUEST_FAILED"
@@ -14,7 +12,7 @@ BACKEND_RESPONSE_BLANK = "BACKEND_RESPONSE_BLANK"
 BACKEND_JSON_INVALID = "BACKEND_JSON_INVALID"
 BACKEND_JSON_NON_OBJECT = "BACKEND_JSON_NON_OBJECT"
 
-# Region validation
+# Translation region validation events
 TRANSLATION_KEY_MISSING = "TRANSLATION_KEY_MISSING"
 TRANSLATION_VALUE_EMPTY = "TRANSLATION_VALUE_EMPTY"
 TRANSLATION_VALUE_WHITESPACE = "TRANSLATION_VALUE_WHITESPACE"
@@ -23,7 +21,7 @@ TRANSLATION_VALUE_CJK_REJECTED = "TRANSLATION_VALUE_CJK_REJECTED"
 TRANSLATION_VALUE_SCHEMA_REJECTED = "TRANSLATION_VALUE_SCHEMA_REJECTED"
 TRANSLATION_UNEXPECTED_REGION_ID = "TRANSLATION_UNEXPECTED_REGION_ID"
 
-# Resolution
+# Region resolution and retry events
 LOCKED_GLOSSARY_APPLIED = "LOCKED_GLOSSARY_APPLIED"
 REGION_OVERRIDE_APPLIED = "REGION_OVERRIDE_APPLIED"
 REGION_OVERRIDE_SHADOWED = "REGION_OVERRIDE_SHADOWED"
@@ -33,7 +31,7 @@ ISOLATED_RETRY_FAILED = "ISOLATED_RETRY_FAILED"
 TRANSLATION_REGION_RESOLVED = "TRANSLATION_REGION_RESOLVED"
 TRANSLATION_COMPLETION_BLOCKED = "TRANSLATION_COMPLETION_BLOCKED"
 
-# Manual intervention
+# Manual intervention events
 MANUAL_OVERRIDE_REQUIRED = "MANUAL_OVERRIDE_REQUIRED"
 MANUAL_OVERRIDE_ACCEPTED = "MANUAL_OVERRIDE_ACCEPTED"
 MANUAL_OVERRIDE_DEFERRED = "MANUAL_OVERRIDE_DEFERRED"
@@ -41,7 +39,7 @@ MANUAL_OVERRIDE_ABORTED = "MANUAL_OVERRIDE_ABORTED"
 MANUAL_OVERRIDE_CONFLICT = "MANUAL_OVERRIDE_CONFLICT"
 MANUAL_OVERRIDE_ALREADY_RESOLVED = "MANUAL_OVERRIDE_ALREADY_RESOLVED"
 
-# Stage and Chapter Lifecycle
+# Stage, chapter, QA, and rendering lifecycle events
 STAGE_STARTED = "STAGE_STARTED"
 STAGE_COMPLETED = "STAGE_COMPLETED"
 STAGE_FAILED = "STAGE_FAILED"
@@ -55,6 +53,7 @@ RENDER_ERASE_MASK_LOW_OVERLAP = "RENDER_ERASE_MASK_LOW_OVERLAP"
 RENDER_TEXT_TOO_SMALL = "RENDER_TEXT_TOO_SMALL"
 
 
+# Structured pipeline event model for logging and telemetry
 @dataclass(frozen=True)
 class PipelineEvent:
     event: str
@@ -80,5 +79,6 @@ class PipelineEvent:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
 
+    # Convert event to dictionary representation
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

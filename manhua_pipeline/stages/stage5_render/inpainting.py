@@ -1,3 +1,6 @@
+# Image inpainting, background color estimation, and bubble mask extraction.
+
+import math
 from collections import Counter
 from statistics import median
 
@@ -11,10 +14,12 @@ from manhua_pipeline.stages.stage5_render.geometry import (
 from manhua_pipeline.stages.stage5_render.types import Box
 
 
+# Check if RGB color luminance is below dark threshold
 def _is_dark(c: tuple[int, int, int]) -> bool:
     return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] < 96
 
 
+# Validate fill color against text box brightness to prevent black boxes
 def _sanitize_dark_fill(
     fill: tuple[int, int, int],
     page_img: Image.Image,
@@ -35,6 +40,7 @@ def _sanitize_dark_fill(
     return fill
 
 
+# Estimate dominant background color around text bounding box
 def estimate_text_background(
     image: Image.Image,
     text_box: Box,
@@ -75,24 +81,18 @@ def estimate_text_background(
     return _sanitize_dark_fill(raw_fill, image, text_box)
 
 
+# Count total non-zero mask pixels in L-mode image
 def _count_mask_pixels(mask: Image.Image) -> int:
     histogram = mask.histogram()
     return histogram[255] if len(histogram) > 255 else 0
 
 
+# Perform image inpainting using OpenCV Telea algorithm
 def _image_inpaint(
     page_img: Image.Image,
     bubble_box: Box,
     mask: Image.Image,
 ) -> bool:
-    """Repair a masked text area while preserving a non-flat panel background.
-
-    Colored UI panels commonly have gradients, glows, or texture. Painting a
-    single dominant RGB value over those panels creates the large flat patches
-    seen in failed renders. OpenCV is already available in the detector
-    environment, but this remains optional so the solid-fill fallback keeps
-    working in minimal installations.
-    """
     try:
         import cv2
         import numpy as np
@@ -106,6 +106,7 @@ def _image_inpaint(
     return True
 
 
+# Erase Chinese text within bounding box using mask and background fill
 def erase_original_text(
     *,
     page_img: Image.Image,
@@ -155,9 +156,6 @@ def erase_original_text(
     min_retention = float(getattr(config, "TEXT_ERASE_MIN_RETENTION", 0.65))
     low_overlap = retention < min_retention
 
-    # A mask that misses part of the text region is unsafe for whole-bubble
-    # painting. Use the text rectangle as the repair mask and preserve colored
-    # gradients with image inpainting when possible.
     repaired_with_image_inpaint = False
     if low_overlap:
         erase_mask = text_mask
@@ -175,9 +173,6 @@ def erase_original_text(
             fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
             page_img.paste(fill_image, (bubble_box.x, bubble_box.y), mask=erase_mask)
     else:
-        # Use bubble_mask directly to clean the entire speech bubble container
-        # interior, preventing stray Chinese characters, unrendered sibling
-        # fragments, or edge punctuation from surviving.
         erase_mask = bubble_mask
         fill_image = Image.new("RGB", (bubble_box.w, bubble_box.h), fill)
         page_img.paste(fill_image, (bubble_box.x, bubble_box.y), mask=erase_mask)
@@ -187,11 +182,6 @@ def erase_original_text(
     margin = int(getattr(config, "TEXT_ERASE_PARENT_MARGIN_PX", 8))
     geometrically_inside = box_inside(text_box, bubble_box, margin=margin)
 
-    # Erase the portion of the OCR text_box that lies outside the bubble_box.
-    # This happens when the detector assigns text coordinates that extend beyond
-    # the parent bubble boundary (e.g. text detected above the bubble in a
-    # stitched page). The bubble-clipped erase above never reaches that area,
-    # leaving raw Chinese glyphs visible.
     pad = int(getattr(config, "TEXT_ERASE_PADDING_PX", 12))
     img_w, img_h = page_img.size
     expanded_text = Box(
@@ -262,6 +252,7 @@ def erase_original_text(
     }
 
 
+# Sample median perimeter pixel colors to estimate region background
 def _estimate_bg(
     page_img: Image.Image, x: int, y: int, w: int, h: int
 ) -> tuple[int, int, int]:
@@ -297,12 +288,14 @@ def _estimate_bg(
     )
 
 
+# Determine black or white text color based on background luminance
 def _text_color_for_bg(bg: tuple[int, int, int]) -> tuple[int, int, int]:
     r, g, b = bg[:3]
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
     return (0, 0, 0) if luminance >= 128 else (255, 255, 255)
 
 
+# Breadth-first search finding connected white mask pixels
 def _bfs(
     sx: int,
     sy: int,
@@ -327,6 +320,7 @@ def _bfs(
     return comp
 
 
+# Filter binary grid to retain largest connected component
 def _keep_largest_component(
     is_white: list[list[bool]],
     width: int,
@@ -373,6 +367,7 @@ def _keep_largest_component(
     return new_grid
 
 
+# Compute dominant background fill color inside bubble crop
 def _dominant_fill_color(
     bubble_crop: Image.Image,
     local_text_box: Box | None,
@@ -451,6 +446,7 @@ def _dominant_fill_color(
     return raw_fill
 
 
+# Create boolean mask of pixels within color tolerance
 def _color_close_mask(arr, fill_color: tuple[int, int, int], tol: int):
     import numpy as np
 
@@ -461,6 +457,7 @@ def _color_close_mask(arr, fill_color: tuple[int, int, int], tol: int):
     return (dr <= tol) & (dg <= tol) & (db <= tol)
 
 
+# Generate solid white rectangular mask
 def _solid_rect_mask(bubble_box: Box, erase_box: Box) -> Image.Image:
     mask = Image.new("L", (bubble_box.w, bubble_box.h), 0)
     draw = ImageDraw.Draw(mask)
@@ -474,6 +471,7 @@ def _solid_rect_mask(bubble_box: Box, erase_box: Box) -> Image.Image:
     return mask
 
 
+# Extract thought bubble interior mask by tracing radial dark rays
 def _get_radiating_thought_mask(  # noqa: C901
     bbox_img: Image.Image,
     generic_mask: Image.Image,
@@ -481,18 +479,8 @@ def _get_radiating_thought_mask(  # noqa: C901
     *,
     seed_box: Box | None = None,
 ) -> Image.Image | None:
-    """Return the inner interior of a radiating thought bubble, if detected.
-
-    Pale page backgrounds can connect to a thought bubble's white interior
-    through the gaps between its rays. The generic fill detector consequently
-    returns an almost-solid rectangle and erases the rays. This path samples
-    dark radial strokes, reconstructs their enclosed inner boundary, and only
-    returns a mask when the shape is strongly characteristic of that style.
-    """
     if not getattr(config, "THOUGHT_BUBBLE_MASK_ENABLED", True) or seed_box is None:
         return None
-
-    import math
 
     import numpy as np
 
@@ -568,8 +556,6 @@ def _get_radiating_thought_mask(  # noqa: C901
     )
     expanded_radii = np.tile(radii, 3)
     interpolated = np.interp(np.arange(sample_count), expanded_indices, expanded_radii)
-    # A short circular median smooths individual ray gaps without making the
-    # reconstructed edge visibly polygonal.
     smoothed = np.empty(sample_count, dtype=float)
     for sector in range(sample_count):
         window = [
@@ -609,6 +595,7 @@ def _get_radiating_thought_mask(  # noqa: C901
     return Image.fromarray((interior * 255).astype(np.uint8), mode="L")
 
 
+# Extract speech bubble container alpha mask using flood fill and connectivity
 def _get_bubble_mask(
     bbox_img: Image.Image,
     mx: int,
@@ -720,12 +707,8 @@ def _get_bubble_mask(
     return Image.fromarray((mask_arr * 255).astype(np.uint8), mode="L")
 
 
+# Decode base64 YOLO-seg bubble mask from region metadata
 def load_region_bubble_mask(region: dict, bubble_box) -> "Image.Image | None":
-    """Decode a YOLO-seg bubble mask stored in the region by Stage 1.
-
-    Returns a PIL 'L' image sized to (bubble_box.w, bubble_box.h), or None if
-    the region has no valid mask (Stage 5 falls back to _get_bubble_mask()).
-    """
     bm = region.get("bubble_mask")
     if not bm or not bm.get("valid"):
         return None

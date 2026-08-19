@@ -1,3 +1,5 @@
+# Region triage classification, watermark filtering, and interjection routing.
+
 import re
 from dataclasses import dataclass
 
@@ -26,14 +28,17 @@ _FULLWIDTH_MAP = {
 }
 
 
+# Check whether string contains any CJK characters
 def _contains_cjk(text: str) -> bool:
     return bool(_CJK_RE.search(text or ""))
 
 
+# Count CJK characters in string
 def _cjk_char_count(text: str) -> int:
     return len(_CJK_RE.findall(text or ""))
 
 
+# Calculate ratio of CJK characters to total non-whitespace characters
 def _cjk_ratio(text: str) -> float:
     no_space = "".join(c for c in (text or "") if not c.isspace())
     if not no_space:
@@ -41,20 +46,24 @@ def _cjk_ratio(text: str) -> float:
     return len(_CJK_RE.findall(no_space)) / len(no_space)
 
 
+# Normalize fullwidth punctuation characters
 def _normalize_punct(text: str) -> str:
     return normalize_punct(text)
 
 
+# Check whether region content is trivial or noise
 def _is_trivial_region(original_text: str, config) -> bool:
     return not is_meaningful_region(original_text, config)
 
 
+# Outcome of region triage classification
 @dataclass(frozen=True)
 class TriageResult:
-    reason: str  # empty | watermark | no_cjk | trivial | sfx_passthrough | translatable
+    reason: str
     effective_text: str
 
 
+# Strip known watermark patterns and scanlator tags from text
 def _strip_watermarks(text: str, config) -> str:
     if not text:
         return ""
@@ -73,6 +82,7 @@ def _strip_watermarks(text: str, config) -> str:
     return "\n".join(kept).strip()
 
 
+# Count total CJK characters in text
 def _cjk_count(text: str) -> int:
     return len(_CJK_RE.findall(text or ""))
 
@@ -80,16 +90,14 @@ def _cjk_count(text: str) -> int:
 _DIALOGUE_SIGNAL_PUNCT = frozenset("?？!！~～…。．⁈⁇‼♥♡")
 
 _CJK_INTERJECTIONS = frozenset(
-    # Vocal interjections / hesitations
     "诶欸嗯唔呒啊阿哈呵嘿嘻咦哦噢喔唉哎呃哼呀呐喂嘛啦"
     "咧哇呜咳嘶啧哟唷嚯嗝嗬嘞嚄嘘呸嗤吖呦啐切"
-    # Additions: breath / exclamation sounds seen in manhua
     "额呼嗷噫噗吼咻嗨嘁唏嗞哧咩嗡吭啵"
-    # Onomatopoeia (single-char sound effects that fill a bubble alone)
     "砰啪咚叮嘭哗哐唰嘣哒咔嗖轰嘀"
 )
 
 
+# Check if text contains dialogue punctuation or interjection characters
 def _has_dialogue_signal(effective: str) -> bool:
     if any(ch in _DIALOGUE_SIGNAL_PUNCT for ch in effective):
         return True
@@ -97,6 +105,7 @@ def _has_dialogue_signal(effective: str) -> bool:
     return cjk_core in _CJK_INTERJECTIONS
 
 
+# Check if text consists exclusively of punctuation characters
 def _is_punct_only(effective: str) -> bool:
     core = "".join(ch for ch in effective if not ch.isspace())
     if not core:
@@ -104,6 +113,7 @@ def _is_punct_only(effective: str) -> bool:
     return not any(ch.isalnum() for ch in core) and not bool(_CJK_RE.search(core))
 
 
+# Classify single region text into triage action category
 def triage_region(original_text: str, config) -> TriageResult:
     raw = (original_text or "").strip()
 
@@ -136,6 +146,7 @@ def triage_region(original_text: str, config) -> TriageResult:
     return TriageResult("translatable", effective)
 
 
+# Construct skipped region result row
 def _skip_row(r: dict, skip_reason: str) -> dict:
     return {
         "region_id": r["region_id"],
@@ -151,6 +162,7 @@ def _skip_row(r: dict, skip_reason: str) -> dict:
     }
 
 
+# Construct pre-translated or passthrough region result row
 def _translated_row(r: dict, text: str, *, source: str, glossary_terms: list) -> dict:
     return {
         "region_id": r["region_id"],
@@ -166,8 +178,8 @@ def _translated_row(r: dict, text: str, *, source: str, glossary_terms: list) ->
     }
 
 
+# Check whether region is eligible for speech bubble routing
 def _is_renderable_speech_bubble(region: dict, config) -> bool:
-    """Return whether a region is eligible for dialogue-only short-text routing."""
     speech_type = getattr(config, "TYPE_SPEECH", "speech_bubble")
     return (
         region.get("type") == speech_type
@@ -176,8 +188,8 @@ def _is_renderable_speech_bubble(region: dict, config) -> bool:
     )
 
 
+# Check whether region is non-dialogue or non-rendered
 def _is_explicit_non_speech_region(region: dict, config) -> bool:
-    """Return whether detection explicitly classifies a region as non-dialogue."""
     speech_type = getattr(config, "TYPE_SPEECH", "speech_bubble")
     return (
         ("type" in region and region.get("type") != speech_type)
@@ -186,8 +198,8 @@ def _is_explicit_non_speech_region(region: dict, config) -> bool:
     )
 
 
+# Check whether speech bubble contains short single-character dialogue
 def _is_short_speech_bubble(region: dict, effective_text: str, config) -> bool:
-    """Recognize short bubble dialogue without broadening background-SFX handling."""
     if not getattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", True):
         return False
     if not getattr(config, "TRANSLATE_SHORT_SPEECH_BUBBLES", True):
@@ -202,6 +214,7 @@ def _is_short_speech_bubble(region: dict, effective_text: str, config) -> bool:
     return True
 
 
+# Partition regions by triage classification outcome
 def _partition_by_triage(
     regions: list[dict], config, locked_index: dict[str, str]
 ) -> tuple[list[dict], list[dict], list[dict]]:
@@ -214,10 +227,6 @@ def _partition_by_triage(
         res = triage_region(raw, config)
         r["effective_text"] = res.effective_text
 
-        # A short renderable speech bubble is dialogue even when OCR converted
-        # an ellipsis to ASCII dots (for example, "求...."). Conversely, a
-        # background/free-text SFX must not inherit the generic short-CJK
-        # passthrough route.
         if (
             _is_short_speech_bubble(r, res.effective_text, config)
             and res.reason == "trivial"

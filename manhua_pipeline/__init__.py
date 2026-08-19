@@ -1,8 +1,10 @@
-"""Manhua translation pipeline package."""
+# Manhua translation pipeline package.
 
+import logging
 import os
 import warnings
 
+# Suppress external library logs, progress bars, and warnings
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
@@ -11,8 +13,6 @@ os.environ["TQDM_DISABLE"] = "1"
 os.environ["PYTHONWARNINGS"] = "ignore"
 
 warnings.filterwarnings("ignore")
-
-import logging
 
 for _log_name in [
     "transformers",

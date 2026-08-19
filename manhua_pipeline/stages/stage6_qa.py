@@ -1,7 +1,4 @@
-"""Stage 6: QA.
-
-Quality checks; reports only, never fixes. SUCCESS 0-2 / REVIEW 3-10 / FAILED >10 warnings. Outputs qa.json.
-"""
+# Stage 6: Quality assurance validation, warning aggregation, and report generation.
 
 import json
 import time
@@ -18,8 +15,8 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "QA"
 
 
+# Load stage JSON artifact defensively, recording critical warning if missing
 def _load_artifact(path: Path, name: str, warnings_list: list) -> tuple[dict, bool]:
-    """Load JSON artifact defensively, records critical warning on error/missing."""
     if not path.exists():
         warnings_list.append(
             {
@@ -48,10 +45,10 @@ def _load_artifact(path: Path, name: str, warnings_list: list) -> tuple[dict, bo
         return {}, True
 
 
+# Check for page rendering failures and record critical warnings
 def _check_rendering_failures(
     manifest: dict, render_data: dict, warnings_list: list
 ) -> bool:
-    """Check for page rendering failures and record critical warnings if pages are missing."""
     render_pages = (
         render_data.get("pages")
         or render_data.get("outputs")
@@ -62,7 +59,6 @@ def _check_rendering_failures(
         p["page_number"] for p in render_pages if "page_number" in p
     }
 
-    # Fallback: derive from region results if no page list present
     if not rendered_page_numbers:
         rendered_page_numbers = {
             r["page_number"]
@@ -88,10 +84,10 @@ def _check_rendering_failures(
     return has_critical
 
 
+# Analyze single region across all pipeline artifacts for QA checks
 def _analyze_single_region(
     rid, ocr_map, tr_map, para_map, render_map
 ) -> tuple[list[dict], list[str]]:
-    """Analyze a single region for all QA categories and return warnings and attention reasons."""
     warnings = []
     attention_reasons = []
 
@@ -116,7 +112,6 @@ def _analyze_single_region(
     )
     low_sev = "info" if benign_no_text else "warning"
 
-    # low_ocr_confidence
     if rid in ocr_map and (
         ocr_r.get("needs_correction") or not ocr_r.get("has_usable_text")
     ):
@@ -130,9 +125,6 @@ def _analyze_single_region(
             }
         )
 
-    # ocr_review (informational): a dialogue bubble PaddleOCR couldn't read
-    # (punct-only/empty). Rendered fallback shown; queued in ocr_review.json.
-    # Info severity => listed but does NOT affect SUCCESS/REVIEW/FAILED verdict.
     if ocr_r.get("ocr_review"):
         warnings.append(
             {
@@ -148,7 +140,6 @@ def _analyze_single_region(
             }
         )
 
-    # missing_translation
     if ocr_r.get("has_usable_text") and (
         rid not in tr_map or not tr_r.get("translated")
     ):
@@ -163,7 +154,6 @@ def _analyze_single_region(
         )
         attention_reasons.append("missing_translation")
 
-    # missing_paraphrase
     if tr_r.get("translated") and (
         rid not in para_map or not para_r.get("paraphrased")
     ):
@@ -177,7 +167,6 @@ def _analyze_single_region(
             }
         )
 
-    # overflow
     if render_r.get("overflow"):
         warnings.append(
             {
@@ -189,7 +178,6 @@ def _analyze_single_region(
             }
         )
 
-    # left_original_no_text
     if render_r.get("action") == "left_original_no_text":
         warnings.append(
             {
@@ -203,7 +191,6 @@ def _analyze_single_region(
         if not benign_no_text:
             attention_reasons.append("left_original_no_text")
 
-    # edge_touching_split
     if ocr_r.get("edge_touching") and not ocr_r.get("has_usable_text"):
         warnings.append(
             {
@@ -216,7 +203,6 @@ def _analyze_single_region(
         )
         attention_reasons.append("edge_touching_split")
 
-    # glossary_conflict
     if tr_r.get("glossary_conflict") or para_r.get("glossary_conflict"):
         warnings.append(
             {
@@ -231,6 +217,7 @@ def _analyze_single_region(
     return warnings, attention_reasons
 
 
+# Iterate over regions and compile QA warnings and needs_attention lists
 def _process_region_analysis(
     sorted_region_ids: list[str],
     ocr_map: dict,
@@ -238,7 +225,6 @@ def _process_region_analysis(
     para_map: dict,
     render_map: dict,
 ) -> tuple[list[dict], list[dict], dict]:
-    """Loop over regions and compile warnings, needs_attention, and category counts."""
     warnings_list = []
     needs_attention = []
     category_counts = {
@@ -274,8 +260,8 @@ def _process_region_analysis(
     return warnings_list, needs_attention, category_counts
 
 
+# Compute chapter QA status verdict (SUCCESS, REVIEW, or FAILED)
 def _compute_status(has_critical: bool, total_warnings: int, config) -> str:
-    """Determine stage status from warnings counts and critical markers."""
     if has_critical:
         return "FAILED"
     if total_warnings <= getattr(config, "QA_SUCCESS_MAX", 2):
@@ -285,8 +271,8 @@ def _compute_status(has_critical: bool, total_warnings: int, config) -> str:
     return "FAILED"
 
 
+# Write overrides.json stub with unhandled regions if not already present
 def _write_overrides(ws: Path, config, needs_attention: list) -> None:
-    """Write overrides.json stub if not already present."""
     overrides_path = ws / getattr(config, "OVERRIDES_NAME", "overrides.json")
     if not overrides_path.exists():
         stub = {
@@ -317,8 +303,8 @@ def _write_overrides(ws: Path, config, needs_attention: list) -> None:
         )
 
 
+# Execute Stage 6 quality assurance verification and write qa.json report
 def run_qa(workspace: str, config) -> Path:
-    """Run the QA stage over all pages and regions in the workspace."""
     t0 = time.monotonic()
     ws = Path(workspace)
     logger.info(
@@ -360,7 +346,6 @@ def run_qa(workspace: str, config) -> Path:
 
     has_critical = ocr_crit or tr_crit or para_crit or render_crit
 
-    # Group by region_id
     ocr_results = ocr_data.get("results", [])
     tr_results = tr_data.get("results", [])
     para_results = para_data.get("results", [])
@@ -375,24 +360,20 @@ def run_qa(workspace: str, config) -> Path:
         ocr_map.keys() | tr_map.keys() | para_map.keys() | render_map.keys()
     )
 
-    # Page rendering failure check (skip if render.json missing to avoid double-counting)
     if not render_crit:
         page_crit = _check_rendering_failures(manifest, render_data, warnings_list)
         has_critical = has_critical or page_crit
 
-    # Analyze regions
     sorted_region_ids = sorted(all_region_ids)
     r_warnings, needs_attention, category_counts = _process_region_analysis(
         sorted_region_ids, ocr_map, tr_map, para_map, render_map
     )
     warnings_list.extend(r_warnings)
 
-    # Tally critical warning categories in counts
     for w in warnings_list:
         if w["category"] in ("rendering_failure", "missing_artifact"):
             category_counts[w["category"]] += 1
 
-    # Log specific categories
     for cat, count in category_counts.items():
         if count > 0 or cat in (
             "low_ocr_confidence",
@@ -409,11 +390,9 @@ def run_qa(workspace: str, config) -> Path:
                 count,
             )
 
-    # Compute status verdict
     total_warnings = sum(1 for w in warnings_list if w["severity"] == "warning")
     status = _compute_status(has_critical, total_warnings, config)
 
-    # Overrides
     _write_overrides(ws, config, needs_attention)
 
     logger.info(
@@ -425,7 +404,6 @@ def run_qa(workspace: str, config) -> Path:
         status,
     )
 
-    # Summary fields & Write qa.json
     total_pages = len(manifest.get("pages", []))
     summary_drawn = summary_left = summary_overflow = 0
     for r in render_results:
@@ -476,7 +454,6 @@ def run_qa(workspace: str, config) -> Path:
     with qa_json_path.open("w", encoding="utf-8") as fh:
         json.dump(qa_report, fh, ensure_ascii=False, indent=2)
 
-    # Update Manifest
     manifest["status"] = status
     manifest["warning_count"] = total_warnings
     completed = manifest.get("completed_stages", [])

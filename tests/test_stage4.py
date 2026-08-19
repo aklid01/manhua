@@ -1,8 +1,11 @@
+# Unit tests for Stage 4 manual/prompt paraphrasing, register detection, and fallback flows.
+
 import json
 
 import config
 
 
+# Helper to configure mock workspace with manifest and translation results
 def _setup(ws, tr_results):
     ws.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -29,6 +32,7 @@ def _setup(ws, tr_results):
     )
 
 
+# Helper to construct mock translation region result dictionary
 def _tr_entry(rid, literal, translated=True, skip_reason=None):
     return {
         "region_id": rid,
@@ -42,6 +46,7 @@ def _tr_entry(rid, literal, translated=True, skip_reason=None):
     }
 
 
+# Verify manual paraphrase backend creates prompt file and halts until response provided
 def test_paraphrase_manual_awaits_response(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -52,9 +57,10 @@ def test_paraphrase_manual_awaits_response(tmp_path):
     assert (ws / "stage4_paraphrase" / "paraphrase_prompt.json").exists()
     assert not (ws / "stage4_paraphrase" / "paraphrase.json").exists()
     m = json.loads((ws / "manifest.json").read_text())
-    assert m["current_stage"] == "paraphrase"  # NOT advanced
+    assert m["current_stage"] == "paraphrase"
 
 
+# Verify paraphrase prompt bundles only successfully translated regions
 def test_paraphrase_prompt_only_translated(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -76,6 +82,7 @@ def test_paraphrase_prompt_only_translated(tmp_path):
     assert ids == ["P001_R001"]
 
 
+# Verify paraphrase stage ingests manual response and advances manifest
 def test_paraphrase_ingests_response(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -108,6 +115,7 @@ def test_paraphrase_ingests_response(tmp_path):
     assert "paraphrase" in m["completed_stages"]
 
 
+# Verify linguistic register heuristic classifies formal, neutral, or rude dialogue
 def test_paraphrase_register_heuristic(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -138,6 +146,7 @@ def test_paraphrase_register_heuristic(tmp_path):
     assert by_id["P001_R001"]["register"] in ("neutral", "rude")
 
 
+# Verify paraphrase stage advances when all regions are non-translatable passthroughs
 def test_paraphrase_all_passthrough_completes(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -156,6 +165,7 @@ def test_paraphrase_all_passthrough_completes(tmp_path):
     assert m["current_stage"] == "render"
 
 
+# Verify glossary conflict flag passes through to paraphrase output
 def test_paraphrase_passes_glossary_conflict(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -174,6 +184,7 @@ def test_paraphrase_passes_glossary_conflict(tmp_path):
     assert pp["results"][0]["glossary_conflict"] is True
 
 
+# Verify paraphrase prompt bundle includes applicable series glossary terms
 def test_paraphrase_bundle_includes_glossary(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -208,6 +219,7 @@ def test_paraphrase_bundle_includes_glossary(tmp_path):
     assert any(t["target_term"] == "Manager" for t in bundle["glossary"])
 
 
+# Verify paraphrase instructions forbid summarizing or omitting content
 def test_paraphrase_prompt_requires_complete_content(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -225,6 +237,7 @@ def test_paraphrase_prompt_requires_complete_content(tmp_path):
     assert "verbatim" in instr
 
 
+# Verify recovery regions are flagged with translate_and_paraphrase task
 def test_translation_recovery_is_separate_from_single_char_passthrough():
     from manhua_pipeline.stages.stage4_paraphrase import (
         _build_bundle,
@@ -260,6 +273,7 @@ def test_translation_recovery_is_separate_from_single_char_passthrough():
     assert "translation_task" not in bundle["regions"][1]
 
 
+# Verify recovery prompt instructs backend to translate source CJK before paraphrasing
 def test_translation_recovery_prompt_requires_translation_first(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -287,6 +301,7 @@ def test_translation_recovery_prompt_requires_translation_first(tmp_path):
     assert "translate the CJK" in bundle["READ_FIRST"]
 
 
+# Verify suspiciously truncated paraphrases are rejected in favor of literal translation
 def test_truncated_paraphrase_falls_back_to_literal():
     from manhua_pipeline.stages.stage4_paraphrase import _validate_response
 
@@ -304,6 +319,7 @@ def test_truncated_paraphrase_falls_back_to_literal():
     assert any("suspiciously short" in warning for warning in warnings)
 
 
+# Verify missing paraphrase regions fall back to literal translation
 def test_paraphrase_missing_falls_back_to_literal(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -325,10 +341,11 @@ def test_paraphrase_missing_falls_back_to_literal(tmp_path):
     )
     by_id = {r["region_id"]: r for r in pp["results"]}
     assert by_id["P001_R002"]["paraphrased"] is False
-    assert by_id["P001_R002"]["final_text"] == "I quit!"  # fell back to literal
+    assert by_id["P001_R002"]["final_text"] == "I quit!"
     assert by_id["P001_R002"]["char_count"] == len("I quit!")
 
 
+# Verify manual overrides are applied verbatim in paraphrase output
 def test_paraphrase_override_used_verbatim(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -350,6 +367,7 @@ def test_paraphrase_override_used_verbatim(tmp_path):
     assert m["current_stage"] == "render"
 
 
+# Verify overridden regions are excluded from paraphrase prompt bundles
 def test_paraphrase_override_not_bundled(tmp_path):
     from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
 
@@ -374,6 +392,7 @@ def test_paraphrase_override_not_bundled(tmp_path):
     assert ids == ["P001_R001"]
 
 
+# Verify paraphrase batch response normalizes escaped newlines
 def test_validate_batch_newline_normalization():
     from manhua_pipeline.stages.stage4_paraphrase import OllamaBackend
 

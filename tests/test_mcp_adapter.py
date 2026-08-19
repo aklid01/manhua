@@ -1,9 +1,12 @@
+# Unit tests for FastMCP server adapter endpoints and payload validation.
+
 import json
 from pathlib import Path
 
 import config
 
 
+# Helper to set up mock chapter workspace awaiting translation or paraphrase
 def _mk_chapter(base: Path, name: str, awaiting="translate"):
     ch = base / name
     ch.mkdir(parents=True, exist_ok=True)
@@ -68,6 +71,7 @@ def _mk_chapter(base: Path, name: str, awaiting="translate"):
         )
 
 
+# Verify MCP list_pending tool discovers chapters awaiting translation or paraphrase
 def test_list_pending(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -82,6 +86,7 @@ def test_list_pending(tmp_path, monkeypatch):
     )
 
 
+# Verify MCP get_translation_bundle retrieves regions for the requested chapter
 def test_get_translation_bundle(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -96,6 +101,7 @@ def test_get_translation_bundle(tmp_path, monkeypatch):
     assert "P001_R001" in ids
 
 
+# Verify MCP submit_translation writes validated translations to response file
 def test_submit_translation_writes_response(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -105,7 +111,6 @@ def test_submit_translation_writes_response(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "get_output_dir", lambda: str(base))
 
     res = srv.submit_translation("chap_a", {"P001_R001": "Get lost!"})
-    print("SUBMIT RESULT IS:", res)
     assert res["written"] == 1
     resp_file = (
         base
@@ -117,6 +122,7 @@ def test_submit_translation_writes_response(tmp_path, monkeypatch):
     assert resp["P001_R001"] == "Get lost!"
 
 
+# Verify MCP submit_translation returns error for non-existent chapter
 def test_submit_unknown_chapter_errors(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -128,6 +134,7 @@ def test_submit_unknown_chapter_errors(tmp_path, monkeypatch):
     assert "error" in res
 
 
+# Verify MCP submit_translation filters out empty and non-string values
 def test_submit_validation_drops_bad(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -152,6 +159,7 @@ def test_submit_validation_drops_bad(tmp_path, monkeypatch):
     assert "P001_R002" not in resp and "P001_R003" not in resp
 
 
+# Verify MCP submit_translation rejects submission when no pending prompt exists
 def test_submit_without_pending_bundle_errors(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -159,7 +167,6 @@ def test_submit_without_pending_bundle_errors(tmp_path, monkeypatch):
     base.mkdir()
     ch = base / "chap_a"
     ch.mkdir()
-    # Write manifest and ocr, but do NOT run translate (no translation_prompt.json)
     manifest = {
         "chapter_id": "chap_a",
         "current_stage": "translate",
@@ -174,6 +181,7 @@ def test_submit_without_pending_bundle_errors(tmp_path, monkeypatch):
     assert "no pending bundle" in res["error"]
 
 
+# Verify MCP get_paraphrase_bundle retrieves regions awaiting paraphrase
 def test_get_paraphrase_bundle(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -188,6 +196,7 @@ def test_get_paraphrase_bundle(tmp_path, monkeypatch):
     assert "P001_R001" in ids
 
 
+# Verify MCP submit_paraphrase writes validated paraphrases to response file
 def test_submit_paraphrase_writes_response(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 
@@ -208,6 +217,7 @@ def test_submit_paraphrase_writes_response(tmp_path, monkeypatch):
     assert resp["P001_R001"] == "Oh yes!"
 
 
+# Verify MCP submit_paraphrase rejects submission when no prompt exists
 def test_submit_paraphrase_without_pending_bundle_errors(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv
 

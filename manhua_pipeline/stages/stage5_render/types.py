@@ -1,6 +1,9 @@
+# Data classes representing render bounding boxes and typography drawing plans.
+
 from dataclasses import dataclass, field
 
 
+# Integer coordinate bounding box dataclass
 @dataclass(frozen=True)
 class Box:
     x: int
@@ -23,10 +26,9 @@ class Box:
         return {"x": self.x, "y": self.y, "w": self.w, "h": self.h}
 
 
+# Structured rendering instructions and metadata prepared for drawing pass
 @dataclass
 class RenderPlan:
-    """Everything Pass 2 needs to DRAW a region, computed during Pass 1."""
-
     region_id: str
     page_number: int
     rendered: bool

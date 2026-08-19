@@ -1,4 +1,7 @@
+# Unit tests for pipeline CLI parser, stage dispatching, and Stage 0 import.
+
 import json
+import zipfile
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -11,13 +14,14 @@ from manhua_pipeline.stages import (
 from pipeline import build_parser, main
 
 
+# Fixture disabling subprocess execution for synchronous in-process test runs
 @pytest.fixture(autouse=True)
 def disable_batch_subprocess(monkeypatch):
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", False)
 
 
+# Verify CLI parser defines all required commands and flags
 def test_build_parser():
-    """Test that build_parser constructs the CLI parser with all expected commands."""
     parser = build_parser()
 
     for cmd in ["detect", "ocr", "translate", "paraphrase", "render", "qa", "run-all"]:
@@ -30,8 +34,8 @@ def test_build_parser():
     assert parsed.input == "some/path"
 
 
+# Verify CLI execution dispatches each stage function with expected arguments
 def test_pipeline_main_stage_execution(temp_workspace):
-    """Test that non-import stages are called correctly from main."""
     (temp_workspace / config.MANIFEST_NAME).write_text(
         json.dumps({"chapter_id": "test_ch"})
     )
@@ -51,8 +55,8 @@ def test_pipeline_main_stage_execution(temp_workspace):
                 mock_fn.assert_called_once_with(str(temp_workspace), config)
 
 
+# Verify 'import' command delegates to stage0_import.run_import
 def test_pipeline_main_import_calls_run_import(temp_workspace):
-    """Test that 'import' subcommand calls stage0_import.run_import with input_path."""
     with patch("manhua_pipeline.stages.stage0_import.run_import") as mock_run:
         exit_code = main(
             [
@@ -76,8 +80,8 @@ def test_pipeline_main_import_calls_run_import(temp_workspace):
         )
 
 
+# Verify run-all --from-stage skips stages before the requested starting stage
 def test_pipeline_run_all_from_stage(temp_workspace):
-    """Test that run-all starting from a specific stage skips preceding stages."""
     mock_fns = {
         k: MagicMock()
         for k in ["import", "detect", "ocr", "translate", "paraphrase", "render", "qa"]
@@ -97,18 +101,16 @@ def test_pipeline_run_all_from_stage(temp_workspace):
         mock_fns["qa"].assert_called_once()
 
 
+# Verify run-all fails with exit code 2 when given an invalid starting stage
 def test_pipeline_run_all_invalid_stage(temp_workspace):
-    """Test that run-all logs error and fails when given an invalid start stage."""
     exit_code = main(
         ["run-all", "--workspace", str(temp_workspace), "--from-stage", "invalid_stage"]
     )
     assert exit_code == 2
 
 
+# Verify run-all --fresh starts at import even when manifest status is complete
 def test_pipeline_run_all_fresh_bypasses_manifest_resume(temp_workspace, tmp_path):
-    """Test that run-all --fresh runs import stage even if manifest says complete."""
-    import json
-
     (temp_workspace / "manifest.json").write_text(
         json.dumps({"version": "v1", "current_stage": "complete"}), encoding="utf-8"
     )
@@ -135,10 +137,8 @@ def test_pipeline_run_all_fresh_bypasses_manifest_resume(temp_workspace, tmp_pat
         assert mock_fns["import"].call_args.kwargs.get("fresh") is True
 
 
+# Verify run-all --fresh ignores intermediate in-progress manifest state
 def test_pipeline_run_all_fresh_bypasses_in_progress_manifest(temp_workspace, tmp_path):
-    """Test that run-all --fresh starts from import even if manifest is at a later stage."""
-    import json
-
     (temp_workspace / "manifest.json").write_text(
         json.dumps({"version": "v1", "current_stage": "translation"}), encoding="utf-8"
     )
@@ -164,16 +164,16 @@ def test_pipeline_run_all_fresh_bypasses_in_progress_manifest(temp_workspace, tm
         mock_fns["import"].assert_called_once()
 
 
+# Verify run-all from import without --input argument fails
 def test_pipeline_run_all_missing_input(temp_workspace):
-    """Test that run-all from import without --input returns exit code 2."""
     exit_code = main(
         ["run-all", "--workspace", str(temp_workspace), "--from-stage", "import"]
     )
     assert exit_code == 2
 
 
+# Verify importing image directory creates normalized page files and manifest
 def test_import_folder(tmp_path):
-    """Stage0: import from a folder of synthetic images produces correct pages + manifest."""
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "src"
@@ -210,6 +210,7 @@ def test_import_folder(tmp_path):
     ]
 
 
+# Verify image directory import preserves mixed image extensions in manifest
 def test_import_folder_preserves_mixed_extensions(tmp_path):
     from manhua_pipeline.stages.stage0_import import run_import
 
@@ -230,6 +231,7 @@ def test_import_folder_preserves_mixed_extensions(tmp_path):
     ]
 
 
+# Verify tall strip images are split at safe seam regions during import
 def test_import_slices_tall_page_at_safe_seams(tmp_path, monkeypatch):
     from manhua_pipeline.stages.stage0_import import run_import
 
@@ -263,6 +265,7 @@ def test_import_slices_tall_page_at_safe_seams(tmp_path, monkeypatch):
     assert manifest["warning_count"] == 0
 
 
+# Verify tall images without safe horizontal seams are kept intact with warning
 def test_import_keeps_tall_page_when_no_safe_seam(tmp_path, monkeypatch):
     from manhua_pipeline.stages.stage0_import import run_import
 
@@ -283,10 +286,8 @@ def test_import_keeps_tall_page_when_no_safe_seam(tmp_path, monkeypatch):
     assert manifest["warning_count"] == 1
 
 
+# Verify importing CBZ archive unpacks and preserves true page order
 def test_import_cbz(tmp_path):
-    """Stage0: import from a CBZ file unpacks and produces correct pages."""
-    import zipfile
-
     from manhua_pipeline.stages.stage0_import import run_import
 
     cbz = tmp_path / "1_001_.cbz"
@@ -319,8 +320,8 @@ def test_import_cbz(tmp_path):
     ]
 
 
+# Verify re-running import on the same directory produces valid manifest without errors
 def test_import_idempotent(tmp_path):
-    """Stage0: re-running import still produces a valid manifest."""
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "src"
@@ -334,8 +335,8 @@ def test_import_idempotent(tmp_path):
     assert (ws / "manifest.json").exists()
 
 
+# Verify importing empty folder raises ValueError
 def test_import_empty_folder(tmp_path):
-    """Stage0: empty input folder raises ValueError."""
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "empty"
@@ -346,18 +347,16 @@ def test_import_empty_folder(tmp_path):
         run_import(str(src), str(ws), config)
 
 
+# Verify importing non-existent input path raises FileNotFoundError
 def test_import_missing_input(tmp_path):
-    """Stage0: non-existent input raises FileNotFoundError."""
     from manhua_pipeline.stages.stage0_import import run_import
 
     with pytest.raises(FileNotFoundError):
         run_import(str(tmp_path / "nope.cbz"), str(tmp_path / "ws"), config)
 
 
+# Verify QA stage executes on empty workspace without crashing
 def test_stage_stubs_run(temp_workspace):
-    """Remaining stage stubs run without raising exceptions."""
-    import json
-
     manifest = {
         "chapter_id": "test",
         "total_pages": 0,
@@ -378,10 +377,8 @@ def test_stage_stubs_run(temp_workspace):
     assert stage6_qa.run_qa(temp_workspace, config) is not None
 
 
+# Verify unpadded filenames (p1..p10) sort in numerical rather than lexicographical order
 def test_import_unpadded_numeric_order(tmp_path):
-    """Unpadded filenames (p1..p10) must import in true numeric order, not lexicographic."""
-    import json
-
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "chapter_042"
@@ -397,10 +394,8 @@ def test_import_unpadded_numeric_order(tmp_path):
     assert manifest["pages"][9]["page_number"] == 10
 
 
+# Verify chapter_id is derived from immediate chapter directory name
 def test_import_chapter_id_from_folder(tmp_path):
-    """chapter_id should come from the chapter folder name, not its parent/grandparent."""
-    import json
-
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "chapters" / "chapter_001"
@@ -413,11 +408,8 @@ def test_import_chapter_id_from_folder(tmp_path):
     assert manifest["chapter_id"] != "chapters"
 
 
+# Verify CBZ import derives chapter_id from archive filename
 def test_import_cbz_chapter_id(tmp_path):
-    """CBZ import must derive chapter_id from the archive name, never the temp dir."""
-    import json
-    import zipfile
-
     from manhua_pipeline.stages.stage0_import import run_import
 
     cbz = tmp_path / "1_001_.cbz"
@@ -433,10 +425,8 @@ def test_import_cbz_chapter_id(tmp_path):
     assert "tmp" not in manifest["chapter_id"].lower()
 
 
+# Verify re-importing fewer pages deletes old stale page files from disk
 def test_import_idempotent_clears_stale(tmp_path):
-    """Re-running import with fewer pages must remove stale NNN.png files."""
-    import json
-
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "src"
@@ -458,10 +448,8 @@ def test_import_idempotent_clears_stale(tmp_path):
     assert manifest["total_pages"] == 2
 
 
+# Verify optional metadata arguments (titles, source) are populated in manifest
 def test_import_metadata_fields(tmp_path):
-    """When metadata is provided, it appears in the manifest; otherwise null."""
-    import json
-
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "chapter_007"
@@ -482,10 +470,8 @@ def test_import_metadata_fields(tmp_path):
     assert m["source"] == "baozimh"
 
 
+# Verify corrupt image files are recorded as skipped pages with error reasons
 def test_import_failed_page_recorded(tmp_path):
-    """A corrupt image is recorded with filename=None, skip=True, and counted in total_pages."""
-    import json
-
     from manhua_pipeline.stages.stage0_import import run_import
 
     src = tmp_path / "src"
@@ -503,11 +489,8 @@ def test_import_failed_page_recorded(tmp_path):
     assert m["warning_count"] >= 1
 
 
+# Verify chapter_id strips unwanted trailing underscores
 def test_import_chapter_id_no_trailing_underscore(tmp_path):
-    """CBZ stem with trailing underscore should not leak into chapter_id."""
-    import json
-    import zipfile
-
     from manhua_pipeline.stages.stage0_import import run_import
 
     cbz = tmp_path / "1_001_.cbz"
@@ -522,8 +505,8 @@ def test_import_chapter_id_no_trailing_underscore(tmp_path):
     assert "1_001" in m["chapter_id"]
 
 
+# Verify run-all executes sequential stage subprocesses in batch mode
 def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
-    """Test run-all subprocess batch mode execution."""
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
     monkeypatch.setattr(config, "SUBPROCESS_STAGES", None)
 
@@ -605,8 +588,8 @@ def test_pipeline_run_all_subprocess(temp_workspace, monkeypatch):
         )
 
 
+# Verify subprocess run-all pauses when a stage requires manual handoff
 def test_pipeline_run_all_subprocess_handoff(temp_workspace, monkeypatch):
-    """Test that subprocess run-all stops when a stage requires handoff."""
     monkeypatch.setattr(config, "BATCH_SUBPROCESS", True)
     monkeypatch.setattr(config, "SUBPROCESS_STAGES", None)
 
@@ -642,8 +625,8 @@ def test_pipeline_run_all_subprocess_handoff(temp_workspace, monkeypatch):
         )
 
 
+# Verify _load_stage lazily loads stage entrypoint functions
 def test_load_stage_lazy():
-    """Test that _load_stage successfully imports and returns correct functions."""
     from manhua_pipeline.stages import stage1_detection, stage2_ocr
     from pipeline import _load_stage
 

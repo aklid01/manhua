@@ -1,4 +1,4 @@
-"""Offline unit tests for the batch processing CLI command in pipeline.py."""
+# Unit tests for batch processing CLI and orchestration.
 
 import json
 from pathlib import Path
@@ -7,12 +7,14 @@ import config
 import pipeline
 
 
+# Helper to create dummy archive file for batch test inputs
 def _create_dummy_cbz(folder: Path, name: str):
     p = folder / name
     p.write_text("dummy cbz contents", encoding="utf-8")
     return p
 
 
+# Helper to set up mock chapter workspace with manifest
 def _setup_chapter(base_dir: Path, chapter: str, stage: str):
     ch_dir = base_dir / chapter
     ch_dir.mkdir(parents=True, exist_ok=True)
@@ -30,6 +32,7 @@ def _setup_chapter(base_dir: Path, chapter: str, stage: str):
     (ch_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
+# Verify batch input discovery filters valid archives and sorts alphabetically
 def test_iter_batch_inputs(tmp_path):
     _create_dummy_cbz(tmp_path, "02_chap.cbz")
     _create_dummy_cbz(tmp_path, "01_chap.zip")
@@ -42,6 +45,7 @@ def test_iter_batch_inputs(tmp_path):
     assert inputs[1].name == "02_chap.cbz"
 
 
+# Verify batch processing correctly skips complete chapters, resumes pending, runs new, and logs errors
 def test_run_batch_classifications(tmp_path, monkeypatch):
     input_folder = tmp_path / "inputs"
     input_folder.mkdir()
@@ -53,15 +57,13 @@ def test_run_batch_classifications(tmp_path, monkeypatch):
     base_dir = tmp_path / "workspace"
     base_dir.mkdir()
 
-    # c1 is already complete -> should skip
+    # c1 is complete (should skip)
     _setup_chapter(base_dir, "c1", "complete")
 
-    # c2 exists but is pending @paraphrase -> should resume
+    # c2 is pending at paraphrase (should resume)
     _setup_chapter(base_dir, "c2", "paraphrase")
 
-    # c3 is new
-    # c4 will crash
-
+    # c3 is new; c4 will raise an exception during run
     runs = {}
 
     def mock_run_all(
@@ -115,6 +117,7 @@ def test_run_batch_classifications(tmp_path, monkeypatch):
     assert "Error: C4 blew up" in err_files[0].read_text(encoding="utf-8")
 
 
+# Verify batch execution skips existing chapters when resume flag is disabled
 def test_run_batch_no_resume(tmp_path, monkeypatch):
     input_folder = tmp_path / "inputs"
     input_folder.mkdir()

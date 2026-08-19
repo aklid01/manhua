@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 
 
 class SelectionOverlay(QGraphicsRectItem):
-    """Temporary rubberband box during region selection."""
+    # Temporary rubberband box during region selection
 
     def __init__(self):
         super().__init__()
@@ -32,7 +32,7 @@ class SelectionOverlay(QGraphicsRectItem):
 
 
 class DraggableTextItem(QGraphicsObject):
-    """Interactive, draggable, and resizable text box with complete per-line styling."""
+    # Interactive draggable and resizable text box with per-line styling
 
     changed = pyqtSignal()
     change_started = pyqtSignal()
@@ -79,12 +79,12 @@ class DraggableTextItem(QGraphicsObject):
 
         self.setZValue(50)
 
-    # ---------------- Bounding Rect & Shape ----------------
+    # Bounding Rect & Shape
     def boundingRect(self) -> QRectF:
         margin = max(self._stroke_width, self._handle_size) + 8
         return self._rect.adjusted(-margin, -margin, margin, margin)
 
-    # ---------------- Text & Per-Line Properties ----------------
+    # Text & Per-Line Properties
     @property
     def raw_text(self) -> str:
         return "\n".join(line["text"] for line in self._lines_data)
@@ -131,7 +131,7 @@ class DraggableTextItem(QGraphicsObject):
         self.changed.emit()
 
     def _auto_expand_height(self):
-        """Ensures the bounding box expands to fit the text when font size increases."""
+        # Expands bounding box height to fit rendered text when needed
         wrapped = self._compute_wrapped_lines()
         needed_h = sum(fm.lineSpacing() for _, _, _, fm in wrapped) + 16.0
         if needed_h > self._rect.height():
@@ -182,7 +182,7 @@ class DraggableTextItem(QGraphicsObject):
         align: Qt.AlignmentFlag | None = None,
         direction: str | None = None,
     ):
-        """Applies style to a specific line index, or to all lines if line_idx == -1."""
+        # Apply style to a specific line index, or to all lines if line_idx == -1
         kw = {
             "font_family": family,
             "font_size": size,
@@ -296,7 +296,7 @@ class DraggableTextItem(QGraphicsObject):
             else "left",
         }
 
-    # ---------------- Handles & Interaction ----------------
+    # Handles & Interaction
     def _handle_rects(self) -> dict[int, QRectF]:
         hs = self._handle_size
         r = self._rect
@@ -432,7 +432,7 @@ class DraggableTextItem(QGraphicsObject):
         return super().itemChange(change, value)
 
     def _compute_wrapped_lines(self) -> list[tuple[str, dict, QFont, QFontMetricsF]]:
-        """Returns list of (sub_line_text, line_dict, font, font_metrics)."""
+        # Compute wrapped lines and formatting metrics
         lines = []
         avail_w = max(10.0, self._rect.width())
 
@@ -466,7 +466,7 @@ class DraggableTextItem(QGraphicsObject):
                 lines.append((curr_line, ld, font, fm))
         return lines
 
-    # ---------------- Paint Rendering ----------------
+    # Paint Rendering
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -483,7 +483,7 @@ class DraggableTextItem(QGraphicsObject):
             for hrect in self._handle_rects().values():
                 painter.drawRect(hrect)
 
-        # Compute vertical height
+        # Compute vertical layout height
         total_text_h = sum(fm.lineSpacing() for _, _, _, fm in wrapped)
         start_y = self._rect.top() + max(
             0.0, (self._rect.height() - total_text_h) / 2.0
@@ -526,7 +526,7 @@ class DraggableTextItem(QGraphicsObject):
 
 
 class TouchupCanvas(QGraphicsView):
-    """Canvas view supporting smooth Photos-app panning, zoom, selection, and in-place text editing."""
+    # Canvas view supporting panning, zoom, selection, and in-place text editing
 
     region_selected = pyqtSignal(QRectF)
     item_selected = pyqtSignal(object)
@@ -620,7 +620,7 @@ class TouchupCanvas(QGraphicsView):
         self.clearSelection()
         self.item_selected.emit(None)
 
-    # ---------------- Inline Direct Text Editing ----------------
+    # Inline Direct Text Editing
     def mouseDoubleClickEvent(self, event):
         if self._mode == "edit":
             item = self.itemAt(event.pos())
@@ -656,13 +656,13 @@ class TouchupCanvas(QGraphicsView):
             self.item_text_edited.emit(item, new_text)
         QTextEdit.focusOutEvent(self._inline_editor, event)
 
-    # ---------------- Zoom & Photos-App Hand Panning ----------------
+    # Zoom & Panning
     def wheelEvent(self, event):
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
         self.scale(factor, factor)
 
     def mousePressEvent(self, event):
-        # Middle click, Right click, or Spacebar drag -> Pan immediately
+        # Middle click, right click, or Shift+Left click to pan immediately
         if (
             event.button() == Qt.MouseButton.MiddleButton
             or event.button() == Qt.MouseButton.RightButton

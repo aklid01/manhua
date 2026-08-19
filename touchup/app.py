@@ -53,8 +53,8 @@ except (ImportError, ValueError):
     from touchup.translator import translate_text
 
 
+# Convert PIL Image to QPixmap
 def pil_to_qpixmap(pil_image: Image.Image) -> QPixmap:
-    """Converts a PIL Image to QPixmap."""
     im = pil_image.convert("RGBA")
     data = im.tobytes("raw", "RGBA")
     qimg = QImage(data, im.width, im.height, QImage.Format.Format_RGBA8888)
@@ -62,9 +62,9 @@ def pil_to_qpixmap(pil_image: Image.Image) -> QPixmap:
 
 
 class TouchupApp(QMainWindow):
-    """Main Touch-Up Editor Window."""
+    # Main Touch-Up Editor Window
 
-    MIXED_STYLE_LABEL = "— Mixed —"
+    MIXED_STYLE_LABEL = "- Mixed -"
     _MIXED = object()
 
     def __init__(self, initial_image: str | None = None):
@@ -101,7 +101,7 @@ class TouchupApp(QMainWindow):
             self.load_image(Path(initial_image))
 
     def _init_fonts(self):
-        """Discovers bundled project fonts and system fonts."""
+        # Discover bundled project fonts and system fonts
         self.available_fonts = ["Arial", "Comic Sans MS", "Impact", "Tahoma", "Verdana"]
         font_dir = Path(__file__).resolve().parent.parent / "assets" / "fonts"
         if font_dir.exists():
@@ -115,7 +115,7 @@ class TouchupApp(QMainWindow):
             x for x in self.available_fonts if not (x in seen or seen.add(x))
         ]
 
-    # ---------------- UI Setup ----------------
+    # UI Setup
     def _build_ui(self):
         # Menu Bar
         menubar = self.menuBar()
@@ -391,7 +391,7 @@ class TouchupApp(QMainWindow):
 
         sidebar_layout.addStretch()
 
-        # Wrap sidebar in scroll area (resizable, no horizontal clipping)
+        # Wrap sidebar in scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(sidebar)
@@ -414,7 +414,7 @@ class TouchupApp(QMainWindow):
 
         self.statusBar().showMessage("Ready. Open an image to begin.")
 
-    # ---------------- Mode Handling ----------------
+    # Mode Handling
     def _set_mode(self, mode: str):
         if mode == "select":
             self.btn_mode_select.setChecked(True)
@@ -439,7 +439,7 @@ class TouchupApp(QMainWindow):
                 "Mode: ✋ Move & Typeset - Click box to format, drag background to pan."
             )
 
-    # ---------------- File Navigation ----------------
+    # File Navigation
     def _on_open_image_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -517,7 +517,7 @@ class TouchupApp(QMainWindow):
             self._sync_style_controls(reset_target=True)
 
     def _dedupe_cached_edits(self, edits: list[dict]) -> list[dict]:
-        """Keep the latest cache record for repeated translations from old append-only saves."""
+        # Keep latest cache record for repeated translations
         latest_by_text = {}
         order = []
         for ed in edits:
@@ -583,7 +583,7 @@ class TouchupApp(QMainWindow):
         if self.current_page_idx < len(self.chapter_pages) - 1:
             self.load_image(self.chapter_pages[self.current_page_idx + 1])
 
-    # ---------------- Undo & State Snapshots ----------------
+    # Undo & State Snapshots
     def _text_items(self) -> list[DraggableTextItem]:
         return self.canvas.text_items()
 
@@ -688,7 +688,7 @@ class TouchupApp(QMainWindow):
         if isinstance(item, DraggableTextItem):
             self._push_undo("Edit text box", coalesce_key=f"item:{id(item)}:drag")
 
-    # ---------------- Region Selection & Processing ----------------
+    # Region Selection & Processing
     def _on_region_selected(self, rect: QRectF):
         if not self.working_pil_img:
             return
@@ -780,7 +780,7 @@ class TouchupApp(QMainWindow):
         self.working_pil_img = inpainted_img
         self.canvas.pixmap_item.setPixmap(pil_to_qpixmap(self.working_pil_img))
 
-    # ---------------- Typesetting Interactions ----------------
+    # Typesetting Interactions
     def _set_style_controls_enabled(self, enabled: bool):
         for widget in self._style_controls:
             widget.setEnabled(enabled)
@@ -838,7 +838,6 @@ class TouchupApp(QMainWindow):
 
         self._sync_style_controls(reset_target=True)
 
-        # Hook dynamic resize change
         try:
             item.changed.disconnect(self._on_active_item_changed)
         except Exception:
@@ -936,7 +935,7 @@ class TouchupApp(QMainWindow):
         self._populate_target_lines(reset_to_all=True)
         self.statusBar().showMessage("Text box deleted.")
 
-    # ---------------- Style Sync Helpers ----------------
+    # Style Sync Helpers
     def _sync_style_controls(self, reset_target: bool = False):
         if not self.active_text_item:
             self._set_style_controls_enabled(False)
@@ -1154,7 +1153,7 @@ class TouchupApp(QMainWindow):
             "direction": rend.get("direction"),
         }
 
-    # ---------------- Save & Bake ----------------
+    # Save & Bake
     def save_and_bake_page(self):
         if not self.working_pil_img or not self.current_image_path:
             QMessageBox.warning(self, "No Image", "No image is currently loaded.")
@@ -1184,7 +1183,7 @@ class TouchupApp(QMainWindow):
                     "render": state,
                 }
             )
-            # Paint item in scene coordinates without selection borders/handles.
+            # Paint item in scene coordinates without selection borders or handles
             was_selected = item.isSelected()
             item.setSelected(False)
             painter.save()

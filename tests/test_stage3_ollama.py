@@ -1,31 +1,30 @@
-"""Offline tests for the Stage 3 Ollama translation backend (v2, hardened).
-
-All Ollama HTTP calls are monkeypatched via OllamaBackend._call_ollama, so these
-tests never touch the network and require no running `ollama serve`.
-
-Assumes the v2 backend described in stage3_ollama_implementation_v2.md is
-implemented in manhua_pipeline/stages/stage3_translation.py:
-  - class OllamaBackend with _call_ollama / _parse_json / _validate_batch / _translate_batch
-  - _validate_ollama_config()
-  - _get_backend() returns OllamaBackend for TRANSLATOR_BACKEND == "ollama"
-  - run_translation() completion gate + _write_output(advance=...) + provenance
-"""
+# Unit tests for Ollama backend Stage 3 translation execution and error handling.
 
 import json
+import urllib.error
 
 import pytest
 
 import config
+from manhua_pipeline.stages import stage3_translation
+from manhua_pipeline.stages._backends import (
+    OllamaSettings,
+    validate_ollama_settings,
+)
+from manhua_pipeline.stages.stage3_translation import (
+    OllamaBackend,
+    _contains_cjk,
+    _get_backend,
+    run_translation,
+)
 
-# ---------------------------------------------------------------------------
-# Helpers (mirrors tests/test_stage3.py)
-# ---------------------------------------------------------------------------
 
-
+# Verify contextual retry is disabled by default
 def test_contextual_retry_disabled_by_default():
     assert config.OLLAMA_CONTEXTUAL_RETRY_ENABLED is False
 
 
+# Helper to set up workspace with manifest and OCR results
 def _setup(ws, ocr_results, glossary=None):
     ws.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -55,6 +54,7 @@ def _setup(ws, ocr_results, glossary=None):
         )
 
 
+# Helper to construct mock OCR region result dictionary
 def _ocr_entry(rid, text, usable=True):
     return {
         "region_id": rid,
@@ -74,9 +74,9 @@ def _ocr_entry(rid, text, usable=True):
     }
 
 
+# Fixture configuring Ollama translator settings
 @pytest.fixture
 def ollama_config(monkeypatch):
-    """Point the pipeline at the Ollama backend with small, test-friendly knobs."""
     monkeypatch.setattr(config, "TRANSLATOR_BACKEND", "ollama", raising=False)
     monkeypatch.setattr(config, "OLLAMA_HOST", "http://localhost:11434", raising=False)
     monkeypatch.setattr(config, "OLLAMA_TRANSLATE_MODEL", "qwen2.5:3b", raising=False)
@@ -92,52 +92,40 @@ def ollama_config(monkeypatch):
     return config
 
 
+# Helper to mock OllamaBackend._call_ollama with custom responder
 def _patch_call(monkeypatch, responder):
-    """Monkeypatch OllamaBackend._call_ollama with a callable(user_prompt)->str."""
-    from manhua_pipeline.stages import stage3_translation as s3
-
     monkeypatch.setattr(
-        s3.OllamaBackend,
+        stage3_translation.OllamaBackend,
         "_call_ollama",
         lambda self, user_prompt: responder(user_prompt),
     )
-    return s3
+    return stage3_translation
 
 
+# Helper returning canned JSON dictionary responder
 def _canned(mapping):
-    """Return a responder that always replies with the given mapping as JSON."""
     payload = json.dumps(mapping, ensure_ascii=False)
     return lambda _prompt: payload
 
 
+# Helper to read and deserialize translation.json
 def _read_translation(ws):
     return json.loads(
         (ws / "stage3_translation" / "translation.json").read_text(encoding="utf-8")
     )
 
 
-# ---------------------------------------------------------------------------
-# 1. Backend selection
-# ---------------------------------------------------------------------------
-
-
+# Verify _get_backend returns OllamaBackend instance when configured
 def test_get_backend_returns_ollama(ollama_config):
-    from manhua_pipeline.stages.stage3_translation import OllamaBackend, _get_backend
-
     assert isinstance(_get_backend(ollama_config), OllamaBackend)
 
 
-# ---------------------------------------------------------------------------
-# 2. Successful response
-# ---------------------------------------------------------------------------
-
-
+# Verify valid translation response writes output and advances manifest
 def test_successful_response_written(tmp_path, ollama_config, monkeypatch):
     _patch_call(monkeypatch, _canned({"P001_R001": "Get out!"}))
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
-    _setup(ws, [_ocr_entry("P001_R001", "\u6efe\u5427\uff01")])
+    _setup(ws, [_ocr_entry("P001_R001", "滚吧！")])
     out = run_translation(str(ws), ollama_config)
 
     assert out is not None
@@ -149,11 +137,7 @@ def test_successful_response_written(tmp_path, ollama_config, monkeypatch):
     assert m["current_stage"] == "paraphrase"
 
 
-# ---------------------------------------------------------------------------
-# 3. Multiple batches
-# ---------------------------------------------------------------------------
-
-
+# Verify multi-batch translations query all regions across chunks
 def test_multiple_batches_all_regions_once(tmp_path, ollama_config, monkeypatch):
     calls = {"n": 0}
 
@@ -166,7 +150,6 @@ def test_multiple_batches_all_regions_once(tmp_path, ollama_config, monkeypatch)
         return json.dumps(out)
 
     _patch_call(monkeypatch, responder)
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(
@@ -187,15 +170,10 @@ def test_multiple_batches_all_regions_once(tmp_path, ollama_config, monkeypatch)
     assert calls["n"] >= 2
 
 
-# ---------------------------------------------------------------------------
-# 4. Code-fenced JSON
-# ---------------------------------------------------------------------------
-
-
+# Verify code-fenced JSON responses are parsed successfully
 def test_code_fenced_json_parses(tmp_path, ollama_config, monkeypatch):
     fenced = "```json\n" + json.dumps({"P001_R001": "Fenced ok"}) + "\n```"
     _patch_call(monkeypatch, lambda _p: fenced)
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
@@ -205,9 +183,8 @@ def test_code_fenced_json_parses(tmp_path, ollama_config, monkeypatch):
     assert tr["results"][0]["literal_translation"] == "Fenced ok"
 
 
+# Verify static JSON parser handles clean, embedded, empty, and invalid strings
 def test_parse_json_static_helpers():
-    from manhua_pipeline.stages.stage3_translation import OllamaBackend
-
     assert OllamaBackend._parse_json('```json\n{"a": "b"}\n```') == {"a": "b"}
     assert OllamaBackend._parse_json('prose {"a": "b"} trailing') == {"a": "b"}
     assert OllamaBackend._parse_json("not json at all") == {}
@@ -215,11 +192,7 @@ def test_parse_json_static_helpers():
     assert OllamaBackend._parse_json("[1, 2, 3]") == {}
 
 
-# ---------------------------------------------------------------------------
-# 5. Invalid JSON triggers recovery
-# ---------------------------------------------------------------------------
-
-
+# Verify invalid JSON responses trigger retry and recover
 def test_invalid_json_recovers_via_retry(tmp_path, ollama_config, monkeypatch):
     state = {"first": True}
 
@@ -234,7 +207,6 @@ def test_invalid_json_recovers_via_retry(tmp_path, ollama_config, monkeypatch):
         return json.dumps(out)
 
     _patch_call(monkeypatch, responder)
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好呀"), _ocr_entry("P001_R002", "早上好")])
@@ -247,14 +219,9 @@ def test_invalid_json_recovers_via_retry(tmp_path, ollama_config, monkeypatch):
     assert by_id["P001_R002"]["translated"] is True
 
 
-# ---------------------------------------------------------------------------
-# 6. Missing region identified
-# ---------------------------------------------------------------------------
-
-
+# Verify missing regions in response are flagged and recovered
 def test_missing_region_flagged(tmp_path, ollama_config, monkeypatch):
     _patch_call(monkeypatch, _canned({"P001_R001": "only one"}))
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好啊"), _ocr_entry("P001_R002", "我知道")])
@@ -270,6 +237,7 @@ def test_missing_region_flagged(tmp_path, ollama_config, monkeypatch):
     assert out is not None
 
 
+# Verify contextual single-region retries are skipped when disabled
 def test_contextual_retry_is_skipped_by_default(tmp_path, ollama_config, monkeypatch):
     calls = []
 
@@ -278,7 +246,6 @@ def test_contextual_retry_is_skipped_by_default(tmp_path, ollama_config, monkeyp
         return json.dumps({"P001_R001": "only one"})
 
     _patch_call(monkeypatch, responder)
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好啊"), _ocr_entry("P001_R002", "我知道")])
@@ -289,6 +256,7 @@ def test_contextual_retry_is_skipped_by_default(tmp_path, ollama_config, monkeyp
     assert by_id["P001_R002"]["translation_source"] == "translation_recovery"
 
 
+# Verify contextual retry runs when explicitly enabled
 def test_contextual_retry_remains_available_when_enabled(
     tmp_path, ollama_config, monkeypatch
 ):
@@ -302,7 +270,6 @@ def test_contextual_retry_remains_available_when_enabled(
 
     monkeypatch.setattr(config, "OLLAMA_CONTEXTUAL_RETRY_ENABLED", True)
     _patch_call(monkeypatch, responder)
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好啊"), _ocr_entry("P001_R002", "我知道")])
@@ -314,14 +281,8 @@ def test_contextual_retry_remains_available_when_enabled(
     assert by_id["P001_R002"]["literal_translation"] == "context fallback"
 
 
-# ---------------------------------------------------------------------------
-# 7. Unexpected / cross-batch IDs rejected
-# ---------------------------------------------------------------------------
-
-
+# Verify extraneous region IDs not in the requested batch are rejected
 def test_unexpected_ids_rejected():
-    from manhua_pipeline.stages.stage3_translation import OllamaBackend
-
     parsed = {"P001_R001": "good", "P999_R999": "ghost", "P002_R002": "other batch"}
     accepted, missing, unexpected = OllamaBackend._validate_batch(parsed, {"P001_R001"})
     assert accepted == {"P001_R001": "good"}
@@ -329,14 +290,8 @@ def test_unexpected_ids_rejected():
     assert missing == []
 
 
-# ---------------------------------------------------------------------------
-# 8. Invalid values never enter output
-# ---------------------------------------------------------------------------
-
-
+# Verify null, numeric, list, or empty string values are filtered out
 def test_invalid_values_dropped():
-    from manhua_pipeline.stages.stage3_translation import OllamaBackend
-
     parsed = {
         "P001_R001": "",
         "P001_R002": "   ",
@@ -352,26 +307,18 @@ def test_invalid_values_dropped():
     assert set(missing) == expected - {"P001_R007"}
 
 
+# Verify valid batch translations are preserved
 def test_validate_batch_no_overwrite():
-    from manhua_pipeline.stages.stage3_translation import OllamaBackend
-
     accepted, _, _ = OllamaBackend._validate_batch({"P001_R001": "keep"}, {"P001_R001"})
     assert accepted == {"P001_R001": "keep"}
 
 
-# ---------------------------------------------------------------------------
-# 9. Connectivity failure -> clear RuntimeError
-# ---------------------------------------------------------------------------
-
-
+# Verify Ollama connection failures raise descriptive RuntimeError
 def test_connectivity_failure_raises_clear(tmp_path, ollama_config, monkeypatch):
-    import urllib.error
-
     def boom(req, timeout=None):
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr("urllib.request.urlopen", boom)
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
@@ -384,11 +331,7 @@ def test_connectivity_failure_raises_clear(tmp_path, ollama_config, monkeypatch)
     assert "ollama serve" in msg
 
 
-# ---------------------------------------------------------------------------
-# 10. Empty input -> no Ollama call
-# ---------------------------------------------------------------------------
-
-
+# Verify chapters with zero usable regions bypass backend API calls
 def test_empty_input_no_call(tmp_path, ollama_config, monkeypatch):
     called = {"n": 0}
 
@@ -397,7 +340,6 @@ def test_empty_input_no_call(tmp_path, ollama_config, monkeypatch):
         return "{}"
 
     _patch_call(monkeypatch, responder)
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "", usable=False)])
@@ -409,15 +351,10 @@ def test_empty_input_no_call(tmp_path, ollama_config, monkeypatch):
     assert m["current_stage"] == "paraphrase"
 
 
-# ---------------------------------------------------------------------------
-# 11. Completion threshold gates the manifest
-# ---------------------------------------------------------------------------
-
-
+# Verify incomplete batches fall back to recovery and advance to paraphrase
 def test_below_threshold_does_not_advance(tmp_path, ollama_config, monkeypatch):
     monkeypatch.setattr(config, "OLLAMA_BATCH_SIZE", 10, raising=False)
     _patch_call(monkeypatch, _canned({"P001_R001": "one"}))
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(
@@ -440,9 +377,9 @@ def test_below_threshold_does_not_advance(tmp_path, ollama_config, monkeypatch):
     assert (ws / "stage3_translation" / "translation.json").exists()
 
 
+# Verify total translation failure hands off to stage 4 recovery
 def test_zero_translations_hands_off_to_stage4(tmp_path, ollama_config, monkeypatch):
     _patch_call(monkeypatch, _canned({}))
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
@@ -459,21 +396,13 @@ def test_zero_translations_hands_off_to_stage4(tmp_path, ollama_config, monkeypa
     assert manifest["current_stage"] == "paraphrase"
 
 
-# ---------------------------------------------------------------------------
-# 12. Config validation
-# ---------------------------------------------------------------------------
-
-
+# Helper validating Ollama configuration settings
 def _validate_ollama_config(cfg):
-    from manhua_pipeline.stages._backends import (
-        OllamaSettings,
-        validate_ollama_settings,
-    )
-
     s = OllamaSettings.from_config(cfg, prefix="OLLAMA")
     validate_ollama_settings(s, "OLLAMA")
 
 
+# Verify invalid Ollama host, model, or batch size configurations raise ValueError
 def test_config_validation_rejects_bad_values(monkeypatch):
     monkeypatch.setattr(config, "OLLAMA_HOST", "http://localhost:11434", raising=False)
     monkeypatch.setattr(config, "OLLAMA_TRANSLATE_MODEL", "qwen2.5:3b", raising=False)
@@ -500,6 +429,7 @@ def test_config_validation_rejects_bad_values(monkeypatch):
         _validate_ollama_config(config)
 
 
+# Verify valid Ollama settings pass validation
 def test_config_validation_accepts_good_values(monkeypatch):
     monkeypatch.setattr(config, "OLLAMA_HOST", "http://localhost:11434", raising=False)
     monkeypatch.setattr(config, "OLLAMA_TRANSLATE_MODEL", "qwen2.5:3b", raising=False)
@@ -510,14 +440,9 @@ def test_config_validation_accepts_good_values(monkeypatch):
     _validate_ollama_config(config)
 
 
-# ---------------------------------------------------------------------------
-# Bonus: provenance metadata recorded
-# ---------------------------------------------------------------------------
-
-
+# Verify translation output metadata records backend model and prompt version
 def test_provenance_metadata_recorded(tmp_path, ollama_config, monkeypatch):
     _patch_call(monkeypatch, _canned({"P001_R001": "hi"}))
-    from manhua_pipeline.stages.stage3_translation import run_translation
 
     ws = tmp_path / "workspace"
     _setup(ws, [_ocr_entry("P001_R001", "你好呀")])
@@ -531,14 +456,8 @@ def test_provenance_metadata_recorded(tmp_path, ollama_config, monkeypatch):
     assert by_id["P001_R001"]["translation_source"] == "ollama:qwen2.5:3b"
 
 
-# ---------------------------------------------------------------------------
-# CJK guard
-# ---------------------------------------------------------------------------
-
-
+# Verify responses containing untranslated CJK characters are rejected
 def test_residual_cjk_rejected_as_missing():
-    from manhua_pipeline.stages.stage3_translation import OllamaBackend
-
     parsed = {
         "P001_R001": "滚吧！",
         "P001_R002": "Get out!",
@@ -551,9 +470,8 @@ def test_residual_cjk_rejected_as_missing():
     assert set(missing) == {"P001_R001", "P001_R003"}
 
 
+# Verify CJK detection helper
 def test_contains_cjk_helper():
-    from manhua_pipeline.stages.stage3_translation import _contains_cjk
-
     assert _contains_cjk("滚吧")
     assert _contains_cjk("hello 你好")
     assert not _contains_cjk("hello!")
@@ -561,13 +479,11 @@ def test_contains_cjk_helper():
     assert not _contains_cjk(None)
 
 
+# Verify missing trivial single-character regions bypass hold and advance
 def test_trivial_missing_region_bypasses_hold_and_skips_glossary(
     tmp_path, ollama_config, monkeypatch
 ):
-    from manhua_pipeline.stages import stage3_translation
-
     ws = tmp_path / "workspace"
-    # P001_R001 is single-char CJK "一", P001_R002 is multi-char "滚吧！"
     _setup(
         ws,
         [
@@ -576,7 +492,6 @@ def test_trivial_missing_region_bypasses_hold_and_skips_glossary(
         ],
     )
 
-    # Monkeypatch Ollama backend to return translation only for P001_R002 ("Get out!"), leaving P001_R001 ("一") missing
     monkeypatch.setattr(
         stage3_translation.OllamaBackend,
         "_call_ollama",
@@ -585,12 +500,10 @@ def test_trivial_missing_region_bypasses_hold_and_skips_glossary(
 
     result = stage3_translation.run_translation(str(ws), ollama_config)
 
-    # Manifest should advance because P001_R001 is single-char (trivial)
     assert result is not None
     m = json.loads((ws / "manifest.json").read_text())
     assert m["current_stage"] == "paraphrase"
 
-    # Glossary should NOT have a stub for "一"
     glossary_path = ws.parent / "glossary.json"
     if glossary_path.exists():
         g_data = json.loads(glossary_path.read_text(encoding="utf-8"))

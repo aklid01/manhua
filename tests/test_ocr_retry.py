@@ -1,14 +1,16 @@
-"""Offline tests for OCR confidence retry (escalating preprocessing, keep best)."""
+# Unit tests for OCR confidence-based retries and preprocessing escalation.
 
 from PIL import Image
 
 import config
 
 
+# Helper to generate dummy crop image
 def _crop():
     return Image.new("RGB", (40, 20), (255, 255, 255))
 
 
+# Verify confident initial OCR result skips unnecessary retry passes
 def test_no_retry_when_confident(monkeypatch):
     from manhua_pipeline.stages import stage2_ocr as s2
 
@@ -22,9 +24,10 @@ def test_no_retry_when_confident(monkeypatch):
     monkeypatch.setattr(config, "OCR_RETRY_ENABLED", True, raising=False)
     text, mean, mn, wm = s2._read_best(object(), _crop(), config)
     assert mean == 0.85
-    assert calls["n"] == 1  # base only; already good -> no retry
+    assert calls["n"] == 1
 
 
+# Verify OCR confidence below minimum floor skips retry (likely non-text noise)
 def test_no_retry_below_floor(monkeypatch):
     from manhua_pipeline.stages import stage2_ocr as s2
 
@@ -38,9 +41,10 @@ def test_no_retry_below_floor(monkeypatch):
     )
     monkeypatch.setattr(config, "OCR_RETRY_ENABLED", True, raising=False)
     s2._read_best(object(), _crop(), config)
-    assert calls["n"] == 1  # below floor -> probably not text -> no retry
+    assert calls["n"] == 1
 
 
+# Verify multiple retry attempts preserve the highest-confidence OCR output
 def test_retry_keeps_best(monkeypatch):
     from manhua_pipeline.stages import stage2_ocr as s2
 
@@ -51,9 +55,10 @@ def test_retry_keeps_best(monkeypatch):
     monkeypatch.setattr(config, "OCR_RETRY_ENABLED", True, raising=False)
     monkeypatch.setattr(config, "OCR_RETRY_MAX", 2, raising=False)
     text, mean, mn, wm = s2._read_best(object(), _crop(), config)
-    assert (text, mean) == ("c", 0.72)  # highest across attempts wins
+    assert (text, mean) == ("c", 0.72)
 
 
+# Verify retry attempts are strictly bounded by OCR_RETRY_MAX
 def test_retry_bounded(monkeypatch):
     from manhua_pipeline.stages import stage2_ocr as s2
 
@@ -68,9 +73,10 @@ def test_retry_bounded(monkeypatch):
     monkeypatch.setattr(config, "OCR_RETRY_ENABLED", True, raising=False)
     monkeypatch.setattr(config, "OCR_RETRY_MAX", 2, raising=False)
     s2._read_best(object(), _crop(), config)
-    assert calls["n"] == 3  # base + 2 retries, then stop (all mediocre)
+    assert calls["n"] == 3
 
 
+# Verify disabling OCR_RETRY_ENABLED performs only a single base OCR pass
 def test_disabled_flag_short_circuits(monkeypatch):
     from manhua_pipeline.stages import stage2_ocr as s2
 
@@ -84,4 +90,4 @@ def test_disabled_flag_short_circuits(monkeypatch):
     )
     monkeypatch.setattr(config, "OCR_RETRY_ENABLED", False, raising=False)
     s2._read_best(object(), _crop(), config)
-    assert calls["n"] == 1  # disabled -> base read only
+    assert calls["n"] == 1

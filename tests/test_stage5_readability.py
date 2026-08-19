@@ -1,9 +1,11 @@
-"""Regression tests for Stage 5 Render small font readability fix."""
+# Unit tests for Stage 5 readability metrics, minimum font size limits, and resolution-aware font scaling.
 
 import json
 
 from PIL import Image, ImageDraw
 
+from manhua_pipeline.events import RENDER_TEXT_TOO_SMALL
+from manhua_pipeline.io.event_emitter import get_event_emitter
 from manhua_pipeline.stages.stage5_render import (
     Box,
     _draw_region_plan,
@@ -18,9 +20,8 @@ from manhua_pipeline.stages.stage5_render import (
 )
 
 
+# Verify dialogue inside large bubbles renders at or above minimum font floor
 def test_large_bubble_renders_at_or_above_readable_floor():
-    # Big round bubble, short line, tight original text box.
-    # After interior expansion, font must be >= FONT_MIN_PT.
     class TestConfig:
         FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
         FONT_MAX_PT = 24
@@ -46,7 +47,7 @@ def test_large_bubble_renders_at_or_above_readable_floor():
 
     mask = Image.new("L", (300, 200), 255)
 
-    text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+    _text_box, _bubble_box, _erase_box, layout_box = select_render_geometry(
         region,
         image_size=(500, 500),
         config=cfg,
@@ -54,12 +55,10 @@ def test_large_bubble_renders_at_or_above_readable_floor():
         bubble_box=Box(100, 100, 300, 200),
     )
 
-    # The layout_box should have expanded well beyond the original text box
     assert layout_box.w > 60
     assert layout_box.h > 40
 
-    # Now try fitting text in it using _fit_text
-    font, lines, pt, overflow = _fit_text(
+    _font, _lines, pt, overflow = _fit_text(
         text="Hello world, this is a test of the readability fit.",
         bbox_w=layout_box.w,
         bbox_h=layout_box.h,
@@ -75,6 +74,7 @@ def test_large_bubble_renders_at_or_above_readable_floor():
     assert overflow is False
 
 
+# Verify expanded layout box maintains required anchor overlap with detected text box
 def test_expanded_layout_still_overlaps_text_box():
     class TestConfig:
         LAYOUT_EXPAND_ENABLED = True
@@ -93,7 +93,7 @@ def test_expanded_layout_still_overlaps_text_box():
     }
     mask = Image.new("L", (300, 200), 255)
 
-    text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+    text_box, _bubble_box, _erase_box, layout_box = select_render_geometry(
         region,
         image_size=(500, 500),
         config=cfg,
@@ -106,23 +106,22 @@ def test_expanded_layout_still_overlaps_text_box():
     assert ratio >= cfg.LAYOUT_MIN_ANCHOR_OVERLAP
 
 
+# Verify bubble mask erosion excludes pointing tail geometry
 def test_interior_erosion_excludes_tail_region():
-    # Mask (100x100) with a protruding tail at bottom right
     mask = Image.new("L", (100, 100), 0)
     draw = ImageDraw.Draw(mask)
-    draw.rectangle((10, 10, 70, 70), fill=255)  # bubble main body
-    draw.rectangle((70, 70, 90, 90), fill=255)  # tail
+    draw.rectangle((10, 10, 70, 70), fill=255)
+    draw.rectangle((70, 70, 90, 90), fill=255)
 
-    # eroded interior box
     bubble_box = Box(0, 0, 100, 100)
     interior = bubble_interior_box(mask, bubble_box, erode_px=15)
 
     assert interior is not None
-    # The eroded box should be smaller and should exclude the tail (70..100)
     assert interior.x2 <= 70
     assert interior.y2 <= 70
 
 
+# Verify text fitter never produces font size below absolute minimum floor
 def test_fit_text_never_returns_below_abs_min():
     class TestConfig:
         FONT_ABS_MIN_PT = 9
@@ -132,7 +131,7 @@ def test_fit_text_never_returns_below_abs_min():
         TEXT_PADDING_PX = 0
 
     cfg = TestConfig()
-    font, lines, pt, overflow = _fit_text(
+    _font, _lines, pt, overflow = _fit_text(
         text="A very long line that cannot fit in a tiny space no matter what we do, even at the absolute minimum point size.",
         bbox_w=20,
         bbox_h=10,
@@ -148,11 +147,8 @@ def test_fit_text_never_returns_below_abs_min():
     assert overflow is True
 
 
+# Verify rendering text below target font size emits RENDER_TEXT_TOO_SMALL event
 def test_small_font_emits_render_text_too_small(tmp_path):
-    # Setup dummy directory and event emitter
-    from manhua_pipeline.events import RENDER_TEXT_TOO_SMALL
-    from manhua_pipeline.io.event_emitter import get_event_emitter
-
     class TestConfig:
         FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
         FONT_MAX_PT = 21
@@ -200,17 +196,15 @@ def test_small_font_emits_render_text_too_small(tmp_path):
         render_dir=render_dir,
     )
     _draw_region_plan(plan, draw)
-    emitter_arg = emitter
     _finalize_plan(
         plan,
-        emitter=emitter_arg,
+        emitter=emitter,
         run_id="test_run",
         chapter="ch1",
         render_dir=render_dir,
         config=cfg,
     )
 
-    # Read the emitted events
     events_file = ws / "logs" / "events.jsonl"
     assert events_file.exists()
 
@@ -224,6 +218,7 @@ def test_small_font_emits_render_text_too_small(tmp_path):
     assert too_small_events[0]["metadata"]["font_size_pt"] < cfg.FONT_MIN_PT
 
 
+# Verify layout expansion produces larger bounding area while remaining anchored
 def test_p028_r001_layout_larger_than_text_box_but_anchored():
     class TestConfig:
         LAYOUT_EXPAND_ENABLED = True
@@ -242,29 +237,29 @@ def test_p028_r001_layout_larger_than_text_box_but_anchored():
     }
     mask = Image.new("L", (779, 487), 255)
 
-    text_box, bubble_box, erase_box, layout_box = select_render_geometry(
+    text_box, _bubble_box, _erase_box, layout_box = select_render_geometry(
         region_p028,
         image_size=(1280, 1707),
         config=cfg,
         bubble_mask=mask,
         bubble_box=Box(310, 600, 779, 487),
     )
-    # layout_box area should be larger than or equal to text_box area
     assert (layout_box.w * layout_box.h) >= (text_box.w * text_box.h)
-    # layout_box should still overlap text_box
     overlap = intersect_boxes(layout_box, text_box)
     assert overlap is not None
 
 
+# Verify effective maximum font size scales proportionally with page width
 def test_effective_max_pt_scales_with_width():
     class Cfg:
         FONT_MAX_PT = 40
         FONT_MAX_PAGE_FRAC = 0.045
 
-    assert effective_max_pt(Cfg(), 700) == 40  # 31 -> static floor wins
-    assert effective_max_pt(Cfg(), 1280) == 57  # scales up
+    assert effective_max_pt(Cfg(), 700) == 40
+    assert effective_max_pt(Cfg(), 1280) == 57
 
 
+# Verify maximum font size uses static limit when page fraction is zero
 def test_effective_max_pt_disabled_when_frac_zero():
     class Cfg:
         FONT_MAX_PT = 40
@@ -273,6 +268,7 @@ def test_effective_max_pt_disabled_when_frac_zero():
     assert effective_max_pt(Cfg(), 5000) == 40
 
 
+# Verify missing page width defaults to static font size limit
 def test_effective_max_pt_none_width_uses_static():
     class Cfg:
         FONT_MAX_PT = 40
@@ -281,25 +277,27 @@ def test_effective_max_pt_none_width_uses_static():
     assert effective_max_pt(Cfg(), None) == 40
 
 
+# Verify merged vertical strip uses page width rather than total height for scaling
 def test_merged_canvas_ceiling_matches_single_page():
     class Cfg:
         FONT_MAX_PT = 40
         FONT_MAX_PAGE_FRAC = 0.045
 
     single_w = 900
-    merged_w = 900  # width unchanged by vertical stitching
+    merged_w = 900
     assert effective_max_pt(Cfg(), single_w) == effective_max_pt(Cfg(), merged_w)
 
 
+# Verify long vertical webtoon strips calculate font ceilings from strip width
 def test_strip_ceiling_uses_width_not_height():
     class Cfg:
         FONT_MAX_PT = 40
         FONT_MAX_PAGE_FRAC = 0.045
 
-    # strip: 800 wide x 8000 tall -> ceiling based on 800, not 8000
     assert effective_max_pt(Cfg(), 800) == 40
 
 
+# Verify identical text renders with larger font size on higher-resolution pages
 def test_same_text_larger_on_wider_page():
     class TestConfig:
         FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
@@ -337,6 +335,7 @@ def test_same_text_larger_on_wider_page():
     assert pt_wide > pt_narrow
 
 
+# Verify fitting text without page width parameter enforces static max font size
 def test_fit_and_place_text_without_page_width_matches_static():
     class TestConfig:
         FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
@@ -363,6 +362,7 @@ def test_fit_and_place_text_without_page_width_matches_static():
     assert pt <= cfg.FONT_MAX_PT
 
 
+# Verify render report records effective max font size and page dimensions
 def test_render_json_records_effective_max_pt_and_width(tmp_path):
     class TestConfig:
         FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
@@ -419,6 +419,6 @@ def test_render_json_records_effective_max_pt_and_width(tmp_path):
         config=cfg,
     )
 
-    assert result_dict["effective_max_pt"] == 57  # max(20, int(1280 * 0.045)) = 57
+    assert result_dict["effective_max_pt"] == 57
     assert result_dict["page_width"] == 1280
     assert result_dict["page_height"] == 1600

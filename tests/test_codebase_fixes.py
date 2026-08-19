@@ -1,3 +1,5 @@
+# Regression tests for specific pipeline fixes and edge cases.
+
 import json
 
 from PIL import Image
@@ -6,6 +8,7 @@ import config
 import pipeline
 
 
+# Verify missing chapter error message lists available chapters in the series
 def test_missing_chapter_lists_available(tmp_path, monkeypatch, capsys, caplog):
     base = tmp_path / "SeriesA"
     (base / "Ch1").mkdir(parents=True)
@@ -20,6 +23,7 @@ def test_missing_chapter_lists_available(tmp_path, monkeypatch, capsys, caplog):
     assert "Available chapters" in all_output
 
 
+# Verify QA does not mark chapter as failed when regions contain benign watermark-filtered text
 def test_qa_benign_no_text_not_failed(tmp_path):
     from manhua_pipeline.stages.stage6_qa import run_qa
 
@@ -70,10 +74,11 @@ def test_qa_benign_no_text_not_failed(tmp_path):
 
     run_qa(str(ws), config)
     qa = json.loads((ws / "stage6_qa" / "qa.json").read_text(encoding="utf-8"))
-    assert qa["status"] in ("SUCCESS", "REVIEW")  # NOT FAILED
+    assert qa["status"] in ("SUCCESS", "REVIEW")
     assert qa["checks"]["low_ocr_confidence"] >= 1
 
 
+# Verify Stage 0 import properly sets next stage to detect in the manifest
 def test_import_current_stage_detect(tmp_path):
     from manhua_pipeline.stages.stage0_import import run_import
 
@@ -86,6 +91,7 @@ def test_import_current_stage_detect(tmp_path):
     assert m["current_stage"] == "detect"
 
 
+# Verify OCR error fallback dictionary includes watermark_filtered flag
 def test_ocr_error_fallback_has_watermark_key(tmp_path):
     from manhua_pipeline.stages import stage2_ocr
 
@@ -104,6 +110,7 @@ def test_ocr_error_fallback_has_watermark_key(tmp_path):
     assert res["watermark_filtered"] is False
 
 
+# Verify bubble mask flood-fill extracts white interior pixels correctly
 def test_bubble_mask_fills_white_region(tmp_path):
     from manhua_pipeline.stages import stage5_render
 

@@ -256,7 +256,7 @@ passthrough remains a separate route and is not affected.
 | `--fresh`               | `import`, `run-all`, `batch`                | Remove prior stage artifacts before importing.                                       |
 | `--skip-last N`         | `import`, `run-all`, `batch`                | Mark the final N pages as skipped.                                                   |
 | `--from-stage NAME`     | `run-all`                                   | Resume from `import`, `detect`, `ocr`, `translate`, `paraphrase`, `render`, or `qa`. |
-| `--package FORMATS`     | `run-all`, `batch`, `package`               | Comma-separated `zip` and/or `cbz`.                                                   |
+| `--package FORMATS`     | `run-all`, `batch`, `package`               | Comma-separated `zip` and/or `cbz`.                                                  |
 | `--no-resume`           | `batch`                                     | Skip existing chapter folders instead of resuming them.                              |
 
 Run `python pipeline.py --help` or `python pipeline.py <command> --help` for
@@ -304,16 +304,16 @@ The series-level `glossary.json` stores locked names and terms. Chapter-level
 
 Most settings are in `config.py`. The most commonly changed values are:
 
-| Area         | Settings                                                                 |
-| ------------ | ------------------------------------------------------------------------ |
-| Translation  | `TRANSLATOR_BACKEND`, `OLLAMA_TRANSLATE_MODEL`, `OLLAMA_HOST`            |
-| Paraphrasing | `PARAPHRASE_BACKEND`, `OLLAMA_PARA_MODEL`, `OLLAMA_PARA_HOST`            |
-| OCR          | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`   |
-| Detection    | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `DETECTOR_USE_GPU` |
+| Area         | Settings                                                                                      |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| Translation  | `TRANSLATOR_BACKEND`, `OLLAMA_TRANSLATE_MODEL`, `OLLAMA_HOST`                                 |
+| Paraphrasing | `PARAPHRASE_BACKEND`, `OLLAMA_PARA_MODEL`, `OLLAMA_PARA_HOST`                                 |
+| OCR          | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`                        |
+| Detection    | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `DETECTOR_USE_GPU`                      |
 | YOLO-seg     | `YOLO_SEG_ENABLED`, `YOLO_SEG_MODEL`, `YOLO_SEG_CONF`, `YOLO_SEG_DEVICE`, `YOLO_SEG_PAD_FRAC` |
-| Rendering    | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                |
-| QA           | `SUCCESS_MAX`, `REVIEW_MAX`                                              |
-| Packaging    | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                            |
+| Rendering    | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                                     |
+| QA           | `SUCCESS_MAX`, `REVIEW_MAX`                                                                   |
+| Packaging    | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                                                 |
 
 The bundled font is `assets/fonts/ComicNeue-Bold.ttf`. Set `FONT_PATH` to a
 different font if required. GPU use is enabled by default for detection and OCR

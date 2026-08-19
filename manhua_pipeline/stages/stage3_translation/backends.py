@@ -1,3 +1,5 @@
+# Translation backends (manual, MCP, and Ollama batch processor).
+
 import json
 import time
 from pathlib import Path
@@ -14,11 +16,13 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Translation"
 
 
+# Protocol defining interface for translation backend implementations
 class TranslatorBackend(Protocol):
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
-        """Return {region_id: english} mapping, or None if awaiting manual input."""
+        pass
 
 
+# Backend implementing file-based manual translation handoff
 class ManualBackend:
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
         paths = be.BackendPaths(
@@ -31,6 +35,7 @@ class ManualBackend:
         )
 
 
+# Backend implementing MCP tool-based translation handoff
 class McpBackend:
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
         paths = be.BackendPaths(
@@ -43,10 +48,8 @@ class McpBackend:
         )
 
 
+# Backend implementing batch translation with Ollama and retry handling
 class OllamaBackend:
-    """Inline local translation via Ollama, with retries, batch validation,
-    and malformed-output recovery. Returns {region_id: english}."""
-
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
         s = be.OllamaSettings.from_config(config, prefix="OLLAMA")
         be.validate_ollama_settings(s, "OLLAMA")
@@ -118,6 +121,7 @@ class OllamaBackend:
             json.dump(merged, fh, ensure_ascii=False, indent=2)
         return merged
 
+    # Execute batch translation with recursive sub-batch splitting on errors
     def _translate_batch(self, chunk, depth: int) -> dict:
         expected_ids = {r["region_id"] for r in chunk}
 
@@ -174,6 +178,7 @@ class OllamaBackend:
         accepted.update(self._translate_batch(still[mid:], depth + 1))
         return accepted
 
+    # Construct JSON user prompt payload for Ollama translation batch
     def _build_user_prompt(self, chunk, strict: bool) -> str:
         payload = json.dumps(
             [
@@ -202,6 +207,7 @@ class OllamaBackend:
             "region_id -> english. REGIONS:\n" + payload + strict_note
         )
 
+    # Send chat request to Ollama backend
     def _call_ollama(self, user_prompt: str) -> str:
         self._batch_call_count = getattr(self, "_batch_call_count", 0) + 1
         raw = be.call_ollama(
@@ -212,6 +218,7 @@ class OllamaBackend:
         )
         return raw
 
+    # Validate returned batch dictionary against expected region IDs
     @staticmethod
     def _validate_batch(parsed: dict, expected_ids: set) -> tuple[dict, list, list]:
         unexpected = [k for k in parsed if k not in expected_ids]
@@ -243,6 +250,7 @@ class OllamaBackend:
         missing = [rid for rid, issue in issues.items() if issue.status != "accepted"]
         return accepted, missing, unexpected
 
+    # Parse response JSON string and emit parsing telemetry events
     @staticmethod
     def _parse_json(text: str, self_obj=None) -> dict:
         from manhua_pipeline.events import (
@@ -285,6 +293,7 @@ class OllamaBackend:
         return {}
 
 
+# Instantiate configured translation backend instance
 def _get_backend(config) -> TranslatorBackend:
     name = getattr(config, "TRANSLATOR_BACKEND", "manual")
     if name == "manual":

@@ -1,10 +1,4 @@
-"""Shared LLM backend plumbing for Stage 3 (translate) and Stage 4 (paraphrase).
-
-Stage-specific behavior (CJK guard vs echo-allowed batch validation, batch
-orchestration, bundle building) stays in each stage module. This module holds
-only the identical scaffolding: manual/mcp handoff loops and the Ollama HTTP
-client with retries + tolerant JSON parsing.
-"""
+# Shared LLM backend plumbing for Stage 3 (translate) and Stage 4 (paraphrase).
 
 import json
 import re
@@ -15,21 +9,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# File and folder wiring paths for stage backends
 @dataclass
 class BackendPaths:
-    """Per-stage file/folder wiring."""
-
-    folder_key: str  # e.g. "translation" | "paraphrase"
-    prompt_name: str  # config.TRANSLATION_PROMPT_NAME | PARAPHRASE_PROMPT_NAME
-    response_name: str  # config.TRANSLATION_RESPONSE_NAME | PARAPHRASE_RESPONSE_NAME
+    folder_key: str
+    prompt_name: str
+    response_name: str
 
 
+# Resolve directory for specified stage paths
 def _stage_dir(ws: Path, config, paths: BackendPaths) -> Path:
     d = ws / config.STAGE_FOLDERS[paths.folder_key]
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
+# Write prompt bundle JSON file to stage directory
 def write_bundle(bundle: dict, ws: Path, config, paths: BackendPaths) -> Path:
     d = _stage_dir(ws, config, paths)
     p = d / paths.prompt_name
@@ -38,10 +33,10 @@ def write_bundle(bundle: dict, ws: Path, config, paths: BackendPaths) -> Path:
     return p
 
 
+# Handle manual translation/paraphrase handoff
 def manual_request(
     bundle, ws, config, paths, logger, stage_index, total_stages, stage_name
 ) -> dict | None:
-    """Manual handoff: write prompt; ingest response file if present, else wait."""
     write_bundle(bundle, ws, config, paths)
     d = _stage_dir(ws, config, paths)
     resp = d / paths.response_name
@@ -52,7 +47,7 @@ def manual_request(
             "  2. Paste its contents to your coding assistant.\n"
             "  3. Save the assistant's JSON reply as: %s\n"
             "  4. Re-run: python pipeline.py %s\n"
-            "  (Awaiting %s — no changes written.)",
+            "  (Awaiting %s - no changes written.)",
             stage_index,
             total_stages,
             stage_name,
@@ -66,17 +61,17 @@ def manual_request(
         return json.load(fh)
 
 
+# Handle MCP tool translation/paraphrase handoff
 def mcp_request(
     bundle, ws, config, paths, logger, stage_index, total_stages, stage_name
 ) -> dict | None:
-    """MCP handoff: write prompt; ingest response file if present, else wait."""
     write_bundle(bundle, ws, config, paths)
     d = _stage_dir(ws, config, paths)
     resp = d / paths.response_name
     if not resp.exists():
         logger.info(
             "[%d/%d %s] MCP handoff required.\n"
-            "  (Awaiting %s via MCP tool — no changes written.)",
+            "  (Awaiting %s via MCP tool - no changes written.)",
             stage_index,
             total_stages,
             stage_name,
@@ -87,6 +82,7 @@ def mcp_request(
         return json.load(fh)
 
 
+# Configuration settings and parameters for Ollama backend
 @dataclass
 class OllamaSettings:
     host: str
@@ -100,9 +96,9 @@ class OllamaSettings:
     num_predict: int = 1024
     keep_alive: str = "0"
 
+    # Construct OllamaSettings from config using specified prefix
     @classmethod
     def from_config(cls, config, prefix: str) -> "OllamaSettings":
-        """prefix = 'OLLAMA' (translate) or 'OLLAMA_PARA' (paraphrase)."""
         g = lambda k, d: getattr(config, f"{prefix}_{k}", d)
         model_key = "TRANSLATE_MODEL" if prefix == "OLLAMA" else "MODEL"
         model = getattr(config, f"{prefix}_{model_key}", "")
@@ -122,6 +118,7 @@ class OllamaSettings:
         )
 
 
+# Validate Ollama configuration parameter types and bounds
 def validate_ollama_settings(s: OllamaSettings, prefix: str) -> None:
     if not isinstance(s.batch_size, int) or s.batch_size <= 0:
         raise ValueError(f"{prefix}_BATCH_SIZE must be a positive integer.")
@@ -137,6 +134,7 @@ def validate_ollama_settings(s: OllamaSettings, prefix: str) -> None:
         raise ValueError(f"{prefix}_MAX_RETRIES must be an integer >= 1.")
 
 
+# Execute HTTP request to Ollama chat API with exponential backoff retries
 def call_ollama(
     s: OllamaSettings, system_prompt: str, user_prompt: str, logger, stage_name: str
 ) -> str:
@@ -187,8 +185,8 @@ def call_ollama(
     )
 
 
+# Parse and extract JSON object from LLM response text
 def parse_json(text: str) -> dict:
-    """Tolerant parse: strip code fences, extract outermost {...}."""
     if not text or not text.strip():
         return {}
     cleaned = text.strip()

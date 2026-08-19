@@ -1,9 +1,10 @@
 # ruff: noqa: E402
+# FastMCP server adapter exposing translation and paraphrasing workflows over JSON-RPC.
+
 import json
 import sys
 from pathlib import Path
 
-# Add project root to path so config and manhua_pipeline packages are discoverable
 root_dir = Path(__file__).resolve().parent.parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
@@ -22,13 +23,13 @@ from manhua_pipeline.stages.stage4_paraphrase import (
     write_paraphrase_response,
 )
 
-# CRITICAL: setup_logging with stream="stderr" so stdout is reserved for JSON-RPC
 setup_logging(stream="stderr")
 logger = get_logger(__name__)
 
 mcp = FastMCP("Manhua Pipeline")
 
 
+# Resolve base series output directory
 def _base() -> Path:
     output_dir = get_output_dir()
     if not output_dir:
@@ -38,6 +39,7 @@ def _base() -> Path:
     return Path(output_dir)
 
 
+# Check whether chapter is awaiting translation or paraphrase response
 def _check_chapter_pending(item: Path) -> str | None:
     manifest_path = item / "manifest.json"
     if not manifest_path.exists():
@@ -79,7 +81,7 @@ def _check_chapter_pending(item: Path) -> str | None:
 
 @mcp.tool()
 def list_pending() -> list[dict]:
-    """List chapters currently awaiting manual translation or paraphrase handoff."""
+    """List chapters in the series that are currently waiting for translation or paraphrase."""
     try:
         base = _base()
     except Exception as exc:
@@ -99,10 +101,7 @@ def list_pending() -> list[dict]:
 
 @mcp.tool()
 def get_translation_bundle(chapter: str) -> dict:
-    """Return lines to translate for a chapter.
-    TRANSLATE each Chinese line faithfully and literally into US English.
-    Preserve meaning, names, and terminology exactly. Do not paraphrase or localize slang.
-    Apply the provided glossary terms exactly. Then call submit_translation(chapter, {region_id: translation})."""
+    """Return the bundle of lines that need translation for a chapter, with glossary."""
     try:
         base = _base()
         ch_dir = base / chapter
@@ -115,7 +114,7 @@ def get_translation_bundle(chapter: str) -> dict:
 
 @mcp.tool()
 def submit_translation(chapter: str, mapping: dict) -> dict:
-    """Write the translated {region_id: english} mapping for a chapter."""
+    """Write the translation response mapping {region_id: english} for a chapter."""
     try:
         base = _base()
         ch_dir = base / chapter
@@ -142,10 +141,12 @@ def submit_translation(chapter: str, mapping: dict) -> dict:
 @mcp.tool()
 def get_paraphrase_bundle(chapter: str) -> dict:
     """Return lines to rewrite for a chapter.
-    REWRITE each line into natural, casual, SPOKEN US English for a comic bubble.
-    Preserve meaning + crude/rude register (do NOT sanitize). Rewrite AGGRESSIVELY —
-    use contractions, varied structures, and idiomatic speech; do NOT copy the source verbatim.
-    Keep glossary terms exactly. Then call submit_paraphrase(chapter, {region_id: final_english})."""
+
+    Follow the READ_FIRST instructions in the returned bundle: rewrite dialogue
+    into natural spoken English; preserve locked glossary terms verbatim; do not
+    leave lines in raw literal English; submit the rewritten mapping via
+    submit_paraphrase.
+    """
     try:
         base = _base()
         ch_dir = base / chapter
@@ -158,7 +159,7 @@ def get_paraphrase_bundle(chapter: str) -> dict:
 
 @mcp.tool()
 def submit_paraphrase(chapter: str, mapping: dict) -> dict:
-    """Write the paraphrased {region_id: final_english} mapping for a chapter."""
+    """Write the paraphrase response mapping {region_id: final_english} for a chapter."""
     try:
         base = _base()
         ch_dir = base / chapter
@@ -182,7 +183,7 @@ def submit_paraphrase(chapter: str, mapping: dict) -> dict:
 
 @mcp.tool()
 def get_glossary() -> dict:
-    """Return the series-level locked glossary."""
+    """Return the series-level locked glossary with character names and terms."""
     try:
         from manhua_pipeline.io.glossary_series import load_series_glossary
 
@@ -194,7 +195,7 @@ def get_glossary() -> dict:
 
 @mcp.resource("series://chapters")
 def list_chapters_resource() -> str:
-    """List of all chapters and their statuses."""
+    """List all chapters and their current statuses in JSON format."""
     try:
         base = _base()
         if not base.exists() or not base.is_dir():
@@ -222,6 +223,7 @@ def list_chapters_resource() -> str:
         return json.dumps({"error": str(exc)})
 
 
+# Construct complete literal translation prompt text for chapter
 def translate_chapter_impl(chapter: str) -> str:
     from manhua_pipeline.stages.stage3_translation import _PROMPT_INSTRUCTIONS
 
@@ -241,6 +243,7 @@ def translate_chapter_impl(chapter: str) -> str:
     )
 
 
+# Construct complete paraphrase prompt text for chapter
 def paraphrase_chapter_impl(chapter: str) -> str:
     from manhua_pipeline.stages.stage4_paraphrase import _PROMPT_INSTRUCTIONS
 
@@ -268,13 +271,13 @@ def paraphrase_chapter_impl(chapter: str) -> str:
 
 @mcp.prompt()
 def translate_chapter(chapter: str) -> str:
-    """Build a ready-to-run literal-translation prompt for a chapter."""
+    """Build the prompt for translating a chapter's OCR lines."""
     return translate_chapter_impl(chapter)
 
 
 @mcp.prompt()
 def paraphrase_chapter(chapter: str) -> str:
-    """Build a ready-to-run paraphrase prompt for a chapter (full directives + lines)."""
+    """Build the prompt for rewriting a chapter's literal translations."""
     return paraphrase_chapter_impl(chapter)
 
 

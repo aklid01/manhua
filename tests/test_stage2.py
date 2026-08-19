@@ -1,3 +1,5 @@
+# Unit tests for Stage 2 OCR text extraction, confidence scoring, and review flow.
+
 import json
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +10,7 @@ import config
 from manhua_pipeline.stages.stage2_ocr import _read_crop
 
 
+# Helper to configure mock workspace with test image, manifest, and detection JSON
 def _setup(ws, page_h=1214, regions=None):
     (ws / "pages").mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (860, page_h)).save(ws / "pages" / "001.png")
@@ -43,6 +46,7 @@ def _setup(ws, page_h=1214, regions=None):
     (ws / "stage1_detection" / "detection.json").write_text(json.dumps(det))
 
 
+# Helper to construct mock detection region dictionary
 def _region(rid, x, y, w, h, page=1, rtype="speech_bubble"):
     return {
         "region_id": rid,
@@ -58,6 +62,7 @@ def _region(rid, x, y, w, h, page=1, rtype="speech_bubble"):
     }
 
 
+# Verify OCR stage extracts text, confidence scores, and schema fields
 def test_ocr_reads_text_and_flags(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
@@ -98,6 +103,7 @@ def test_ocr_reads_text_and_flags(tmp_path):
         assert k in e
 
 
+# Verify low confidence OCR results are flagged for manual correction
 def test_ocr_low_confidence_flags_correction(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
@@ -121,11 +127,11 @@ def test_ocr_low_confidence_flags_correction(tmp_path):
     assert e["needs_correction"] is True
 
 
+# Verify regions touching page boundaries are flagged as edge_touching
 def test_ocr_edge_touching_split_bubble(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
     ws = tmp_path / "workspace"
-    # region flush to bottom edge: y + h == page_h
     _setup(ws, page_h=1000, regions=[_region("P001_R001", 100, 950, 200, 50)])
     with (
         patch(
@@ -145,14 +151,14 @@ def test_ocr_edge_touching_split_bubble(tmp_path):
     assert e["edge"] in ("bottom", "both")
     assert e["has_usable_text"] is False
     assert e["needs_correction"] is True
-    assert e["note"]  # non-empty split note
+    assert e["note"]
 
 
+# Verify bounding boxes extending beyond page dimensions are clamped without errors
 def test_ocr_clamps_out_of_bounds(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
     ws = tmp_path / "workspace"
-    # bbox extends beyond width (860) and height
     _setup(ws, page_h=1000, regions=[_region("P001_R001", 800, 980, 200, 100)])
     with (
         patch(
@@ -164,11 +170,12 @@ def test_ocr_clamps_out_of_bounds(tmp_path):
             return_value=("x", 0.8, 0.8, False),
         ),
     ):
-        run_ocr(str(ws), config)  # must not raise
+        run_ocr(str(ws), config)
     ocr = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))
     assert len(ocr["results"]) == 1
 
 
+# Verify OCR stage handles pages with zero detected regions correctly
 def test_ocr_zero_regions(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
@@ -183,9 +190,7 @@ def test_ocr_zero_regions(tmp_path):
     assert "ocr" in m["completed_stages"]
 
 
-# ---- Stage 2 Review Tests (Tests A - D) ----
-
-
+# Mock OCR predictor returning specified texts and scores
 class _FakeOCR:
     def __init__(self, texts, scores):
         self._texts = texts
@@ -195,15 +200,17 @@ class _FakeOCR:
         return [{"rec_texts": self._texts, "rec_scores": self._scores}]
 
 
+# Verify OCR crop reading removes watermark lines while keeping dialogue
 def test_read_crop_parses_and_filters_watermark():
     crop = Image.new("RGB", (200, 80))
     eng = _FakeOCR(["滚吧！", "www.baozimh.com"], [0.94, 0.99])
     text, mean_c, min_c, filtered = _read_crop(eng, crop, config)
-    assert text == "滚吧！"  # watermark line removed
+    assert text == "滚吧！"
     assert filtered is True
-    assert 0.9 <= mean_c <= 1.0  # only the dialogue line counted
+    assert 0.9 <= mean_c <= 1.0
 
 
+# Verify crop containing only watermarks returns empty string and zero confidence
 def test_read_crop_empty_when_only_watermark():
     crop = Image.new("RGB", (200, 80))
     eng = _FakeOCR(["包子漫畫", "www.baozimh.com"], [0.9, 0.9])
@@ -213,6 +220,7 @@ def test_read_crop_empty_when_only_watermark():
     assert mean_c == 0.0 and min_c == 0.0
 
 
+# Verify watermark-only regions are marked as unusable text
 def test_ocr_watermark_only_region_not_usable(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
@@ -234,9 +242,10 @@ def test_ocr_watermark_only_region_not_usable(tmp_path):
     ][0]
     assert e["has_usable_text"] is False
     assert e["watermark_filtered"] is True
-    assert e["note"]  # descriptive note present
+    assert e["note"]
 
 
+# Verify dialogue lines are retained when watermarks are stripped
 def test_ocr_dialogue_with_watermark_keeps_dialogue(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
@@ -261,6 +270,7 @@ def test_ocr_dialogue_with_watermark_keeps_dialogue(tmp_path):
     assert e["watermark_filtered"] is True
 
 
+# Verify regular clean text is not flagged as a watermark
 def test_ocr_normal_text_not_flagged(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
@@ -284,6 +294,7 @@ def test_ocr_normal_text_not_flagged(tmp_path):
     assert e["has_usable_text"] is True
 
 
+# Verify traditional Chinese watermark phrases are filtered
 def test_read_crop_filters_traditional_watermark():
     crop = Image.new("RGB", (200, 80))
     eng = _FakeOCR(["快逃啊！", "最新免費漫畫"], [0.92, 0.95])
@@ -292,6 +303,7 @@ def test_read_crop_filters_traditional_watermark():
     assert filtered is True
 
 
+# Verify OCR stage results include success status tag
 def test_ocr_results_include_status(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
@@ -310,6 +322,7 @@ def test_ocr_results_include_status(tmp_path):
     assert res["status"] == "success"
 
 
+# Verify runtime error is raised if all detected regions produce zero OCR text
 def test_ocr_all_regions_empty_raises_error(tmp_path):
     from manhua_pipeline.stages.stage2_ocr import run_ocr
 
@@ -334,11 +347,11 @@ def test_ocr_all_regions_empty_raises_error(tmp_path):
             run_ocr(str(ws), config)
 
 
+# Verify fallback to alternative OCR engine when preferred initialization fails
 def test_ocr_engine_fallback():
     import manhua_pipeline.stages.stage2_ocr as stage2_ocr
     from manhua_pipeline.stages.stage2_ocr import _get_ocr
 
-    # Reset globals
     stage2_ocr._OCR_ENGINE = None
     stage2_ocr._ACTIVE_OCR_ENGINE = None
 
@@ -348,9 +361,7 @@ def test_ocr_engine_fallback():
         OCR_VERSION = "PP-OCRv6"
         OCR_USE_GPU = False
 
-    # Simulate preferred initialization failure, forcing fallback to paddle
     with patch("paddleocr.PaddleOCR") as mock_paddle_ocr:
-        # First call (transformers) raises exception, second call (paddle) succeeds
         mock_paddle_ocr.side_effect = [ValueError("Failed preferred"), MagicMock()]
 
         engine = _get_ocr(MockConfig)
@@ -358,18 +369,15 @@ def test_ocr_engine_fallback():
         assert stage2_ocr._ACTIVE_OCR_ENGINE == "paddle"
 
 
+# Verify _close_ocr releases engine resources and clears singleton reference
 def test_ocr_close_clears_singleton():
-    from unittest.mock import MagicMock
-
     import manhua_pipeline.stages.stage2_ocr as stage2_ocr
     from manhua_pipeline.stages.stage2_ocr import _close_ocr
 
-    # 1. Safe to call when _OCR_ENGINE is None
     stage2_ocr._OCR_ENGINE = None
-    _close_ocr()  # Should not raise any error
+    _close_ocr()
     assert stage2_ocr._OCR_ENGINE is None
 
-    # 2. Clears the singleton and calls cleanup hooks
     mock_engine = MagicMock()
     mock_engine.close = MagicMock()
     mock_engine.shutdown = MagicMock()
@@ -386,29 +394,23 @@ def test_ocr_close_clears_singleton():
     mock_inner.close.assert_called_once()
 
 
+# Verify punctuation-only and empty text detection helpers
 def test_ocr_suspicious_detector():
-    """Conservative detector: only punct-only/empty text with no real words."""
     from manhua_pipeline.stages.stage2_ocr import _has_cjk, _is_punct_or_empty
 
     assert _is_punct_or_empty("？") is True
     assert _is_punct_or_empty("") is True
     assert _is_punct_or_empty("！？") is True
     assert _is_punct_or_empty("   ") is True
-    assert _is_punct_or_empty("诶？") is False  # has CJK
-    assert _is_punct_or_empty("诶") is False  # has CJK
-    assert _is_punct_or_empty("hi") is False  # has letters
+    assert _is_punct_or_empty("诶？") is False
+    assert _is_punct_or_empty("诶") is False
+    assert _is_punct_or_empty("hi") is False
     assert _has_cjk("诶") is True
     assert _has_cjk("？") is False
 
 
+# Verify end-to-end review flow flags suspicious regions and applies manual corrections
 def test_ocr_review_flow(tmp_path, monkeypatch):
-    """End-to-end: punct-only speech bubble is flagged, review file + crop
-    written, and a manual correction is applied on re-run (non-blocking)."""
-    import json
-
-    from PIL import Image
-
-    import config
     from manhua_pipeline.stages import stage2_ocr as s2
 
     ws = tmp_path / "series" / "ch1"
@@ -466,13 +468,12 @@ def test_ocr_review_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(s2, "_get_ocr", lambda cfg: object())
     monkeypatch.setattr(s2, "_close_ocr", lambda: None)
 
-    # RUN 1: fresh -> flag + review file + crop
     s2.run_ocr(str(ws), config)
     ocr = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))
     by = {r["region_id"]: r for r in ocr["results"]}
     assert by["P022_R002"]["ocr_review"] is True
     assert by["P022_R002"]["ocr_review_reason"] == "punct_only"
-    assert by["P022_R003"]["ocr_review"] is False  # real text, not flagged
+    assert by["P022_R003"]["ocr_review"] is False
     rev = json.loads(
         (ws / "stage2_ocr" / "ocr_review.json").read_text(encoding="utf-8")
     )
@@ -480,7 +481,6 @@ def test_ocr_review_flow(tmp_path, monkeypatch):
     assert "P022_R003" not in rev["regions"]
     assert (ws / "stage2_ocr" / "review_crops" / "P022_R002.png").exists()
 
-    # RUN 2: user fills corrected_text -> applied, flag cleared
     rev["regions"]["P022_R002"]["corrected_text"] = "诶？"
     (ws / "stage2_ocr" / "ocr_review.json").write_text(
         json.dumps(rev, ensure_ascii=False), encoding="utf-8"
@@ -493,13 +493,8 @@ def test_ocr_review_flow(tmp_path, monkeypatch):
     assert by["P022_R002"]["ocr_review"] is False
 
 
+# Verify OCR_REVIEW_ENABLED=False skips review flagging and file generation
 def test_ocr_review_toggle_off(tmp_path, monkeypatch):
-    """OCR_REVIEW_ENABLED=False disables flagging entirely."""
-    import json
-
-    from PIL import Image
-
-    import config
     from manhua_pipeline.stages import stage2_ocr as s2
 
     monkeypatch.setattr(config, "OCR_REVIEW_ENABLED", False, raising=False)

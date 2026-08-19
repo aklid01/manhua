@@ -1,3 +1,5 @@
+# Series-level glossary management, creation, and term appending.
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +9,7 @@ from manhua_pipeline.logging_setup import get_logger
 logger = get_logger(__name__)
 
 
+# Return Path to series-level glossary JSON file
 def series_glossary_path(base_dir: Path, config) -> Path:
     return base_dir / getattr(config, "GLOSSARY_NAME", "glossary.json")
 
@@ -18,8 +21,8 @@ _EMPTY_GLOSSARY = {
 }
 
 
+# Load series-level glossary from disk, creating default schema if missing
 def load_series_glossary(base_dir: Path, config) -> dict:
-    """Load the series-level glossary.json, creating it if missing."""
     p = series_glossary_path(base_dir, config)
     if p.exists():
         try:
@@ -41,6 +44,7 @@ def load_series_glossary(base_dir: Path, config) -> dict:
     return dict(_EMPTY_GLOSSARY)
 
 
+# Append new glossary term stub if not already present
 def append_glossary_term(
     base_dir: Path,
     config,
@@ -48,7 +52,6 @@ def append_glossary_term(
     target_term: str = "",
     locked: bool = False,
 ) -> None:
-    """Add a term stub if the source_term isn't already present."""
     p = series_glossary_path(base_dir, config)
     g = load_series_glossary(base_dir, config)
     if any(t.get("source_term") == source_term for t in g.get("terms", [])):

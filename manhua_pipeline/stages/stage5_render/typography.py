@@ -1,3 +1,5 @@
+# Typography layout, font sizing, word wrapping, and mask clamping.
+
 import re
 from pathlib import Path
 
@@ -12,6 +14,7 @@ _font_cache: dict = {}
 _ESCAPED_NEWLINE_RE = re.compile(r"\\(?:r\\n|n|r)", re.IGNORECASE)
 
 
+# Load cached FreeType font at specified point size
 def _load_font(
     font_path: str, pt: int, config
 ) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
@@ -52,6 +55,7 @@ def _load_font(
     return font
 
 
+# Calculate maximum font point size dynamically
 def effective_max_pt(config, page_width: int | None) -> int:
     static_max = int(getattr(config, "FONT_MAX_PT", 40))
     frac = float(getattr(config, "FONT_MAX_PAGE_FRAC", 0.0) or 0.0)
@@ -60,12 +64,14 @@ def effective_max_pt(config, page_width: int | None) -> int:
     return static_max
 
 
+# Replace escaped newline characters with standard newline
 def normalize_escaped_newlines(text: str) -> str:
     if not text:
         return text
     return _ESCAPED_NEWLINE_RE.sub("\n", text)
 
 
+# Wrap paragraphs into lines fitting within maximum width
 def _wrap_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
     text = normalize_escaped_newlines(text)
     paragraphs = text.split("\n")
@@ -93,6 +99,7 @@ def _wrap_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str
     return all_lines
 
 
+# Calculate total vertical pixel height of wrapped text lines
 def _block_height(
     lines: list[str], font: ImageFont.ImageFont, line_spacing: float
 ) -> int:
@@ -110,11 +117,13 @@ def _block_height(
     return total_h
 
 
+# Measure rendered ink pixel width of single text line
 def _line_ink_width(line: str, font: ImageFont.ImageFont) -> int:
     left, _top, right, _bottom = font.getbbox(line)
     return max(0, right - left)
 
 
+# Determine mask horizontal span at given page Y coordinate
 def _get_available_width_at_y(
     eroded_mask: Image.Image,
     bubble_box: Box,
@@ -141,6 +150,7 @@ def _get_available_width_at_y(
     return max(0, right_page - left_page)
 
 
+# Check if any text line overflows target box or eroded bubble mask
 def _any_line_overflows(
     lines: list[str],
     font: ImageFont.ImageFont,
@@ -187,6 +197,7 @@ def _any_line_overflows(
     return False
 
 
+# Iteratively fit text within bounding box by adjusting font size and line wrapping
 def _fit_text(
     text: str,
     bbox_w: int,
@@ -236,6 +247,7 @@ def _fit_text(
     return font, lines, hard_floor, True
 
 
+# Calculate best font size, wrapped lines, and line placement coordinates
 def fit_and_place_text(
     *,
     draw: ImageDraw.ImageDraw,
@@ -315,6 +327,7 @@ def fit_and_place_text(
     return font, lines, font_size, overflow, placements
 
 
+# Clamp line horizontal positions within interior bubble mask boundaries
 def _clamp_placements_to_mask(
     placements: list[dict],
     bubble_mask: Image.Image,

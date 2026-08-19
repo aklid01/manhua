@@ -1,3 +1,5 @@
+# Translation prompt bundle construction, validation, and response writing.
+
 import json
 from pathlib import Path
 
@@ -28,6 +30,7 @@ _PROMPT_INSTRUCTIONS = (
 )
 
 
+# Build JSON bundle for translation handoff
 def _build_bundle(usable: list[dict], locked: list[dict]) -> dict:
     compact_glossary = [
         {"source_term": t["source_term"], "target_term": t["target_term"]}
@@ -50,6 +53,7 @@ def _build_bundle(usable: list[dict], locked: list[dict]) -> dict:
     }
 
 
+# Validate raw translation dictionary and normalize punctuation
 def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
     warnings = []
     if not isinstance(raw, dict):
@@ -64,7 +68,7 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
             warnings.append(f"Unexpected region_id in response (ignored): {rid!r}")
             continue
         if not isinstance(val, str) or not val.strip():
-            warnings.append(f"Empty/non-string value for {rid!r} — treated as missing.")
+            warnings.append(f"Empty/non-string value for {rid!r} - treated as missing.")
             continue
         if _cjk_ratio(val) > 0.30:
             warnings.append(
@@ -77,12 +81,13 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
     for rid in usable_ids:
         if rid not in clean:
             warnings.append(
-                f"Missing translation for {rid!r} — will be flagged needs_translation."
+                f"Missing translation for {rid!r} - will be flagged needs_translation."
             )
 
     return clean, warnings
 
 
+# Build single-region isolated retry prompt string
 def _build_contextual_retry_prompt(region: dict, locked: list[dict]) -> str:
     rid = region["region_id"]
     original = region.get("original_text", "")
@@ -105,6 +110,7 @@ def _build_contextual_retry_prompt(region: dict, locked: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# Build translation prompt bundle for chapter directory
 def build_translation_bundle(chapter_dir: str | Path, config) -> dict:
     from manhua_pipeline.stages.stage3_translation.engine import (
         _partition_regions_translation,
@@ -134,6 +140,7 @@ def build_translation_bundle(chapter_dir: str | Path, config) -> dict:
     return _build_bundle(usable, locked)
 
 
+# Validate and write translation response mapping to disk
 def write_translation_response(
     chapter_dir: str | Path, mapping: dict, config=None
 ) -> dict:

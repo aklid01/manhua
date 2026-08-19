@@ -1,5 +1,4 @@
-"""Stage 7: Packaging. Bundle rendered pages into zip/cbz archives.
-Opt-in; terminal; never advances the manifest."""
+# Stage 7: Packaging rendered chapter pages into ZIP and CBZ archives.
 
 import re
 import time
@@ -12,15 +11,16 @@ from manhua_pipeline.logging_setup import get_logger, log_stage
 logger = get_logger(__name__)
 _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME = 7, 7, "Package"
 
-
 _DIGIT_RE = re.compile(r"\d+")
 
 
+# Natural sorting key based on embedded integer numbers
 def _natural_key(p: Path) -> tuple:
     nums = tuple(int(n) for n in _DIGIT_RE.findall(p.name))
     return nums if nums else (float("inf"),)
 
 
+# Collect and sort rendered image paths from render directory
 def _collect(render_dir: Path, config) -> list[Path]:
     exts = getattr(config, "PACKAGE_IMAGE_EXTS", (".png", ".jpg", ".jpeg", ".webp"))
     rendered_dir = render_dir / "rendered"
@@ -31,6 +31,7 @@ def _collect(render_dir: Path, config) -> list[Path]:
     )
 
 
+# Determine base chapter archive name from manifest or workspace
 def _base_name(ws: Path, manifest: dict) -> str:
     for key in ("source_archive", "source_filename", "original_name"):
         if manifest.get(key):
@@ -38,6 +39,7 @@ def _base_name(ws: Path, manifest: dict) -> str:
     return ws.name
 
 
+# Write uncompressed ZIP/CBZ archive containing specified images
 def _write_zip(images: list[Path], out: Path) -> None:
     with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
         for img in images:
@@ -50,6 +52,7 @@ _WRITERS = {
 }
 
 
+# Package rendered pages into requested archive formats (ZIP/CBZ)
 def run_package(workspace: str, config, formats: list[str]) -> list[Path]:
     t0 = time.monotonic()
     ws = Path(workspace)
@@ -69,7 +72,7 @@ def run_package(workspace: str, config, formats: list[str]) -> list[Path]:
             logger.warning("[%s] Unknown format ignored: %r", _STAGE_NAME, f)
     requested = filtered
     if not requested:
-        logger.info("[%s] No valid formats — nothing to package.", _STAGE_NAME)
+        logger.info("[%s] No valid formats - nothing to package.", _STAGE_NAME)
         return []
 
     manifest = load_manifest(workspace, config)

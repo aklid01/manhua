@@ -1,9 +1,11 @@
+# Manual overrides loading and filtering.
+
 import json
 from pathlib import Path
 
 
+# Load region overrides mapping, skipping comments and empty entries
 def load_overrides(ws: Path, config) -> dict[str, str]:
-    """Return {region_id: english} for NON-EMPTY overrides only. Missing file -> {}. Ignores the _comment key."""
     path = ws / getattr(config, "OVERRIDES_NAME", "overrides.json")
     if not path.exists():
         return {}

@@ -1,15 +1,11 @@
-"""Runtime interaction policy.
-
-Determines whether the current execution context can prompt the user.
-Validation and backend code must never call input() directly - they
-consult RuntimePolicy.can_prompt first.
-"""
+# Runtime interaction policy and TTY detection.
 
 import sys
 from dataclasses import dataclass
 from enum import Enum
 
 
+# Interaction mode classifications for runtime execution
 class InteractionMode(str, Enum):
     INTERACTIVE = "interactive"
     NON_INTERACTIVE = "non_interactive"
@@ -17,14 +13,15 @@ class InteractionMode(str, Enum):
     GUI = "gui"
 
 
+# Encapsulates interaction mode and batch execution status
 @dataclass(frozen=True)
 class RuntimePolicy:
     mode: InteractionMode
     batch: bool = False
 
+    # Check whether the session is interactive and connected to a TTY
     @property
     def can_prompt(self) -> bool:
-        """True only when running interactively in a real terminal, not batch/MCP/GUI."""
         return (
             self.mode == InteractionMode.INTERACTIVE
             and not self.batch
@@ -32,8 +29,8 @@ class RuntimePolicy:
         )
 
 
+# Infer default runtime policy from environment and batch flag
 def default_runtime_policy(*, batch: bool = False) -> RuntimePolicy:
-    """Infer the runtime mode from the environment."""
     if batch:
         return RuntimePolicy(mode=InteractionMode.NON_INTERACTIVE, batch=True)
     if sys.stdin.isatty():
@@ -41,8 +38,8 @@ def default_runtime_policy(*, batch: bool = False) -> RuntimePolicy:
     return RuntimePolicy(mode=InteractionMode.NON_INTERACTIVE, batch=False)
 
 
+# Check if both stdin and stdout are interactive TTYs
 def can_prompt_now(*, batch: bool = False) -> bool:
-    """True only when a real interactive terminal is available."""
     if batch:
         return False
     try:

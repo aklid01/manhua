@@ -1,3 +1,5 @@
+# Rendering stage engine orchestrating image inpainting, typography fitting, and output writing.
+
 import copy
 import json
 import time
@@ -19,8 +21,8 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Render"
 
 
+# Calculate intersection area over smaller box area
 def _box_overlap_ratio(a: dict | None, b: dict | None) -> float:
-    """Return intersection / area of the smaller box."""
     if not a or not b:
         return 0.0
     ax0, ay0 = int(a.get("x", 0)), int(a.get("y", 0))
@@ -37,14 +39,15 @@ def _box_overlap_ratio(a: dict | None, b: dict | None) -> float:
     return intersection / smaller if smaller else 0.0
 
 
+# Filter text to alphanumeric and CJK characters for similarity matching
 def _normalized_source_text(text: str) -> str:
     return "".join(
         ch.lower() for ch in (text or "") if ch.isalnum() or "\u3400" <= ch <= "\u9fff"
     )
 
 
+# Measure shared character span ratio between two source texts
 def _source_overlap_ratio(a: str, b: str) -> float:
-    """Measure shared source characters, including separate matching spans."""
     left, right = _normalized_source_text(a), _normalized_source_text(b)
     if not left or not right:
         return 0.0
@@ -53,17 +56,10 @@ def _source_overlap_ratio(a: str, b: str) -> float:
     return matched / min(len(left), len(right))
 
 
+# Suppress duplicate detections from the same connected speech bubble
 def _suppress_overlapping_duplicate_regions(
     regions_by_page: dict[int, list[dict]],
 ) -> None:
-    """Suppress detector duplicates from one irregular speech bubble.
-
-    RT-DETR can emit a large text box and a smaller box for the same connected
-    bubble. Rendering both produces the exact overprinted English seen when
-    their parent bubbles and OCR text substantially overlap. The smaller
-    region remains in the render pass as erase-only so its original artwork is
-    still removed, but it never contributes a second English text block.
-    """
     for page_num, regions in regions_by_page.items():
         candidates = [
             r
@@ -121,12 +117,14 @@ def _suppress_overlapping_duplicate_regions(
                 )
 
 
+# Legacy stub raising NotImplementedError
 def _render_region(*_args, **_kwargs):
     raise NotImplementedError(
         "_render_region is retired; use _plan_and_erase_region + _draw_region_plan."
     )
 
 
+# Merge detection, OCR, and paraphrase artifacts into unified region structures
 def _load_and_merge_regions(
     det_data: dict, ocr_data: dict, para_data: dict
 ) -> dict[int, list[dict]]:
@@ -169,15 +167,8 @@ def _load_and_merge_regions(
     return regions_by_page
 
 
+# Clip layout bounding boxes to stitch seam boundary
 def _clip_region_to_stitch(region: dict, stitch_y: int) -> dict:
-    """Clamp layout boxes while preserving the full box needed for erasure.
-
-    The clipped ``bbox``/``read_region`` prevent English text from being placed
-    in the second source page's half. The original OCR box is retained
-    separately because the eraser must still cover source glyphs that cross the
-    stitch seam.
-    """
-
     def _clip_dict_box(d: dict | None) -> dict | None:
         if d is None:
             return None
@@ -209,6 +200,7 @@ def _clip_region_to_stitch(region: dict, stitch_y: int) -> dict:
     return region
 
 
+# Render erased backgrounds and overlaid English text on single page image
 def _render_single_page(
     page: dict,
     ws: Path,
@@ -262,10 +254,6 @@ def _render_single_page(
     if stitch_y:
         clipped = []
         for r in page_regions:
-            # A bubble can straddle the seam while its text belongs entirely to
-            # the second source page. Use the text/layout anchor to decide
-            # which half owns the region; the parent bubble may cross the seam
-            # so erasing can still cover its border.
             text_box = r.get("read_region") or r["bbox"]
             region_top = int(text_box["y"])
             if region_top < stitch_y:
@@ -357,6 +345,7 @@ def _render_single_page(
     return page_results, page_report, page_drawn, page_left, page_overflow
 
 
+# Execute Stage 5 rendering stage across all pages and write render.json
 def run_render(workspace: str, config, run_id: str | None = None) -> Path:
     t0 = time.monotonic()
     ws = Path(workspace)

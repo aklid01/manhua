@@ -1,8 +1,4 @@
-"""Stage 5: Rendering package.
-
-Erases original Chinese text from bounding box areas and draws the paraphrased
-US English text in its place. Utilizes Pillow to wrap, size, and style.
-"""
+# Stage 5: Inpainting, typography planning, and text rendering package.
 
 import sys
 from types import ModuleType
@@ -131,6 +127,7 @@ _SUBMODULE_MAP = {
 }
 
 
+# Dynamic module proxy synchronizing attribute updates into submodules
 class _Stage5Module(ModuleType):
     def __setattr__(self, name, value):
         super().__setattr__(name, value)

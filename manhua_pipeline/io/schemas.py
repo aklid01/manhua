@@ -1,27 +1,25 @@
-"""Typed stubs mirroring the 7 JSON schemas (source of truth).
-
-These are dataclass stubs for editor autocompletion / validation; the on-disk
-JSON remains authoritative.
-"""
+# Dataclass schema definitions for pipeline artifacts and intermediate representations.
 
 from dataclasses import dataclass, field
 from typing import Optional
 
 
+# Bounding box and classification metadata for detected text region
 @dataclass
 class Region:
     region_id: str
     page_number: int
-    type: str  # speech_bubble | narration | name_label | scene_text
-    bbox: dict  # {x, y, w, h}
+    type: str
+    bbox: dict
     reading_order: int
-    style_hint: str  # round | spiky | narration | label | in_art
+    style_hint: str
     confidence: float
     read_region: dict = field(default_factory=dict)
     erase_mask: dict = field(default_factory=dict)
     render: bool = True
 
 
+# OCR extraction result and text usability metadata
 @dataclass
 class OcrResult:
     region_id: str
@@ -40,6 +38,7 @@ class OcrResult:
     watermark_filtered: bool = False
 
 
+# Literal translation output and glossary application metadata
 @dataclass
 class TranslationResult:
     region_id: str
@@ -53,6 +52,7 @@ class TranslationResult:
     translation_source: Optional[str] = None
 
 
+# Final dialogue paraphrase output and register classification
 @dataclass
 class ParaphraseResult:
     region_id: str
@@ -67,6 +67,7 @@ class ParaphraseResult:
     paraphrase_source: Optional[str] = None
 
 
+# Standard glossary term definition
 @dataclass
 class GlossaryTerm:
     term_id: str
@@ -79,6 +80,7 @@ class GlossaryTerm:
     notes: str = ""
 
 
+# Chapter quality assurance report and warning summary
 @dataclass
 class QaReport:
     chapter_id: str
@@ -87,6 +89,7 @@ class QaReport:
     warnings: list = field(default_factory=list)
 
 
+# Chapter manifest tracking stage progress and page metadata
 @dataclass
 class Manifest:
     chapter_id: str

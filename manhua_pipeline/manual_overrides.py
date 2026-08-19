@@ -1,23 +1,18 @@
-"""Manual override request schema, interactive prompt, and JSONL queue.
-
-Rules:
-- prompt_for_override() is the ONLY place allowed to call input().
-- handle_manual_request() checks RuntimePolicy.can_prompt before calling it.
-- Batch/non-TTY/MCP: emit event, append to queue, return defer decision.
-- Atomic writes prevent partial JSON corruption.
-"""
+# Manual override request schema, interactive prompt handler, and JSON queue.
 
 import json
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any, Literal
 
 OverrideScope = Literal["region", "series_glossary"]
 ManualAction = Literal["apply_region", "apply_glossary", "defer", "abort"]
 
 
+# Data model for manual translation override requests
 @dataclass(frozen=True)
 class ManualOverrideRequest:
     request_id: str
@@ -43,17 +38,19 @@ class ManualOverrideRequest:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+# Data model for decisions made on manual override requests
 @dataclass(frozen=True)
 class ManualOverrideDecision:
     action: ManualAction
     translation: str | None = None
 
 
+# Build unique identifier for manual override request
 def build_request_id(chapter: str, stage: str, region_id: str) -> str:
-    """Stable, run-INDEPENDENT identity for a manual override request."""
     return f"{chapter}:{stage}:{region_id}"
 
 
+# Construct manual override request from region metadata and failure details
 def make_override_request(
     *,
     run_id: str,
@@ -95,8 +92,8 @@ def make_override_request(
     )
 
 
+# Display interactive terminal prompt for user override resolution
 def prompt_for_override(request: ManualOverrideRequest) -> ManualOverrideDecision:
-    """Interactive terminal prompt. Only called when RuntimePolicy.can_prompt is True."""
     print("\n[MANUAL OVERRIDE REQUIRED]")
     print(f"Chapter:  {request.chapter}")
     print(f"Page:     {request.page if request.page is not None else 'unknown'}")
@@ -132,8 +129,8 @@ def prompt_for_override(request: ManualOverrideRequest) -> ManualOverrideDecisio
     return ManualOverrideDecision(action="defer")
 
 
+# Deserialize request object from JSON dictionary row
 def request_from_row(row: dict) -> ManualOverrideRequest:
-    """Rebuild a ManualOverrideRequest from a stored queue row."""
     return ManualOverrideRequest(
         request_id=row["request_id"],
         run_id=row.get("run_id", "unknown"),
@@ -159,19 +156,14 @@ def request_from_row(row: dict) -> ManualOverrideRequest:
     )
 
 
+# Persistent JSON queue managing pending and resolved manual override requests
 class OverrideRequestStore:
-    """JSON-backed queue of pending manual override requests.
-
-    Dedup rule: one entry per request_id (chapter:stage:region). Re-queuing
-    the same region UPDATES the existing pending entry rather than appending
-    a duplicate. Resolved entries are marked, not deleted, for audit.
-    """
-
     def __init__(self, workspace: Path):
         logs_dir = Path(workspace) / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         self.path = logs_dir / "manual_override_requests.json"
 
+    # Load stored requests from JSON file
     def _load(self) -> list[dict]:
         if not self.path.exists():
             return []
@@ -181,10 +173,8 @@ class OverrideRequestStore:
         except Exception:
             return []
 
+    # Write request list to JSON file atomically
     def _save(self, rows: list[dict]) -> None:
-        import os
-        from tempfile import NamedTemporaryFile
-
         with NamedTemporaryFile(
             "w",
             delete=False,
@@ -196,8 +186,8 @@ class OverrideRequestStore:
             tmp = Path(fh.name)
         os.replace(tmp, self.path)
 
+    # Insert or update pending request entry
     def upsert_pending(self, request: ManualOverrideRequest) -> None:
-        """Insert a new pending request, or refresh an existing one by id."""
         rows = self._load()
         payload = asdict(request)
         payload["status"] = "pending"
@@ -215,9 +205,11 @@ class OverrideRequestStore:
         rows.append(payload)
         self._save(rows)
 
+    # Return list of pending manual override requests
     def list_pending(self) -> list[dict]:
         return [r for r in self._load() if r.get("status") == "pending"]
 
+    # Mark specific request as resolved with scope and translation
     def mark_resolved(self, request_id: str, *, scope: str, translation: str) -> None:
         rows = self._load()
         for row in rows:
@@ -230,10 +222,8 @@ class OverrideRequestStore:
         self._save(rows)
 
 
+# Write data to JSON file atomically via temporary swap file
 def atomic_write_json(path: str | Path, data: object) -> None:
-    """Write JSON atomically via a temp file + os.replace."""
-    from tempfile import NamedTemporaryFile
-
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with NamedTemporaryFile(
@@ -249,6 +239,7 @@ def atomic_write_json(path: str | Path, data: object) -> None:
     os.replace(temporary, destination)
 
 
+# Exception raised when proposed glossary term conflicts with locked entry
 class LockedGlossaryConflict(Exception):
     def __init__(self, source_term: str, current: str, proposed: str) -> None:
         self.source_term = source_term
@@ -260,6 +251,7 @@ class LockedGlossaryConflict(Exception):
         )
 
 
+# Save region-specific manual translation override to file
 def save_region_override(
     overrides: dict,
     request: ManualOverrideRequest,
@@ -275,6 +267,7 @@ def save_region_override(
     atomic_write_json(path, overrides)
 
 
+# Save series-wide locked glossary term override to file
 def save_locked_glossary_entry(
     glossary: list[dict],
     request: ManualOverrideRequest,

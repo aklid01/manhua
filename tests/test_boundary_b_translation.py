@@ -1,7 +1,4 @@
-"""Boundary B tests: translation validation, locked glossary, contextual retry, override dispatch.
-
-All tests are offline. No network, no filesystem side-effects outside tmp_path.
-"""
+# Unit tests for translation validation, locked glossary matching, contextual retries, and override dispatch.
 
 import json
 
@@ -17,11 +14,8 @@ from manhua_pipeline.translation_validation import (
     validate_expected_regions,
 )
 
-# ---------------------------------------------------------------------------
-# validate_expected_regions
-# ---------------------------------------------------------------------------
 
-
+# Verify valid translation response normalizes escaped newlines and marks region as accepted
 def test_accepted_normalizes_text():
     parsed = {"P001_R001": "Hello\\nWorld"}
     issues = validate_expected_regions(parsed, {"P001_R001"})
@@ -30,24 +24,28 @@ def test_accepted_normalizes_text():
     assert issue.accepted_text == "Hello\nWorld"
 
 
+# Verify omitted region ID in translation response is marked missing
 def test_missing_key_reason():
     issues = validate_expected_regions({}, {"P001_R001"})
     assert issues["P001_R001"].status == "missing"
     assert issues["P001_R001"].reason == "missing_key"
 
 
+# Verify empty translation string is marked rejected
 def test_empty_string_reason():
     issues = validate_expected_regions({"P001_R001": ""}, {"P001_R001"})
     assert issues["P001_R001"].status == "rejected"
     assert issues["P001_R001"].reason == "empty_string"
 
 
+# Verify whitespace-only translation string is marked rejected
 def test_whitespace_only_reason():
     issues = validate_expected_regions({"P001_R001": "   "}, {"P001_R001"})
     assert issues["P001_R001"].status == "rejected"
     assert issues["P001_R001"].reason == "whitespace_only"
 
 
+# Verify non-string translation value type is marked rejected
 def test_non_string_reason():
     issues = validate_expected_regions({"P001_R001": 42}, {"P001_R001"})
     assert issues["P001_R001"].status == "rejected"
@@ -55,25 +53,27 @@ def test_non_string_reason():
     assert issues["P001_R001"].raw_value_type == "int"
 
 
+# Verify untranslated Chinese text exceeding CJK ratio threshold is rejected
 def test_cjk_ratio_exceeded_reason():
-    # Pure Chinese is >30% CJK
     issues = validate_expected_regions({"P001_R001": "你好世界"}, {"P001_R001"})
     assert issues["P001_R001"].status == "rejected"
     assert issues["P001_R001"].reason == "cjk_ratio_exceeded"
 
 
+# Verify mixed text with minor CJK characters below threshold is accepted
 def test_mixed_cjk_below_threshold_accepted():
-    # <30% CJK should be accepted
     issues = validate_expected_regions({"P001_R001": "Hello 世"}, {"P001_R001"})
     assert issues["P001_R001"].status == "accepted"
 
 
+# Verify retry attempt number is tracked in translation issue metadata
 def test_attempt_tracked():
     parsed = {"P001_R001": "Good"}
     issues = validate_expected_regions(parsed, {"P001_R001"}, attempt=2)
     assert issues["P001_R001"].attempt == 2
 
 
+# Verify multiple regions in a single batch validate independently
 def test_multiple_regions_independent():
     parsed = {
         "P001_R001": "Good",
@@ -89,6 +89,7 @@ def test_multiple_regions_independent():
     assert issues["P001_R004"].reason == "missing_key"
 
 
+# Verify unexpected extra keys in translation response are filtered out
 def test_unexpected_keys_not_in_result():
     parsed = {"P001_R001": "Good", "SPURIOUS": "extra"}
     issues = validate_expected_regions(parsed, {"P001_R001"})
@@ -96,39 +97,34 @@ def test_unexpected_keys_not_in_result():
     assert issues["P001_R001"].status == "accepted"
 
 
+# Verify TranslationIssue dataclass instance is immutable
 def test_translation_issue_is_frozen():
     issue = TranslationIssue(region_id="r", status="accepted")
     with pytest.raises((AttributeError, TypeError)):
         issue.status = "rejected"
 
 
-# ---------------------------------------------------------------------------
-# is_meaningful_region
-# ---------------------------------------------------------------------------
-
-
+# Verify text with multi-character CJK is classified as meaningful dialogue
 def test_meaningful_region_with_cjk():
     assert is_meaningful_region("你好", config) is True
 
 
+# Verify single-character CJK is classified as trivial
 def test_trivial_region_single_cjk():
     assert is_meaningful_region("一", config) is False
 
 
+# Verify empty string is classified as trivial
 def test_trivial_region_empty():
     assert is_meaningful_region("", config) is False
 
 
+# Verify ASCII-only text without CJK is classified as trivial for translation
 def test_trivial_region_only_ascii():
-    # No CJK -> not meaningful
     assert is_meaningful_region("ABC 123", config) is False
 
 
-# ---------------------------------------------------------------------------
-# normalize_newlines / normalize_punct
-# ---------------------------------------------------------------------------
-
-
+# Verify escaped newlines (\n, \r\n, \r, \N) are normalized to standard newlines
 def test_normalize_newlines_escaped():
     assert normalize_newlines("Hello\\nWorld") == "Hello\nWorld"
     assert normalize_newlines("A\\r\\nB") == "A\nB"
@@ -137,37 +133,32 @@ def test_normalize_newlines_escaped():
     assert normalize_newlines("A\\R\\NB") == "A\nB"
 
 
+# Verify fullwidth Chinese punctuation marks are normalized to ASCII punctuation
 def test_normalize_punct_fullwidth():
     assert normalize_punct("\uff01") == "!"
     assert normalize_punct("\u3002") == "."
     assert normalize_punct("Hello\uff01") == "Hello!"
 
 
-# ---------------------------------------------------------------------------
-# RuntimePolicy
-# ---------------------------------------------------------------------------
-
-
+# Verify NON_INTERACTIVE mode disables interactive prompts
 def test_runtime_policy_non_interactive():
     policy = RuntimePolicy(mode=InteractionMode.NON_INTERACTIVE)
     assert policy.can_prompt is False
 
 
+# Verify batch execution disables interactive prompts
 def test_runtime_policy_batch_disables_prompt():
     policy = RuntimePolicy(mode=InteractionMode.INTERACTIVE, batch=True)
     assert policy.can_prompt is False
 
 
+# Verify MCP execution mode disables interactive prompts
 def test_runtime_policy_mcp_disables_prompt():
     policy = RuntimePolicy(mode=InteractionMode.MCP)
     assert policy.can_prompt is False
 
 
-# ---------------------------------------------------------------------------
-# Locked glossary pre-resolution via run_translation
-# ---------------------------------------------------------------------------
-
-
+# Helper to construct mock chapter workspace with OCR and glossary files
 def _make_ws(tmp_path, ocr_results, glossary=None):
     ws = tmp_path / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
@@ -199,6 +190,7 @@ def _make_ws(tmp_path, ocr_results, glossary=None):
     return ws
 
 
+# Helper to construct mock OCR region result dictionary
 def _ocr(rid, text, usable=True):
     return {
         "region_id": rid,
@@ -218,11 +210,13 @@ def _ocr(rid, text, usable=True):
     }
 
 
+# Fixture forcing manual translator backend for offline test isolation
 @pytest.fixture(autouse=True)
 def _force_manual_backend(monkeypatch):
     monkeypatch.setattr(config, "TRANSLATOR_BACKEND", "manual", raising=False)
 
 
+# Verify exact locked glossary term match translates directly without invoking backend
 def test_locked_glossary_exact_match_bypasses_backend(tmp_path):
     from manhua_pipeline.stages.stage3_translation import run_translation
 
@@ -250,8 +244,8 @@ def test_locked_glossary_exact_match_bypasses_backend(tmp_path):
     assert r["glossary_conflict"] is False
 
 
+# Verify substring/partial glossary match does not bypass backend
 def test_locked_glossary_partial_match_does_not_bypass(tmp_path):
-    """Locked glossary match is exact (full original_text). A substring match does NOT bypass."""
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     glossary = {
@@ -265,15 +259,13 @@ def test_locked_glossary_partial_match_does_not_bypass(tmp_path):
             }
         ],
     }
-    # original_text has extra characters around the locked term
     ws = _make_ws(tmp_path, [_ocr("P001_R001", "你好经理！")], glossary=glossary)
     run_translation(str(ws), config)
-    # The region has extra CJK so no exact match -> goes to backend (manual) -> no response file -> returns None
     assert not (ws / "stage3_translation" / "translation.json").exists()
 
 
+# Verify locked glossary entry with empty target translation does not bypass backend
 def test_locked_glossary_empty_target_does_not_bypass(tmp_path):
-    """A locked term with an empty target_term does not bypass the backend."""
     from manhua_pipeline.stages.stage3_translation import run_translation
 
     glossary = {
@@ -282,22 +274,17 @@ def test_locked_glossary_empty_target_does_not_bypass(tmp_path):
         "terms": [
             {
                 "source_term": "经理",
-                "target_term": "",  # no target yet
+                "target_term": "",
                 "locked": True,
             }
         ],
     }
     ws = _make_ws(tmp_path, [_ocr("P001_R001", "经理")], glossary=glossary)
     run_translation(str(ws), config)
-    # Empty target means no bypass, goes to backend, no response -> None returned
     assert not (ws / "stage3_translation" / "translation.json").exists()
 
 
-# ---------------------------------------------------------------------------
-# validate_batch wires through validate_expected_regions
-# ---------------------------------------------------------------------------
-
-
+# Verify OllamaBackend._validate_batch returns accepted translations dictionary
 def test_validate_batch_returns_accepted_dict():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
@@ -310,6 +297,7 @@ def test_validate_batch_returns_accepted_dict():
     assert unexpected == []
 
 
+# Verify empty string response moves region to missing list for retry
 def test_validate_batch_empty_string_goes_to_missing():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
@@ -319,6 +307,7 @@ def test_validate_batch_empty_string_goes_to_missing():
     assert "P001_R001" in missing
 
 
+# Verify whitespace-only response moves region to missing list
 def test_validate_batch_whitespace_only_goes_to_missing():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
@@ -328,6 +317,7 @@ def test_validate_batch_whitespace_only_goes_to_missing():
     assert "P001_R001" in missing
 
 
+# Verify non-string response moves region to missing list
 def test_validate_batch_non_string_goes_to_missing():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
@@ -337,6 +327,7 @@ def test_validate_batch_non_string_goes_to_missing():
     assert "P001_R001" in missing
 
 
+# Verify spurious regions in response are reported in unexpected list
 def test_validate_batch_unexpected_region_reported():
     from manhua_pipeline.stages.stage3_translation import OllamaBackend
 
@@ -346,11 +337,7 @@ def test_validate_batch_unexpected_region_reported():
     assert accepted == {"P001_R001": "Hi"}
 
 
-# ---------------------------------------------------------------------------
-# OverrideRequestStore (JSONL queue)
-# ---------------------------------------------------------------------------
-
-
+# Verify OverrideRequestStore appends pending manual override requests
 def test_override_request_store_appends(tmp_path):
     from manhua_pipeline.manual_overrides import (
         OverrideRequestStore,
@@ -375,6 +362,7 @@ def test_override_request_store_appends(tmp_path):
     assert pending[0]["status"] == "pending"
 
 
+# Verify OverrideRequestStore deduplicates repeated upserts for the same region
 def test_override_request_store_idempotent_list(tmp_path):
     from manhua_pipeline.manual_overrides import (
         OverrideRequestStore,
@@ -399,15 +387,10 @@ def test_override_request_store_idempotent_list(tmp_path):
                 attempts=1,
             )
         )
-    # Deduplicates on upsert -> only 1 pending
     assert len(store.list_pending()) == 1
 
 
-# ---------------------------------------------------------------------------
-# _build_contextual_retry_prompt
-# ---------------------------------------------------------------------------
-
-
+# Verify single-region contextual retry prompt includes target region ID and source text
 def test_contextual_retry_prompt_contains_region_id():
     from manhua_pipeline.stages.stage3_translation import _build_contextual_retry_prompt
 
@@ -417,6 +400,7 @@ def test_contextual_retry_prompt_contains_region_id():
     assert "你好" in prompt
 
 
+# Verify contextual retry prompt includes applicable locked glossary terms
 def test_contextual_retry_prompt_includes_glossary():
     from manhua_pipeline.stages.stage3_translation import _build_contextual_retry_prompt
 
@@ -427,6 +411,7 @@ def test_contextual_retry_prompt_includes_glossary():
     assert "经理" in prompt
 
 
+# Verify load_overrides parses flat key-value string dictionary from overrides.json
 def test_load_overrides_accepts_legacy_string(tmp_path):
     from manhua_pipeline.io.overrides import load_overrides
 
@@ -438,6 +423,7 @@ def test_load_overrides_accepts_legacy_string(tmp_path):
     assert result == {"P001_R001": "Hello"}
 
 
+# Verify load_overrides parses structured manual override records
 def test_load_overrides_accepts_manual_record(tmp_path):
     from manhua_pipeline.io.overrides import load_overrides
     from manhua_pipeline.manual_overrides import (

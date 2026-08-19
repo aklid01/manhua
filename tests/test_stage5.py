@@ -1,19 +1,28 @@
+# Unit tests for Stage 5 text layout, font fitting, inpainting erasure, and page rendering.
+
 import json
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 import config
+from manhua_pipeline.stages import stage5_render
+from manhua_pipeline.stages.stage5_render import (
+    Box,
+    _dominant_fill_color,
+    _draw_region_plan,
+    _finalize_plan,
+    _plan_and_erase_region,
+    grow_layout_box,
+    intersect_boxes,
+)
 
 
+# Helper to configure mock workspace with test images and stage outputs
 def _setup(ws, page_wh=(400, 600), det=None, ocr=None, para=None):
     (ws / "pages").mkdir(parents=True, exist_ok=True)
-    # Start with a green background to verify outside is untouched
     img = Image.new("RGB", page_wh, (0, 255, 0))
-    # Draw bubble 1: white background
     img.paste((255, 255, 255), (50, 50, 150, 100))
-    # Draw dark characters inside bubble 1
     img.paste((0, 0, 0), (70, 60, 130, 90))
-    # Draw bubble 2: white background with dark characters
     img.paste((255, 255, 255), (200, 300, 300, 350))
     img.paste((0, 0, 0), (220, 310, 280, 340))
     img.save(ws / "pages" / "001.png")
@@ -51,6 +60,7 @@ def _setup(ws, page_wh=(400, 600), det=None, ocr=None, para=None):
     )
 
 
+# Helper to construct detection stage output dictionary
 def _det(regions):
     return {
         "chapter_id": "t",
@@ -61,6 +71,7 @@ def _det(regions):
     }
 
 
+# Helper to construct test detection region dictionary
 def _region(rid, x, y, w, h):
     return {
         "region_id": rid,
@@ -76,11 +87,8 @@ def _region(rid, x, y, w, h):
     }
 
 
+# Verify text regions are erased and rendered while non-text areas are left untouched
 def test_render_text_gated_erase(tmp_path, monkeypatch):
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -116,9 +124,7 @@ def test_render_text_gated_erase(tmp_path, monkeypatch):
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
     out = Image.open(ws / "stage5_render" / "rendered" / "001.jpg").convert("RGB")
-    # Assert that the text inside the bubble was erased (became white)
     assert out.getpixel((75, 75)) == (255, 255, 255)
-    # Assert that the green background outside the bubble was untouched
     px = out.getpixel((30, 30))
     assert px[1] > 200 and px[0] < 20 and px[2] < 20
     rep = json.loads((ws / "stage5_render" / "render.json").read_text(encoding="utf-8"))
@@ -128,11 +134,8 @@ def test_render_text_gated_erase(tmp_path, monkeypatch):
     assert by_id["P001_R002"]["action"] == "left_original_no_text"
 
 
+# Verify overlapping duplicate bubble regions are suppressed during rendering
 def test_render_suppresses_duplicate_overlapping_bubble_regions(tmp_path, monkeypatch):
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -171,11 +174,8 @@ def test_render_suppresses_duplicate_overlapping_bubble_regions(tmp_path, monkey
     assert by_id["P001_R002"]["action"] == "overlapping_duplicate"
 
 
+# Verify text exceeding bubble geometry is rendered and flagged as overflow
 def test_render_overflow_flagged(tmp_path, monkeypatch):
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -201,11 +201,8 @@ def test_render_overflow_flagged(tmp_path, monkeypatch):
     assert r["rendered"] is True
 
 
+# Verify regions marked with render=False are skipped during inpainting and typesetting
 def test_render_skips_non_render_type(tmp_path, monkeypatch):
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -227,16 +224,13 @@ def test_render_skips_non_render_type(tmp_path, monkeypatch):
     _setup(ws, det=det, ocr=ocr, para=para)
     stage5_render.run_render(str(ws), config)
     out = Image.open(ws / "stage5_render" / "rendered" / "001.jpg").convert("RGB")
-    assert out.getpixel((75, 75)) == (0, 0, 0)  # untouched character block
+    assert out.getpixel((75, 75)) == (0, 0, 0)
     rep = json.loads((ws / "stage5_render" / "render.json").read_text(encoding="utf-8"))
     assert rep["results"][0]["action"] == "left_original_not_render_type"
 
 
+# Verify stage 5 completes rendering and advances manifest to QA
 def test_render_advances_manifest_and_outputs(tmp_path, monkeypatch):
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -261,11 +255,8 @@ def test_render_advances_manifest_and_outputs(tmp_path, monkeypatch):
     assert "render" in m["completed_stages"]
 
 
+# Verify regions lacking paraphrase text are left unrendered
 def test_render_missing_paraphrase_left(tmp_path, monkeypatch):
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -281,16 +272,12 @@ def test_render_missing_paraphrase_left(tmp_path, monkeypatch):
     assert r["action"] in ("missing_text", "left_original_no_text")
 
 
+# Verify bubbles touching page seams erase edge text properly
 def test_render_edge_touching_erase(tmp_path, monkeypatch):
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
     ws = tmp_path / "workspace"
-    # Bubble touching the top edge of page
     det = _det([_region("P001_R001", 50, 0, 100, 50)])
     ocr = {"results": [{"region_id": "P001_R001", "has_usable_text": True}]}
     para = {
@@ -303,12 +290,9 @@ def test_render_edge_touching_erase(tmp_path, monkeypatch):
             }
         ]
     }
-    # Setup page
     (ws / "pages").mkdir(parents=True, exist_ok=True)
     img = Image.new("RGB", (400, 600), (0, 255, 0))
-    # Draw bubble 1: white background at top
     img.paste((255, 255, 255), (50, 0, 150, 50))
-    # Draw character touching top edge y=0
     img.paste((0, 0, 0), (70, 0, 130, 20))
     img.save(ws / "pages" / "001.png")
 
@@ -346,18 +330,13 @@ def test_render_edge_touching_erase(tmp_path, monkeypatch):
 
     stage5_render.run_render(str(ws), config)
     out = Image.open(ws / "stage5_render" / "rendered" / "001.jpg").convert("RGB")
-    # Assert character touching top y=0 was erased (became white)
     assert out.getpixel((75, 10)) == (255, 255, 255)
-    # Assert green outside is untouched
     px = out.getpixel((30, 10))
     assert px[1] > 200 and px[0] < 20 and px[2] < 20
 
 
+# Verify text wrapping respects literal escaped newlines
 def test_wrap_text_literal_newlines(monkeypatch):
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     font = ImageFont.load_default()
     raw = "Name: Lin\\nAge: 18\\r\\nGender: Male"
     lines = stage5_render._wrap_text(raw, font, 200)
@@ -367,69 +346,45 @@ def test_wrap_text_literal_newlines(monkeypatch):
     assert lines[2] == "Gender: Male"
 
 
+# Verify text color auto-selection picks high-contrast foreground based on background luminance
 def test_text_color_for_bg():
-    from manhua_pipeline.stages import stage5_render
-
-    # Light backgrounds -> black text
     assert stage5_render._text_color_for_bg((255, 255, 255)) == (0, 0, 0)
     assert stage5_render._text_color_for_bg((200, 200, 200)) == (0, 0, 0)
-
-    # Dark backgrounds -> white text
     assert stage5_render._text_color_for_bg((0, 0, 0)) == (255, 255, 255)
     assert stage5_render._text_color_for_bg((20, 20, 20)) == (255, 255, 255)
 
 
+# Verify dominant fill helper detects pure white for white speech bubbles
 def test_dominant_fill_returns_pure_white_for_white_bubble():
-    from PIL import Image
-
-    from manhua_pipeline.stages.stage5_render import Box, _dominant_fill_color
-
     crop = Image.new("RGB", (200, 120), (255, 255, 255))
     assert _dominant_fill_color(crop, Box(40, 40, 60, 30), object()) == (255, 255, 255)
 
 
+# Verify dominant fill helper preserves colored bubble fills
 def test_dominant_fill_keeps_gold():
-    from PIL import Image
-
-    from manhua_pipeline.stages.stage5_render import Box, _dominant_fill_color
-
     crop = Image.new("RGB", (200, 120), (255, 200, 60))
     r, g, b = _dominant_fill_color(crop, Box(40, 40, 60, 30), object())
     assert r > 240 and 180 < g < 220 and b < 90
 
 
+# Verify layout expansion avoids colliding with neighboring sibling text boxes
 def test_expansion_does_not_overlap_sibling():
-    from manhua_pipeline.stages.stage5_render import (
-        Box,
-        grow_layout_box,
-        intersect_boxes,
-    )
-
     class Cfg:
         LAYOUT_EXPAND_ENABLED = True
         LAYOUT_MAX_GROWTH_FACTOR = 3.0
         LAYOUT_MIN_ANCHOR_OVERLAP = 0.5
         TEXT_LAYOUT_PADDING_PX = 8
 
-    text_box = Box(600, 600, 120, 60)  # this region
-    sibling = Box(600, 720, 120, 60)  # region just below
-    interior = Box(560, 560, 400, 400)  # generous shared interior
+    text_box = Box(600, 600, 120, 60)
+    sibling = Box(600, 720, 120, 60)
+    interior = Box(560, 560, 400, 400)
     grown = grow_layout_box(text_box, interior, (2000, 2000), Cfg(), siblings=[sibling])
-    assert intersect_boxes(grown, sibling) is None  # must not invade sibling
-    assert intersect_boxes(grown, text_box) is not None  # still covers anchor
+    assert intersect_boxes(grown, sibling) is None
+    assert intersect_boxes(grown, text_box) is not None
 
 
+# Verify multiple text boxes inside a shared bubble do not stack on top of each other
 def test_shared_parent_regions_do_not_stack(monkeypatch):
-    from PIL import Image, ImageDraw, ImageFont
-
-    import config
-    from manhua_pipeline.stages.stage5_render import (
-        Box,
-        _draw_region_plan,
-        _finalize_plan,
-        _plan_and_erase_region,
-    )
-
     monkeypatch.setattr(
         "manhua_pipeline.stages.stage5_render._load_font",
         lambda p, pt, cfg: ImageFont.load_default(),
@@ -466,15 +421,12 @@ def test_shared_parent_regions_do_not_stack(monkeypatch):
     )
 
     layout = Box(**res["layout_box"])
-    from manhua_pipeline.stages.stage5_render import intersect_boxes
-
     assert intersect_boxes(layout, siblings[0]) is None
     assert layout.x == 608
 
 
+# Verify lone text box expands into available parent bubble interior
 def test_single_region_bubble_still_expands():
-    from manhua_pipeline.stages.stage5_render import Box, grow_layout_box
-
     class Cfg:
         LAYOUT_EXPAND_ENABLED = True
         LAYOUT_MAX_GROWTH_FACTOR = 3.0
@@ -487,21 +439,16 @@ def test_single_region_bubble_still_expands():
     assert grown.w * grown.h > text_box.w * text_box.h
 
 
+# Helper to construct test detection region with parent bubble coordinates
 def _region_pb(rid, x, y, w, h, *, pb=None):
-    """Like _region() but with an optional parent_bubble tuple (px, py, pw, ph)."""
     r = _region(rid, x, y, w, h)
     if pb:
         r["parent_bubble"] = {"x": pb[0], "y": pb[1], "w": pb[2], "h": pb[3]}
     return r
 
 
+# Verify two-pass rendering prevents erasing adjacent rendered text in overlapping bubbles
 def test_two_overlapping_bubbles_neither_text_is_erased(tmp_path, monkeypatch):
-    """Stacked figure-8 pair: after two-pass render, BOTH bubbles keep full text."""
-    from PIL import ImageFont
-
-    import config
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -544,13 +491,8 @@ def test_two_overlapping_bubbles_neither_text_is_erased(tmp_path, monkeypatch):
     assert by_id["P001_R002"]["overflow"] is False
 
 
+# Verify all page erasures execute before any text drawing begins
 def test_erase_all_happens_before_any_draw(tmp_path, monkeypatch):
-    """Instrument: every erase call must precede every draw call on a page."""
-    from PIL import ImageFont
-
-    import config
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -604,19 +546,13 @@ def test_erase_all_happens_before_any_draw(tmp_path, monkeypatch):
     stage5_render.run_render(str(ws), config)
 
     assert len(events) >= 2
-    # All erases must precede all draws
     first_draw = next((i for i, e in enumerate(events) if e == "draw"), len(events))
     last_erase = max((i for i, e in enumerate(events) if e == "erase"), default=-1)
     assert last_erase < first_draw, f"Erase/draw ordering violated: {events}"
 
 
+# Verify single bubble renders correctly under two-pass execution
 def test_single_bubble_two_pass_unchanged(tmp_path, monkeypatch):
-    """A lone bubble renders correctly under two-pass (no regression)."""
-    from PIL import ImageFont
-
-    import config
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
@@ -642,18 +578,14 @@ def test_single_bubble_two_pass_unchanged(tmp_path, monkeypatch):
     assert r["overflow"] is False
 
 
+# Verify text layout clips at stitch seams while inpainting erases across boundaries
 def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
-    """Layout is clipped at the seam while source text crossing it is erased."""
-    from PIL import ImageFont
-
-    from manhua_pipeline.stages import stage5_render
-
     monkeypatch.setattr(
         stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
     )
 
     stitch_y = 300
-    page_h = stitch_y * 2  # 600
+    page_h = stitch_y * 2
 
     ws = tmp_path / "workspace"
     (ws / "pages").mkdir(parents=True, exist_ok=True)
@@ -682,7 +614,6 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
     }
     (ws / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    # R001: text crosses the seam while its parent bubble bleeds 80px past it.
     r001 = {
         "region_id": "P001_R001",
         "page_number": 1,
@@ -696,8 +627,6 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
         "confidence": 0.95,
         "render": True,
     }
-    # R002: second-half text whose parent bubble starts before the seam.
-    # Ownership must follow the text box, not the parent bubble's top edge.
     r002 = {
         "region_id": "P001_R002",
         "page_number": 1,
@@ -770,15 +699,10 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
     assert results["P001_R001"]["rendered"] is True
     assert results["P001_R002"]["rendered"] is True
 
-    # R001's text_box (layout input) must be clipped so text placement can't
-    # cross stitch_y. The bubble erase area is intentionally not clipped so
-    # original Chinese glyphs near the seam are fully wiped.
     r001_result = results["P001_R001"]
     if "text_box" in r001_result:
         text_bottom = r001_result["text_box"]["y"] + r001_result["text_box"]["h"]
-        assert text_bottom <= stitch_y, (
-            f"R001 text_box bottom ({text_bottom}) crossed stitch boundary ({stitch_y})"
-        )
+        assert text_bottom <= stitch_y
     erase_text_box = r001_result["erase_text_box"]
     assert erase_text_box["y"] + erase_text_box["h"] > stitch_y
     assert r001_result["erase_box"]["y"] + r001_result["erase_box"]["h"] >= 346

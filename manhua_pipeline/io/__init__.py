@@ -1,1 +1,1 @@
-"""IO helpers: workspace + schemas."""
+# Workspace, schema, and I/O helpers.

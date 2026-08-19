@@ -1,9 +1,4 @@
-"""Stage 4: Paraphrase.
-
-Rewrites literal translations into natural, casual US English optimized for comic speech bubbles.
-Uses pluggable backends (manual, mcp) and supports manual JSON handoff.
-Classifies register (rude, label, neutral) using a local heuristic.
-"""
+# Stage 4: Dialogue paraphrasing into natural spoken English with register heuristics.
 
 import json
 import re
@@ -28,20 +23,21 @@ _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
+# Check whether string contains any CJK characters
 def _contains_cjk(text: str) -> bool:
     return bool(_CJK_RE.search(text or ""))
 
 
+# Calculate fraction of non-whitespace characters that are CJK ideographs
 def _cjk_ratio(text: str) -> float:
-    """Fraction of non-space chars that are Han ideographs."""
     no_space = "".join(c for c in (text or "") if not c.isspace())
     if not no_space:
         return 0.0
     return len(_CJK_RE.findall(no_space)) / len(no_space)
 
 
+# Resolve appropriate reference string for length validation checks
 def _validation_input(region: dict) -> str:
-    """Return the text appropriate for paraphrase-length validation."""
     if region.get("translation_source") == "translation_recovery":
         return region.get("original_text", "")
     return region.get("literal_translation", "")
@@ -67,16 +63,13 @@ _PROMPT_INSTRUCTIONS = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Backend protocol
-# ---------------------------------------------------------------------------
-
-
+# Protocol defining interface for paraphrase backend implementations
 class ParaphraseBackend(Protocol):
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
-        """Return {region_id: final_english} mapping, or None if awaiting manual input."""
+        pass
 
 
+# Backend implementing file-based manual paraphrase handoff
 class ManualBackend:
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
         paths = be.BackendPaths(
@@ -89,6 +82,7 @@ class ManualBackend:
         )
 
 
+# Backend implementing MCP tool-based paraphrase handoff
 class McpBackend:
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
         paths = be.BackendPaths(
@@ -101,14 +95,8 @@ class McpBackend:
         )
 
 
+# Backend implementing inline LLM paraphrase batches with Ollama
 class OllamaBackend:
-    """Inline local paraphrase via Ollama, with retries, batch validation, and
-    malformed-output recovery. Returns {region_id: final_english}.
-
-    No CJK guard (English->English). Echoes of the literal line are allowed
-    (proper nouns / labels) but logged.
-    """
-
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
         s = be.OllamaSettings.from_config(config, prefix="OLLAMA_PARA")
         be.validate_ollama_settings(s, "OLLAMA_PARA")
@@ -172,6 +160,7 @@ class OllamaBackend:
             json.dump(merged, fh, ensure_ascii=False, indent=2)
         return merged
 
+    # Execute recursive batch paraphrasing with targeted missing-key retries
     def _paraphrase_batch(self, chunk, depth: int) -> dict:
         expected_ids = {r["region_id"] for r in chunk}
         literals = {r["region_id"]: _validation_input(r) for r in chunk}
@@ -222,6 +211,7 @@ class OllamaBackend:
         accepted.update(self._paraphrase_batch(still[mid:], depth + 1))
         return accepted
 
+    # Build user prompt JSON payload with strict instructions when required
     def _build_user_prompt(self, chunk, strict: bool) -> str:
         payload = json.dumps(
             [
@@ -267,16 +257,17 @@ class OllamaBackend:
             "REGIONS:\n" + payload + strict_note
         )
 
+    # Call Ollama API with system and user prompts
     def _call_ollama(self, user_prompt: str) -> str:
         return be.call_ollama(
             self._ollama_settings, self.system_prompt, user_prompt, logger, _STAGE_NAME
         )
 
+    # Validate returned batch mappings against expected IDs and string content
     @staticmethod
     def _validate_batch(
         parsed: dict, expected_ids: set, literals: dict
     ) -> tuple[dict, list, list]:
-        """Accept any non-empty string. No CJK guard (English->English). Echoes allowed."""
         accepted, unexpected = {}, []
         for k, v in parsed.items():
             if k not in expected_ids:
@@ -301,11 +292,13 @@ class OllamaBackend:
         missing = [i for i in expected_ids if i not in accepted]
         return accepted, missing, unexpected
 
+    # Parse and extract JSON object from response string
     @staticmethod
     def _parse_json(text: str) -> dict:
         return be.parse_json(text)
 
 
+# Instantiate configured paraphrase backend instance
 def _get_backend(config) -> ParaphraseBackend:
     name = getattr(config, "PARAPHRASE_BACKEND", "manual")
     if name == "manual":
@@ -319,15 +312,12 @@ def _get_backend(config) -> ParaphraseBackend:
     )
 
 
-# ---------------------------------------------------------------------------
-# Glossary helpers
-# ---------------------------------------------------------------------------
-
-
+# Extract locked terms from series glossary dictionary
 def _locked_terms(glossary: dict) -> list[dict]:
     return [t for t in glossary.get("terms", []) if t.get("locked")]
 
 
+# Check whether required glossary target terms are preserved in paraphrase
 def _enforce_glossary(
     literal_en: str, paraphrased_en: str, locked: list[dict]
 ) -> tuple[str, bool]:
@@ -342,34 +332,21 @@ def _enforce_glossary(
     return paraphrased_en, conflict
 
 
-# ---------------------------------------------------------------------------
-# Heuristic Register Classifier
-# ---------------------------------------------------------------------------
-
-
+# Heuristically classify emotional register (rude, label, or neutral)
 def _detect_register(text: str, rude_markers: list[str]) -> str:
-    """Classifies the tone/register of the final paraphrase string.
-
-    Tags 'rude' (profanity, double exclamation, or all-caps),
-    'label' (short text without ending punctuation, or contains dash/colon),
-    otherwise 'neutral'.
-    """
     lower_text = text.lower()
 
-    # 1. Rude / Crude heuristic check
     if any(marker in lower_text for marker in rude_markers):
         return "rude"
     if "!!" in text or text.count("!") >= 2:
         return "rude"
 
-    # All-caps words of length >= 2
     words = text.split()
     for w in words:
         w_clean = "".join(c for c in w if c.isalpha())
         if len(w_clean) >= 2 and w_clean.isupper():
             return "rude"
 
-    # 2. Label heuristic check
     clean_ends = not any(lower_text.endswith(p) for p in [".", "?", "!"])
     if len(text) <= 25 and (clean_ends or "—" in text or "-" in text or ":" in text):
         return "label"
@@ -377,11 +354,7 @@ def _detect_register(text: str, rude_markers: list[str]) -> str:
     return "neutral"
 
 
-# ---------------------------------------------------------------------------
-# Bundle building and response validation
-# ---------------------------------------------------------------------------
-
-
+# Construct JSON prompt bundle for paraphrase handoff
 def _build_bundle(usable: list[dict], locked: list[dict], config) -> dict:
     compact_glossary = [
         {"source_term": t["source_term"], "target_term": t["target_term"]}
@@ -395,9 +368,6 @@ def _build_bundle(usable: list[dict], locked: list[dict], config) -> dict:
             "literal_translation": r.get("literal_translation", ""),
         }
         if recovery:
-            # Stage 3 deliberately leaves literal_translation empty when its
-            # local translator fails. Keep the original CJK separate from the
-            # existing single-character passthrough route and label the task.
             item["translation_task"] = "translate_and_paraphrase"
             item["original_text"] = r.get("original_text", "")
         regions.append(item)
@@ -424,8 +394,8 @@ def _build_bundle(usable: list[dict], locked: list[dict], config) -> dict:
     }
 
 
+# Detect whether paraphrased string lost substantial detail compared to literal
 def _looks_truncated(literal: str, paraphrase: str, config=None) -> bool:
-    """Detect a likely summary that dropped content from a long bubble."""
     min_chars = int(
         getattr(config, "PARAPHRASE_MIN_TEXT_LENGTH_CHARS", 80)
         if config is not None
@@ -441,13 +411,13 @@ def _looks_truncated(literal: str, paraphrase: str, config=None) -> bool:
     return source_len >= min_chars and result_len < source_len * min_ratio
 
 
+# Validate raw LLM paraphrase dictionary against expected region IDs
 def _validate_response(
     raw,
     usable_ids: list[str],
     config=None,
     literals: dict[str, str] | None = None,
 ) -> tuple[dict, list[str]]:
-    """Validate raw response dict; return (clean_map, warnings)."""
     warnings = []
     if not isinstance(raw, dict):
         raise ValueError(
@@ -482,17 +452,13 @@ def _validate_response(
     for rid in usable_ids:
         if rid not in clean:
             warnings.append(
-                f"Missing paraphrase for {rid!r} — will fall back to literal."
+                f"Missing paraphrase for {rid!r} - will fall back to literal."
             )
 
     return clean, warnings
 
 
-# ---------------------------------------------------------------------------
-# Top-level orchestrator
-# ---------------------------------------------------------------------------
-
-
+# Split chapter regions into overridden, usable, and skipped sets
 def _partition_regions_paraphrase(
     all_results: list[dict], overrides: dict, config, log: bool = True
 ) -> tuple[list[dict], list[dict], list[dict]]:
@@ -550,13 +516,10 @@ def _partition_regions_paraphrase(
     return overridden_regions, usable, skipped
 
 
+# Execute Stage 4 paraphrase workflow over chapter translation results
 def run_paraphrase(
     workspace: str, config, *, allow_prompt: bool = False
 ) -> Path | None:
-    """Run the Paraphrase stage.
-
-    Returns the path to paraphrase.json on success, or None if awaiting manual input.
-    """
     t0 = time.monotonic()
     ws = Path(workspace)
     logger.info(
@@ -584,7 +547,6 @@ def run_paraphrase(
     with trans_path.open("r", encoding="utf-8") as fh:
         trans_data = json.load(fh)
 
-    # Load overrides
     from manhua_pipeline.io.overrides import load_overrides
 
     overrides = load_overrides(ws, config)
@@ -604,10 +566,9 @@ def run_paraphrase(
     glossary = load_series_glossary(ws.parent, config)
     locked = _locked_terms(glossary)
 
-    # Short-circuit: nothing to paraphrase
     if not usable:
         logger.info(
-            "[%d/%d %s] No paraphrasable regions needing LLM paraphrase — completing without handoff.",
+            "[%d/%d %s] No paraphrasable regions needing LLM paraphrase - completing without handoff.",
             _STAGE_INDEX,
             _TOTAL_STAGES,
             _STAGE_NAME,
@@ -635,7 +596,6 @@ def run_paraphrase(
     if raw_response is None:
         return None
 
-    # Validate
     usable_ids = [r["region_id"] for r in usable]
     try:
         literals = {r["region_id"]: _validation_input(r) for r in usable}
@@ -709,6 +669,7 @@ def run_paraphrase(
     )
 
 
+# Container holding parameters and intermediate state for paraphrase output writing
 @dataclass
 class ParaphraseWriteContext:
     ws: Path
@@ -725,6 +686,7 @@ class ParaphraseWriteContext:
     advance: bool = True
 
 
+# Write paraphrase.json results file and update manifest status
 def _write_output(ctx: ParaphraseWriteContext) -> Path:
     ws, config, manifest = ctx.ws, ctx.config, ctx.manifest
     trans_data, paraphrase_map = ctx.trans_data, ctx.paraphrase_map
@@ -744,7 +706,6 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
     total_chars = 0
     rude_markers = getattr(config, "PARAPHRASE_RUDE_MARKERS", [])
 
-    # Overridden regions
     for region in overridden_regions:
         rid = region["region_id"]
         override_text = overrides[rid]
@@ -772,7 +733,6 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
         paraphrased_count += 1
         total_chars += len(override_text)
 
-    # Usable regions
     for region in usable:
         rid = region["region_id"]
         final_text = paraphrase_map.get(rid, "")
@@ -803,7 +763,6 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
             paraphrased_count += 1
         total_chars += len(final_text)
 
-        # Re-enforce glossary on output text to catch compliance status
         final_text, conflict = _enforce_glossary(
             region.get("literal_translation") or "", final_text, locked
         )
@@ -825,7 +784,6 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
             }
         )
 
-    # Skipped regions (pass through)
     for region in skipped:
         results.append(
             {
@@ -903,8 +861,8 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
     return out_path
 
 
+# Construct paraphrase prompt bundle for chapter directory
 def build_paraphrase_bundle(chapter_dir: str | Path, config) -> dict:
-    """Build paraphrase prompt bundle for the chapter."""
     ws = Path(chapter_dir)
     manifest = load_manifest(ws, config)
     if not manifest:
@@ -932,10 +890,10 @@ def build_paraphrase_bundle(chapter_dir: str | Path, config) -> dict:
     return _build_bundle(usable, locked, config)
 
 
+# Validate and write paraphrase mapping response file
 def write_paraphrase_response(
     chapter_dir: str | Path, mapping: dict, config=None
 ) -> dict:
-    """Validate and write the paraphrase mapping to paraphrase_response.json."""
     if config is None:
         import config
     ws = Path(chapter_dir)

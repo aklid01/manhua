@@ -1,8 +1,11 @@
+# Bounding box geometry, layout expansion, and intersection helpers.
+
 from PIL import Image, ImageFilter
 
 from manhua_pipeline.stages.stage5_render.types import Box
 
 
+# Create Box instance from dictionary
 def box_from_dict(value: dict) -> Box:
     return Box(
         x=int(value["x"]),
@@ -12,11 +15,13 @@ def box_from_dict(value: dict) -> Box:
     )
 
 
+# Create Box instance from coordinate sequence
 def box_from_coords(coords: list | tuple) -> Box:
     x, y, w, h = coords
     return Box(int(x), int(y), max(0, int(w)), max(0, int(h)))
 
 
+# Clamp Box boundaries to image dimensions
 def clip_box(box: Box, image_size: tuple[int, int]) -> Box:
     image_w, image_h = image_size
     x0 = max(0, min(image_w, box.x))
@@ -26,6 +31,7 @@ def clip_box(box: Box, image_size: tuple[int, int]) -> Box:
     return Box(x0, y0, x1 - x0, y1 - y0)
 
 
+# Expand Box by padding and clip to image bounds
 def expand_box(box: Box, padding: int, image_size: tuple[int, int]) -> Box:
     return clip_box(
         Box(
@@ -38,6 +44,7 @@ def expand_box(box: Box, padding: int, image_size: tuple[int, int]) -> Box:
     )
 
 
+# Check if inner box is fully contained within outer box
 def box_inside(inner: Box, outer: Box, *, margin: int = 0) -> bool:
     return (
         inner.x >= outer.x + margin
@@ -47,6 +54,7 @@ def box_inside(inner: Box, outer: Box, *, margin: int = 0) -> bool:
     )
 
 
+# Compute intersection Box of two bounding boxes
 def intersect_boxes(a: Box, b: Box) -> Box | None:
     x0 = max(a.x, b.x)
     y0 = max(a.y, b.y)
@@ -57,6 +65,7 @@ def intersect_boxes(a: Box, b: Box) -> Box | None:
     return Box(x0, y0, x1 - x0, y1 - y0)
 
 
+# Compute interior eroded bounding box from bubble alpha mask
 def bubble_interior_box(
     bubble_mask: Image.Image,
     bubble_box: Box,
@@ -80,6 +89,7 @@ def bubble_interior_box(
     )
 
 
+# Adjust candidate layout box to prevent overlap with sibling boxes
 def _shrink_box_away_from_siblings(
     candidate: Box,
     anchor: Box,
@@ -124,6 +134,7 @@ def _shrink_box_away_from_siblings(
     return Box(x0, y0, x1 - x0, y1 - y0)
 
 
+# Expand text layout box into available bubble interior space
 def grow_layout_box(
     text_box: Box,
     interior_box: Box | None,
@@ -165,6 +176,7 @@ def grow_layout_box(
     return clip_box(candidate, image_size)
 
 
+# Compute text, bubble, erase, and layout bounding boxes for region
 def select_render_geometry(
     region: dict,
     image_size: tuple[int, int],

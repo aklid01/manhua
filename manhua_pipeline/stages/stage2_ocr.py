@@ -1,14 +1,11 @@
-"""Stage 2: OCR.
-
-PaddleOCR over detected regions. v0 = horizontal text only.
-Records original Chinese + confidence; flags needs_correction below threshold.
-"""
+# Stage 2: PaddleOCR text extraction over detected dialogue and narration regions.
 
 import atexit
 import gc
 import json
 import time
 from datetime import datetime, timezone
+from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
@@ -23,13 +20,12 @@ _STAGE_INDEX = 2
 _TOTAL_STAGES = 7
 _STAGE_NAME = "OCR"
 
-
 _OCR_ENGINE = None
 _ACTIVE_OCR_ENGINE = None
 
 
+# Clean shutdown and resource release for PaddleOCR engine
 def _close_ocr():
-    """Best-effort shutdown of the PaddleOCR/PaddleX engine and any worker it spawned."""
     global _OCR_ENGINE, _ACTIVE_OCR_ENGINE
     if _OCR_ENGINE is None:
         return
@@ -62,8 +58,8 @@ def _close_ocr():
 atexit.register(_close_ocr)
 
 
+# Lazy-load PaddleOCR engine with device fallback handling
 def _get_ocr(config):
-    """Lazy-load and initialize PaddleOCR engine once (per process) with fallback."""
     global _OCR_ENGINE, _ACTIVE_OCR_ENGINE
     if _OCR_ENGINE is not None:
         return _OCR_ENGINE
@@ -149,8 +145,8 @@ def _get_ocr(config):
     return _OCR_ENGINE
 
 
+# Generate escalating image preprocessing variants for OCR retry passes
 def _preprocess_variant(crop_im: "Image.Image", attempt: int) -> "Image.Image":
-    """Escalating-preprocessing variant. attempt 0 = current (2x LANCZOS)."""
     if attempt <= 0:
         return crop_im.resize(
             (crop_im.width * 2, crop_im.height * 2), Image.Resampling.LANCZOS
@@ -166,9 +162,8 @@ def _preprocess_variant(crop_im: "Image.Image", attempt: int) -> "Image.Image":
     return g.point(lambda p: 255 if p > 140 else 0)
 
 
+# Read image crop with OCR and retry with higher preprocessing on low confidence
 def _read_best(ocr_engine, crop_im, config) -> tuple:
-    """Base read; if confidence is in the retry window, escalate preprocessing and
-    keep the highest-confidence attempt."""
     best = _read_crop(ocr_engine, _preprocess_variant(crop_im, 0), config)
     best_mean = best[1]
 
@@ -195,12 +190,8 @@ def _read_best(ocr_engine, crop_im, config) -> tuple:
     return best
 
 
+# Run OCR on image crop and filter watermark lines
 def _read_crop(ocr_engine, crop_image, config) -> tuple:
-    """Run PaddleOCR on a PIL image crop and return normalized text, confidence, and watermark flag.
-
-    Returns:
-        tuple: (original_text string, mean_confidence float, min_confidence float, watermark_filtered bool)
-    """
     crop_bgr = np.ascontiguousarray(np.array(crop_image.convert("RGB"))[:, :, ::-1])
     results = ocr_engine.predict(crop_bgr)
     res = next(iter(results), None)
@@ -248,6 +239,7 @@ def _read_crop(ocr_engine, crop_image, config) -> tuple:
     )
 
 
+# Check whether text contains CJK characters
 def _has_cjk(text: str) -> bool:
     return any(
         ("\u3400" <= ch <= "\u9fff") or ("\uf900" <= ch <= "\ufaff")
@@ -255,23 +247,21 @@ def _has_cjk(text: str) -> bool:
     )
 
 
+# Check if text contains only punctuation or whitespace
 def _is_punct_or_empty(text: str) -> bool:
-    """True if OCR output has no real words (only punctuation/symbols, or empty)."""
     core = "".join(ch for ch in (text or "") if not ch.isspace())
     if not core:
         return True
     return not any(ch.isalnum() or _has_cjk(ch) for ch in core)
 
 
+# Return region types eligible for manual OCR review
 def _review_types(config) -> tuple:
     return tuple(getattr(config, "OCR_REVIEW_TYPES", ("speech_bubble", "narration")))
 
 
+# Execute preprocessing escalation unconditionally on suspicious crops
 def _read_forced_ladder(ocr_engine, crop_im, config):
-    """Run the escalating preprocessing variants UNCONDITIONALLY (the normal
-    _read_best ladder is confidence-gated and never fires on a high-confidence
-    punct-only read). Return the attempt with the most real text.
-    """
     best = None
     best_score = -1.0
     for attempt in range(1, getattr(config, "OCR_RETRY_MAX", 2) + 1):
@@ -283,10 +273,8 @@ def _read_forced_ladder(ocr_engine, crop_im, config):
     return best
 
 
+# Save cropped PNG of flagged bubble for user review
 def _dump_review_crop(ws, ocr_dir, config, region_det, pages_map):
-    """Save a cropped PNG of a flagged bubble so the user can read it quickly."""
-    from PIL import Image as _Image
-
     page = pages_map.get(region_det.get("page_number"))
     if not page or not page.get("filename"):
         return None
@@ -300,7 +288,7 @@ def _dump_review_crop(ws, ocr_dir, config, region_det, pages_map):
     crops_dir.mkdir(parents=True, exist_ok=True)
     out = crops_dir / f"{region_det['region_id']}.png"
     try:
-        with _Image.open(img_path) as im:
+        with Image.open(img_path) as im:
             W, H = im.size
             x, y, w, h = box["x"], box["y"], box["w"], box["h"]
             im.crop((max(0, x), max(0, y), min(W, x + w), min(H, y + h))).save(
@@ -311,8 +299,8 @@ def _dump_review_crop(ws, ocr_dir, config, region_det, pages_map):
     return f"{config.STAGE_FOLDERS['ocr']}/review_crops/{out.name}"
 
 
+# Write ocr_review.json containing flagged low-confidence regions
 def _write_ocr_review(ws, ocr_dir, config, results, pages_map, region_by_id, prior):
-    """Write ocr_review.json for flagged regions (+ crop dumps). Non-blocking."""
     if not getattr(config, "OCR_REVIEW_ENABLED", True):
         return 0
     flagged = [r for r in results if r.get("ocr_review")]
@@ -362,19 +350,15 @@ def _write_ocr_review(ws, ocr_dir, config, results, pages_map, region_by_id, pri
     return len(flagged)
 
 
+# Execute OCR extraction and calculate geometry flags on single region crop
 def _ocr_region(
     region: dict, page: dict, page_im: "Image.Image", ocr_engine, config
 ) -> dict:
-    """Run OCR on a single region and return the mapped result dictionary.
-
-    ``page_im`` must already be open; the caller is responsible for the context manager.
-    """
     page_num = region["page_number"]
     W, H = page_im.size
     ocr_review_enabled = getattr(config, "OCR_REVIEW_ENABLED", True)
     review_types = _review_types(config)
 
-    # Clamp bbox coordinates
     x, y, w, h = (
         region["read_region"]["x"],
         region["read_region"]["y"],
@@ -400,9 +384,6 @@ def _ocr_region(
         original_text, mean_conf, min_conf, watermark_filtered = _read_best(
             ocr_engine, crop_im, config
         )
-        # Suspicious dialogue bubble (punct-only/empty) -> force the
-        # preprocessing ladder before giving up (normal retry is
-        # confidence-gated and will not fire here).
         if (
             ocr_review_enabled
             and region.get("type") in review_types
@@ -418,7 +399,6 @@ def _ocr_region(
             else:
                 status = "no_prediction" if mean_conf == 0.0 else "no_text"
 
-    # Edge touching computation
     eps = config.EDGE_TOUCH_EPS
     touches_top = y <= eps
     touches_bottom = y + h >= H - eps
@@ -440,9 +420,6 @@ def _ocr_region(
         edge_touching and not has_usable_text
     )
 
-    # Conservative OCR-review flag: a real dialogue bubble that came back with
-    # no actual words (punct-only or empty), not a watermark, not a split-edge
-    # region. Very likely a PaddleOCR dropped-character failure.
     ocr_review = (
         ocr_review_enabled
         and region.get("type") in review_types
@@ -456,7 +433,7 @@ def _ocr_region(
 
     notes = []
     if edge_touching and not has_usable_text:
-        notes.append("possible split bubble; low/no text — render should not erase")
+        notes.append("possible split bubble; low/no text - render should not erase")
     if watermark_filtered and not has_usable_text:
         notes.append("watermark-only region; not rendered")
 
@@ -483,18 +460,13 @@ def _ocr_region(
     }
 
 
+# Process single region OCR with error isolation and logging
 def _process_single_region_ocr(
     region: dict, page: dict, page_im: "Image.Image", ocr_engine, config
 ) -> tuple:
-    """Run OCR for a single region, log progress details, handle exceptions gracefully.
-
-    Returns:
-        tuple: (result_dict, is_warning_bool)
-    """
     page_num = region["page_number"]
     try:
         res = _ocr_region(region, page, page_im, ocr_engine, config)
-        # Log details per read region
         if res["needs_correction"] and not (
             res["edge_touching"] and not res["has_usable_text"]
         ):
@@ -509,7 +481,7 @@ def _process_single_region_ocr(
             )
         elif res["edge_touching"] and not res["has_usable_text"]:
             logger.info(
-                "[%d/%d %s] Page %03d %s -> edge_touching(%s), no usable text — possible split [WARNING]",
+                "[%d/%d %s] Page %03d %s -> edge_touching(%s), no usable text - possible split [WARNING]",
                 _STAGE_INDEX,
                 _TOTAL_STAGES,
                 _STAGE_NAME,
@@ -534,12 +506,11 @@ def _process_single_region_ocr(
         return res, False
     except Exception as exc:
         logger.exception(
-            "[%s] Region %s — failed OCR",
+            "[%s] Region %s - failed OCR",
             _STAGE_NAME,
             region["region_id"],
         )
         status = "schema_error" if isinstance(exc, TypeError) else "inference_error"
-        # Error isolation entry
         fallback = {
             "region_id": region["region_id"],
             "page_number": page_num,
@@ -562,8 +533,8 @@ def _process_single_region_ocr(
         return fallback, True
 
 
+# Execute full chapter OCR stage across all detected regions
 def run_ocr(workspace: str, config) -> Path:
-    """Run OCR over all detected regions in the workspace."""
     t0 = time.monotonic()
     ws = Path(workspace)
     logger.info(
@@ -594,7 +565,6 @@ def run_ocr(workspace: str, config) -> Path:
     ocr_dir = ws / config.STAGE_FOLDERS["ocr"]
     ocr_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load any manual OCR corrections from a prior review pass (resumable).
     review_path = ocr_dir / "ocr_review.json"
     prior_review = {}
     ocr_corrections = {}
@@ -633,7 +603,6 @@ def run_ocr(workspace: str, config) -> Path:
     region_by_id = {r["region_id"]: r for r in detection.get("regions", [])}
     skip_free_text = getattr(config, "RTDETR_SKIP_TEXT_FREE", False)
 
-    # Group regions by page so each page image is opened exactly once.
     regions_by_page: dict[int, list] = {}
     for region in detection.get("regions", []):
         regions_by_page.setdefault(region["page_number"], []).append(region)
@@ -681,9 +650,6 @@ def run_ocr(workspace: str, config) -> Path:
                 if res["edge_touching"]:
                     edge_touching_count += 1
 
-    # Output OCR JSON
-    from importlib.metadata import version
-
     try:
         paddleocr_version = version("paddleocr")
     except Exception:
@@ -701,7 +667,6 @@ def run_ocr(workspace: str, config) -> Path:
         "paddleocr_package_version": paddleocr_version,
         "results": results,
     }
-    # Check if all regions failed (safety net)
     if results:
         if warnings == len(results):
             raise RuntimeError(
@@ -722,7 +687,6 @@ def run_ocr(workspace: str, config) -> Path:
     with ocr_json_path.open("w", encoding="utf-8") as fh:
         json.dump(output_json, fh, ensure_ascii=False, indent=2)
 
-    # Update Manifest
     completed = manifest.get("completed_stages", [])
     if "ocr" not in completed:
         completed.append("ocr")

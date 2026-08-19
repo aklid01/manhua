@@ -1,14 +1,14 @@
-"""Boundary C tests: All-stage logging revamp, lifecycle events, domain events, JSONL event persistence.
-
-All tests are offline and operate on temporary workspaces.
-"""
+# Unit tests for stage lifecycle events, QA issue reporting, and JSONL persistence.
 
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 import config
+import pipeline
 from manhua_pipeline.events import (
     CHAPTER_COMPLETED,
     CHAPTER_STARTED,
@@ -16,17 +16,16 @@ from manhua_pipeline.events import (
     RENDER_REGION_COMPLETED,
     STAGE_COMPLETED,
     STAGE_STARTED,
+    PipelineEvent,
 )
 from manhua_pipeline.io.event_emitter import get_event_emitter
 from manhua_pipeline.stages.stage0_import import run_import
+from manhua_pipeline.stages.stage5_render import run_render
 from manhua_pipeline.stages.stage6_qa import run_qa
 from manhua_pipeline.stages.stage7_package import run_package
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-
+# Helper to set up mock chapter workspace with manifest and logs directory
 def _setup_stage_ws(tmp_path, stage_name="import"):
     ws = tmp_path / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
@@ -53,6 +52,7 @@ def _setup_stage_ws(tmp_path, stage_name="import"):
     return ws
 
 
+# Helper to read and deserialize JSONL events from workspace logs
 def _read_events(ws: Path) -> list[dict]:
     event_file = (
         ws / "stage_folders_logs"
@@ -60,7 +60,6 @@ def _read_events(ws: Path) -> list[dict]:
         else ws / "logs" / "events.jsonl"
     )
     if not event_file.exists():
-        # Fall back to checking logs folder
         event_file = ws / "logs" / "events.jsonl"
     if not event_file.exists():
         return []
@@ -68,17 +67,10 @@ def _read_events(ws: Path) -> list[dict]:
     return [json.loads(line) for line in lines if line.strip()]
 
 
-# ---------------------------------------------------------------------------
-# Stage Lifecycle Events Tests
-# ---------------------------------------------------------------------------
-
-
+# Verify Stage 0 import emits STAGE_STARTED and STAGE_COMPLETED events
 def test_stage0_import_emits_lifecycle_events(tmp_path):
-    # Create dummy images folder
     src_dir = tmp_path / "raw_pages"
     src_dir.mkdir()
-    from PIL import Image
-
     im = Image.new("RGB", (100, 100), (255, 255, 255))
     im.save(src_dir / "001.jpg")
 
@@ -98,11 +90,10 @@ def test_stage0_import_emits_lifecycle_events(tmp_path):
     assert complete_event["metadata"]["total_pages"] == 1
 
 
+# Verify Stage 5 render emits region completion and stage lifecycle events
 def test_stage5_render_emits_region_and_lifecycle_events(tmp_path):
     ws = _setup_stage_ws(tmp_path, "render")
     (ws / "pages").mkdir(parents=True, exist_ok=True)
-    from PIL import Image
-
     im = Image.new("RGB", (100, 100), (255, 255, 255))
     im.save(ws / "pages" / "001.png")
 
@@ -158,8 +149,6 @@ def test_stage5_render_emits_region_and_lifecycle_events(tmp_path):
         json.dumps(para), encoding="utf-8"
     )
 
-    from manhua_pipeline.stages.stage5_render import run_render
-
     run_render(str(ws), config)
 
     events = _read_events(ws)
@@ -172,6 +161,7 @@ def test_stage5_render_emits_region_and_lifecycle_events(tmp_path):
     assert region_ev["region_id"] == "P001_R001"
 
 
+# Verify Stage 6 QA emits issue detection and stage lifecycle events
 def test_stage6_qa_emits_issue_and_lifecycle_events(tmp_path):
     ws = _setup_stage_ws(tmp_path, "qa")
     ocr = {
@@ -242,12 +232,11 @@ def test_stage6_qa_emits_issue_and_lifecycle_events(tmp_path):
     assert qa_ev["reason"] in ("low_ocr_confidence", "missing_paraphrase")
 
 
+# Verify Stage 7 packaging emits stage lifecycle events
 def test_stage7_package_emits_lifecycle_events(tmp_path):
     ws = _setup_stage_ws(tmp_path, "package")
     (ws / "stage5_render").mkdir(parents=True, exist_ok=True)
     (ws / "stage5_render" / "rendered").mkdir(parents=True, exist_ok=True)
-    from PIL import Image
-
     im = Image.new("RGB", (10, 10), (0, 0, 0))
     im.save(ws / "stage5_render" / "rendered" / "001.png")
 
@@ -259,14 +248,10 @@ def test_stage7_package_emits_lifecycle_events(tmp_path):
     assert STAGE_COMPLETED in event_names
 
 
+# Verify batch runner emits CHAPTER_STARTED and CHAPTER_COMPLETED lifecycle events
 def test_batch_emits_chapter_lifecycle_events(tmp_path):
-    # Setup batch input folder with one dummy chapter zip
     in_dir = tmp_path / "inputs"
     in_dir.mkdir()
-
-    import zipfile
-
-    from PIL import Image
 
     img_path = tmp_path / "001.jpg"
     Image.new("RGB", (10, 10)).save(img_path)
@@ -277,11 +262,6 @@ def test_batch_emits_chapter_lifecycle_events(tmp_path):
 
     series_dir = tmp_path / "series"
     series_dir.mkdir()
-
-    # Run batch import only or mock run_all
-    # Patch _run_all_from to quickly complete chapter
-    import pipeline
-    from pipeline import run_batch
 
     def mock_run_all(*args, **kwargs):
         ws = Path(args[0])
@@ -305,7 +285,7 @@ def test_batch_emits_chapter_lifecycle_events(tmp_path):
     monkeypatch.setattr(pipeline, "_run_all_from", mock_run_all)
 
     try:
-        run_batch(str(in_dir), series_dir, config)
+        pipeline.run_batch(str(in_dir), series_dir, config)
     finally:
         monkeypatch.undo()
 
@@ -316,10 +296,10 @@ def test_batch_emits_chapter_lifecycle_events(tmp_path):
     assert CHAPTER_COMPLETED in event_names
 
 
+# Verify PipelineEvent JSONL persistence schema completeness
 def test_jsonl_event_sink_valid_schema(tmp_path):
     ws = _setup_stage_ws(tmp_path)
     emitter = get_event_emitter(ws, config)
-    from manhua_pipeline.events import PipelineEvent
 
     ev = PipelineEvent(
         event="CUSTOM_TEST_EVENT",

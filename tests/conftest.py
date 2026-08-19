@@ -1,12 +1,17 @@
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
-# Mock modules for offline testing
+import pytest
+
+# Mock heavy ML / framework dependencies for offline test runs
 sys.modules["ultralytics"] = MagicMock()
 sys.modules["paddleocr"] = MagicMock()
 
 
 class MockFastMCP:
+    # Minimal FastMCP decorator mock for testing MCP endpoints
+
     def __init__(self, *args, **kwargs):
         pass
 
@@ -24,18 +29,13 @@ mock_fastmcp = MagicMock()
 mock_fastmcp.FastMCP = MockFastMCP
 sys.modules["fastmcp"] = mock_fastmcp
 
-from pathlib import Path
 
-import pytest
-
-
+# Create a temporary workspace directory mimicking the pipeline staging structure
 @pytest.fixture
 def temp_workspace(tmp_path) -> Path:
-    """Fixture that creates a temporary workspace directory mimicking the structure."""
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()
 
-    # Create required staging folders if needed
     for stage_folder in [
         "pages",
         "stage1_detection",

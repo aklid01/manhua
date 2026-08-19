@@ -1,10 +1,7 @@
-"""Regression tests for Stage 5 Render original CJK text survival fix.
-
-Covering geometry roles, deterministic erasure, layout fitting, event metadata,
-and run_id propagation as defined in stage5_render_original_text_survival_fix.md.
-"""
+# Regression tests for Stage 5 inpainting, bubble mask erasure, and layout geometry fixes.
 
 import json
+import math
 
 from PIL import Image, ImageDraw
 
@@ -12,14 +9,26 @@ import config
 from manhua_pipeline.events import RENDER_REGION_COMPLETED
 from manhua_pipeline.stages.stage5_render import (
     Box,
+    _dominant_fill_color,
+    _get_bubble_mask,
+    _get_radiating_thought_mask,
+    _solid_rect_mask,
+    _text_color_for_bg,
     box_inside,
     erase_original_text,
     fit_and_place_text,
+    inpainting,
+    normalize_escaped_newlines,
+    planner,
     run_render,
     select_render_geometry,
 )
+from manhua_pipeline.stages.stage5_render.typography import (
+    _clamp_placements_to_mask,
+)
 
 
+# Verify text bounding box is used to determine layout boundaries
 def test_p028_r001_uses_text_bbox_for_layout():
     region = {
         "region_id": "P028_R001",
@@ -43,6 +52,7 @@ def test_p028_r001_uses_text_bbox_for_layout():
     assert layout_box.y2 <= text_box.y2
 
 
+# Verify erase box expands to enclose text bounding box within bubble bounds
 def test_p028_r001_erase_box_contains_text_box():
     region = {
         "region_id": "P028_R001",
@@ -65,6 +75,7 @@ def test_p028_r001_erase_box_contains_text_box():
     assert box_inside(erase_box, bubble_box, margin=0)
 
 
+# Verify dark source glyphs inside erase box are cleanly replaced with fill color
 def test_safe_rectangle_erases_dark_source_glyphs():
     image = Image.new("RGB", (500, 300), "white")
     draw = ImageDraw.Draw(image)
@@ -73,7 +84,6 @@ def test_safe_rectangle_erases_dark_source_glyphs():
     text_box = Box(170, 130, 160, 40)
     erase_box = Box(158, 118, 184, 64)
 
-    # Synthetic dark glyph strokes
     draw.rectangle((180, 135, 195, 165), fill="black")
     draw.rectangle((220, 135, 235, 165), fill="black")
     draw.rectangle((260, 135, 275, 165), fill="black")
@@ -94,9 +104,8 @@ def test_safe_rectangle_erases_dark_source_glyphs():
     assert all(pixel == (255, 255, 255) for pixel in crop.getdata())
 
 
+# Verify mask holes do not leave dark source glyphs unerased
 def test_white_mask_holes_do_not_preserve_source_text():
-    from manhua_pipeline.stages.stage5_render import _get_bubble_mask
-
     image = Image.new("RGB", (300, 200), (50, 50, 50))
     draw = ImageDraw.Draw(image)
     draw.rectangle((60, 40, 240, 140), fill=(255, 255, 255))
@@ -138,6 +147,7 @@ def test_white_mask_holes_do_not_preserve_source_text():
     assert image.getpixel((140, 100)) == (255, 255, 255)
 
 
+# Verify fitted text line placements remain strictly within layout box bounds
 def test_placement_stays_inside_layout_box():
     dummy_img = Image.new("RGB", (1000, 1000), "white")
     draw = ImageDraw.Draw(dummy_img)
@@ -159,6 +169,7 @@ def test_placement_stays_inside_layout_box():
         assert placement["y"] + placement["h"] <= 882 + 83
 
 
+# Verify render report records erase strategy, text box, bubble box, and layout box
 def test_render_json_records_erase_and_layout_geometry(tmp_path):
     ws = tmp_path / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
@@ -246,6 +257,7 @@ def test_render_json_records_erase_and_layout_geometry(tmp_path):
     assert res["layout_box"] is not None
 
 
+# Verify render stage events include propagating run_id
 def test_render_events_receive_entrypoint_run_id(tmp_path):
     ws = tmp_path / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
@@ -332,6 +344,7 @@ def test_render_events_receive_entrypoint_run_id(tmp_path):
     assert region_ev["metadata"]["text_box"] == {"x": 100, "y": 100, "w": 200, "h": 50}
 
 
+# Verify text erasure is clipped cleanly to rounded bubble boundary
 def test_erase_is_clipped_to_round_bubble():
     page = Image.new("RGB", (400, 300), (180, 180, 180))
     draw = ImageDraw.Draw(page)
@@ -367,6 +380,7 @@ def test_erase_is_clipped_to_round_bubble():
     assert result["erase_strategy"] == "text_mask_clipped_to_bubble"
 
 
+# Verify clipped mask prevents rectangular over-erasure outside circular bubbles
 def test_clipped_mask_removes_rectangular_corners():
     page = Image.new("RGB", (200, 200), (100, 100, 100))
     draw = ImageDraw.Draw(page)
@@ -393,6 +407,7 @@ def test_clipped_mask_removes_rectangular_corners():
     assert page.getpixel((22, 22)) == (100, 100, 100)
 
 
+# Verify low mask overlap does not fall back to unclipped rectangle over-erasure
 def test_low_overlap_never_falls_back_to_unclipped_rectangle():
     page = Image.new("RGB", (300, 300), (50, 50, 50))
     draw = ImageDraw.Draw(page)
@@ -420,11 +435,8 @@ def test_low_overlap_never_falls_back_to_unclipped_rectangle():
     assert page.getpixel((150, 150)) == (50, 50, 50)
 
 
+# Verify connected component nearest to text box is selected as bubble mask
 def test_component_near_text_wins_over_larger_background_component():
-    from PIL import Image
-
-    from manhua_pipeline.stages.stage5_render import _get_bubble_mask
-
     img = Image.new("RGB", (200, 200), (50, 50, 50))
     draw = ImageDraw.Draw(img)
     draw.rectangle((0, 0, 80, 120), fill=(255, 255, 255))
@@ -439,16 +451,8 @@ def test_component_near_text_wins_over_larger_background_component():
     assert mask.getpixel((40, 60)) == 0
 
 
+# Verify colored/gold speech bubbles erase source text using dominant background color
 def test_gold_panel_source_text_is_erased():
-    from PIL import Image, ImageDraw
-
-    from manhua_pipeline.stages.stage5_render import (
-        Box,
-        _dominant_fill_color,
-        _get_bubble_mask,
-        erase_original_text,
-    )
-
     class Cfg:
         BUBBLE_FILL_MODE = "dominant"
         BUBBLE_FILL_TOLERANCE = 42
@@ -459,9 +463,9 @@ def test_gold_panel_source_text_is_erased():
 
     cfg = Cfg()
 
-    page = Image.new("RGB", (400, 300), (255, 200, 60))  # gold panel
+    page = Image.new("RGB", (400, 300), (255, 200, 60))
     draw = ImageDraw.Draw(page)
-    draw.rectangle((120, 120, 300, 170), fill=(20, 20, 20))  # dark source glyphs
+    draw.rectangle((120, 120, 300, 170), fill=(20, 20, 20))
 
     bubble_box = Box(50, 50, 300, 200)
     text_box = Box(110, 110, 200, 70)
@@ -496,21 +500,12 @@ def test_gold_panel_source_text_is_erased():
         config=cfg,
         fill_color=fill,
     )
-    # Glyph area now shows the gold fill, not dark text.
     px = page.getpixel((200, 140))
-    assert px[2] < 90 and px[0] > 200  # gold, not (20,20,20)
+    assert px[2] < 90 and px[0] > 200
 
 
+# Verify standard white speech bubbles erase cleanly under dominant color mode
 def test_white_bubble_still_erases_under_dominant_mode():
-    from PIL import Image, ImageDraw
-
-    from manhua_pipeline.stages.stage5_render import (
-        Box,
-        _dominant_fill_color,
-        _get_bubble_mask,
-        erase_original_text,
-    )
-
     class Cfg:
         BUBBLE_FILL_MODE = "dominant"
         BUBBLE_FILL_TOLERANCE = 42
@@ -521,9 +516,9 @@ def test_white_bubble_still_erases_under_dominant_mode():
 
     cfg = Cfg()
 
-    page = Image.new("RGB", (400, 300), (255, 255, 255))  # white panel
+    page = Image.new("RGB", (400, 300), (255, 255, 255))
     draw = ImageDraw.Draw(page)
-    draw.rectangle((120, 120, 300, 170), fill=(20, 20, 20))  # dark source glyphs
+    draw.rectangle((120, 120, 300, 170), fill=(20, 20, 20))
 
     bubble_box = Box(50, 50, 300, 200)
     text_box = Box(110, 110, 200, 70)
@@ -558,41 +553,29 @@ def test_white_bubble_still_erases_under_dominant_mode():
         config=cfg,
         fill_color=fill,
     )
-    # Glyph area now shows the white fill, not dark text.
     px = page.getpixel((200, 140))
     assert px[0] > 240 and px[1] > 240 and px[2] > 240
 
 
+# Verify low mask coverage falls back to solid rectangular erase mask
 def test_low_coverage_falls_back_to_solid_rect():
-    from PIL import Image, ImageDraw
-
-    from manhua_pipeline.stages.stage5_render import (
-        Box,
-        _dominant_fill_color,
-        _get_bubble_mask,
-        erase_original_text,
-    )
-
     class Cfg:
         BUBBLE_FILL_MODE = "dominant"
-        BUBBLE_FILL_TOLERANCE = 10  # low tolerance to ensure very small mask
+        BUBBLE_FILL_TOLERANCE = 10
         BUBBLE_WHITE_THRESHOLD = 220
         TEXT_ERASE_DILATION_PX = 5
         TEXT_ERASE_MIN_RETENTION = 0.65
         TEXT_ERASE_PARENT_MARGIN_PX = 8
-        BUBBLE_FILL_MIN_COVERAGE = 0.8  # high min coverage to trigger fallback
+        BUBBLE_FILL_MIN_COVERAGE = 0.8
 
     cfg = Cfg()
 
-    # Gradient/noisy panel where mask coverage will be low
     page = Image.new("RGB", (400, 300), (128, 128, 128))
     draw = ImageDraw.Draw(page)
-    # Draw noise/gradients
     for y in range(300):
         for x in range(400):
             page.putpixel((x, y), (x % 255, y % 255, (x + y) % 255))
 
-    # Put dark text
     draw.rectangle((120, 120, 300, 170), fill=(0, 0, 0))
 
     bubble_box = Box(50, 50, 300, 200)
@@ -618,15 +601,11 @@ def test_low_coverage_falls_back_to_solid_rect():
         fill_color=fill,
     )
 
-    # Let's count coverage. Should be low.
     mask_hist = mask.histogram()
     mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
     crop_area = bubble_box.w * bubble_box.h
     coverage = mask_pixels / crop_area
     assert coverage < cfg.BUBBLE_FILL_MIN_COVERAGE
-
-    # If we apply the fallback manually, it becomes solid rect
-    from manhua_pipeline.stages.stage5_render import _solid_rect_mask
 
     fallback_mask = _solid_rect_mask(bubble_box, erase_box)
 
@@ -640,22 +619,19 @@ def test_low_coverage_falls_back_to_solid_rect():
         config=cfg,
         fill_color=fill,
     )
-    # The entire erase_box area must be filled with the fill color
     for x in range(erase_box.x, erase_box.x2):
         for y in range(erase_box.y, erase_box.y2):
             px = page.getpixel((x, y))
             assert px == fill
 
 
+# Verify high-contrast text color selection picks black for gold backgrounds
 def test_text_color_black_on_gold():
-    from manhua_pipeline.stages.stage5_render import _text_color_for_bg
-
     assert _text_color_for_bg((255, 200, 60)) == (0, 0, 0)
 
 
+# Verify escaped newline normalization is case-insensitive
 def test_normalize_escaped_newlines_is_case_insensitive():
-    from manhua_pipeline.stages.stage5_render import normalize_escaped_newlines
-
     assert normalize_escaped_newlines(r"A\NB") == "A\nB"
     assert normalize_escaped_newlines(r"A\nB") == "A\nB"
     assert normalize_escaped_newlines(r"A\R\NB") == "A\nB"
@@ -663,13 +639,8 @@ def test_normalize_escaped_newlines_is_case_insensitive():
     assert normalize_escaped_newlines("plain") == "plain"
 
 
+# Verify low-overlap mask fallback retries with solid rect to erase text area
 def test_low_overlap_fallback_erases_text_area(tmp_path, monkeypatch):
-    """When the bubble mask has good overall coverage but clips most of the
-    erase rectangle (low_overlap), the planner must retry with a solid rect
-    mask so original glyphs are fully cleared before English text is drawn."""
-    from manhua_pipeline.stages.stage5_render import inpainting, planner
-    from manhua_pipeline.stages.stage5_render.types import Box
-
     class _Cfg:
         FONT_PATH = "assets/fonts/ComicNeue-Bold.ttf"
         FONT_MAX_PT = 20
@@ -741,72 +712,43 @@ def test_low_overlap_fallback_erases_text_area(tmp_path, monkeypatch):
         region, img, draw, page_num=1, config=cfg, render_dir=None
     )
 
-    assert plan.rendered, "expected plan to render"
+    assert plan.rendered
 
     erase_box = Box(**plan.erase_box)
     crop = img.crop(erase_box.as_xyxy())
     pixels = list(crop.getdata())
     white_count = sum(1 for p in pixels if p[0] >= 200 and p[1] >= 200 and p[2] >= 200)
     total = len(pixels)
-    assert white_count == total, (
-        f"Expected erase zone to be fully erased after low_overlap fallback; "
-        f"{total - white_count}/{total} non-white pixels remain"
-    )
+    assert white_count == total
 
 
+# Verify placement clamping preserves horizontal text alignment without force-centering
 def test_clamp_placements_preserves_layout_x_alignment():
-    """_clamp_placements_to_mask must clamp placements within mask bounds without
-    forcibly recentering off-center placements to the middle of the bubble mask."""
-    from PIL import Image
-
-    from manhua_pipeline.stages.stage5_render.types import Box
-    from manhua_pipeline.stages.stage5_render.typography import (
-        _clamp_placements_to_mask,
-    )
-
     mask = Image.new("L", (800, 200), 255)
     bubble_box = Box(x=0, y=0, w=800, h=200)
 
-    # Left-aligned placement (e.g. region 1 on the left side of a wide speech bubble)
     left_p = [{"text": "Hey!", "x": 100, "y": 80, "w": 120, "h": 40}]
     clamped_left = _clamp_placements_to_mask(left_p, mask, bubble_box, erode_px=0)
-    assert clamped_left[0]["x"] == 100, f"Expected x=100, got {clamped_left[0]['x']}"
+    assert clamped_left[0]["x"] == 100
 
-    # Right-aligned placement (e.g. region 2 on the right side of a wide speech bubble)
     right_p = [{"text": "Wait up!", "x": 500, "y": 80, "w": 200, "h": 40}]
     clamped_right = _clamp_placements_to_mask(right_p, mask, bubble_box, erode_px=0)
-    assert clamped_right[0]["x"] == 500, f"Expected x=500, got {clamped_right[0]['x']}"
+    assert clamped_right[0]["x"] == 500
 
 
+# Verify dark fill sanitization corrects falsely estimated dark fills to white
 def test_sanitize_dark_fill_prevents_false_black_box():
-    """When a dark fill color is estimated (e.g. from outer black margins/stroke),
-    _sanitize_dark_fill must correct it to white if the text_box is white."""
-    from PIL import Image
-
-    from manhua_pipeline.stages.stage5_render.types import Box
-
-    # White page image with a white text_box
-    image = Image.new("RGB", (400, 300), (255, 255, 255))
-    text_box = Box(x=50, y=50, w=200, h=100)
+    Image.new("RGB", (400, 300), (255, 255, 255))
+    Box(x=50, y=50, w=200, h=100)
 
 
+# Verify bubble mask inpainting erases entire interior container to remove stray fragments
 def test_bubble_mask_erases_entire_bubble_container():
-    """erase_original_text must erase the entire speech bubble container interior,
-    preventing unrendered sibling text fragments or stray edge punctuation from surviving."""
-    from PIL import Image, ImageDraw
-
-    from manhua_pipeline.stages.stage5_render.inpainting import erase_original_text
-    from manhua_pipeline.stages.stage5_render.types import Box
-
-    # White bubble image with black text outside the text_box (e.g. top-left unrendered fragment)
     page_img = Image.new("RGB", (400, 300), (50, 50, 50))
     draw = ImageDraw.Draw(page_img)
 
-    # White bubble interior
     draw.rectangle((50, 50, 350, 250), fill=(255, 255, 255))
-    # Unrendered Chinese fragment on top-left inside bubble
     draw.rectangle((70, 70, 110, 110), fill=(0, 0, 0))
-    # Main text region in middle
     draw.rectangle((150, 120, 250, 180), fill=(0, 0, 0))
 
     bubble_box = Box(50, 50, 300, 200)
@@ -825,17 +767,12 @@ def test_bubble_mask_erases_entire_bubble_container():
         config=config,
     )
 
-    # Both top-left fragment (85, 85) and main text (180, 140) must be erased to white
-    assert page_img.getpixel((85, 85)) == (255, 255, 255), (
-        "Top-left fragment was not erased"
-    )
-    assert page_img.getpixel((180, 140)) == (255, 255, 255), "Main text was not erased"
+    assert page_img.getpixel((85, 85)) == (255, 255, 255)
+    assert page_img.getpixel((180, 140)) == (255, 255, 255)
 
 
+# Helper to generate synthetic thought bubble with radiating rays
 def _radiating_thought_bubble():
-    """Build a thought bubble whose pale page background leaks into a fill mask."""
-    import math
-
     page = Image.new("RGB", (420, 320), (240, 240, 240))
     draw = ImageDraw.Draw(page)
     cx, cy, rx, ry = 210, 160, 152, 94
@@ -853,14 +790,8 @@ def _radiating_thought_bubble():
     return page, ray_pixels
 
 
+# Verify radiating thought bubble mask preserves outer rays while wiping interior
 def test_radiating_thought_mask_preserves_rays_and_erases_inner_fragments():
-    """Thought-bubble rays must survive while all text inside the oval is erased."""
-    from manhua_pipeline.stages.stage5_render import (
-        Box,
-        _get_radiating_thought_mask,
-        erase_original_text,
-    )
-
     page, ray_pixels = _radiating_thought_bubble()
     draw = ImageDraw.Draw(page)
     draw.rectangle((150, 130, 270, 180), fill="black")
@@ -898,10 +829,8 @@ def test_radiating_thought_mask_preserves_rays_and_erases_inner_fragments():
     assert [page.getpixel(point) for point in ray_pixels] == before_rays
 
 
+# Verify radiating thought mask detector ignores standard round bubbles and panels
 def test_radiating_thought_mask_rejects_normal_bubble_and_panel():
-    """Ordinary continuous outlines must retain the generic fill-mask path."""
-    from manhua_pipeline.stages.stage5_render import Box, _get_radiating_thought_mask
-
     seed_box = Box(120, 100, 80, 40)
     generic_mask = Image.new("L", (320, 240), 255)
 
@@ -927,10 +856,8 @@ def test_radiating_thought_mask_rejects_normal_bubble_and_panel():
     )
 
 
+# Verify render report distinguishes thought mask strategy from generic fill
 def test_planner_records_radiating_thought_mask_strategy():
-    """The render report must distinguish thought-mask cleanup from generic fill."""
-    from manhua_pipeline.stages.stage5_render import planner
-
     page, _ = _radiating_thought_bubble()
     draw = ImageDraw.Draw(page)
     draw.rectangle((150, 130, 270, 180), fill="black")
@@ -963,13 +890,8 @@ def test_planner_records_radiating_thought_mask_strategy():
     assert result["bubble_mask_source"] == "thought_radiating_inner"
 
 
+# Verify text box area extending above parent bubble is completely erased
 def test_erase_clears_text_above_bubble():
-    """text_box protrudes above bubble_box - the overflow strip must be erased.
-
-    Reproduces the P019_R002 ch28 failure: OCR bbox starts ~250 px above the
-    parent bubble, so the bubble-clipped erase never touches the top strip and
-    Chinese characters survive.
-    """
     page = Image.new("RGB", (800, 2000), (200, 200, 200))
     draw = ImageDraw.Draw(page)
 
@@ -1004,7 +926,4 @@ def test_erase_clears_text_above_bubble():
     above_mid_x = text_box.x + text_box.w // 2
     above_mid_y = (text_box.y + bubble_box.y) // 2
     pixel = page.getpixel((above_mid_x, above_mid_y))
-    assert pixel == (255, 255, 255), (
-        f"Expected white at ({above_mid_x},{above_mid_y}) but got {pixel}; "
-        "Chinese text above bubble was not erased."
-    )
+    assert pixel == (255, 255, 255)
