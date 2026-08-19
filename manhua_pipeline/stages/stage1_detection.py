@@ -6,6 +6,7 @@ Outputs detection.json and optional visual debug overlays.
 """
 
 import json
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,8 +101,6 @@ def _save_seg_failure(
     if not getattr(config, "YOLO_SEG_SAVE_FAILURES", False):
         return
     try:
-        import shutil
-
         fail_dir = Path(getattr(config, "YOLO_SEG_FAILURES_DIR", "debug/seg_failures"))
         if not fail_dir.is_absolute():
             fail_dir = config.PROJECT_ROOT / fail_dir
@@ -170,6 +169,8 @@ def _run_yolo_seg_all_pages(
 
         with Image.open(img_path).convert("RGB") as image:
             W, H = image.size
+            crops = []
+            crop_meta = []
             for region in eligible:
                 pb = region["parent_bubble"]
                 px, py, pw, ph = pb["x"], pb["y"], pb["w"], pb["h"]
@@ -180,23 +181,29 @@ def _run_yolo_seg_all_pages(
                 x2 = min(W, px + pw + pad_x)
                 y2 = min(H, py + ph + pad_y)
                 crop = image.crop((x1, y1, x2, y2))
-                crop_w, crop_h = crop.size
+                crops.append(crop)
+                crop_meta.append(
+                    (crop.size[0], crop.size[1], x1, y1, px, py, pw, ph, region)
+                )
 
-                try:
-                    results = model.predict(
-                        crop, conf=conf, imgsz=640, device=device, verbose=False
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[%s] YOLO-seg failed on %s: %s",
-                        _STAGE_NAME,
-                        region.get("region_id"),
-                        exc,
-                    )
+            try:
+                all_results = model.predict(
+                    crops, conf=conf, imgsz=640, device=device, verbose=False
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[%s] YOLO-seg batch failed on page %d: %s",
+                    _STAGE_NAME,
+                    page_num,
+                    exc,
+                )
+                for crop, (*_, region) in zip(crops, crop_meta):
                     _save_seg_failure(crop, img_path, ws, page_num, region, config)
-                    continue
+                continue
 
-                result = results[0]
+            for result, (crop_w, crop_h, x1, y1, px, py, pw, ph, region), crop in zip(
+                all_results, crop_meta, crops
+            ):
                 masks = getattr(result, "masks", None)
                 boxes = getattr(result, "boxes", None)
                 if masks is None or not len(getattr(masks, "data", [])):
@@ -974,7 +981,8 @@ def run_detection(workspace: str, config) -> Path:
     detect_dir = ws / config.STAGE_FOLDERS["detection"]
     detect_dir.mkdir(parents=True, exist_ok=True)
     overlays_dir = detect_dir / "overlays"
-    if getattr(config, "OVERLAY_ENABLED", True):
+    overlay_enabled = getattr(config, "OVERLAY_ENABLED", True)
+    if overlay_enabled:
         overlays_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. Load model once (lazy-load via ultralytics YOLO)
@@ -1033,7 +1041,7 @@ def run_detection(workspace: str, config) -> Path:
                 )
             per_page_regions[page_num] = page_regions
             pages_processed += 1
-            if getattr(config, "OVERLAY_ENABLED", True):
+            if overlay_enabled:
                 overlays_written += 1
             log_page(
                 logger,
