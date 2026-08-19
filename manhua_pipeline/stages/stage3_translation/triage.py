@@ -7,6 +7,7 @@ from manhua_pipeline.translation_validation import (
 )
 
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_ESCAPE_SEQ_RE = re.compile(r"\\(?:r\\n|n|r)", re.IGNORECASE)
 
 _FULLWIDTH_MAP = {
     "\uff01": "!",
@@ -30,14 +31,14 @@ def _contains_cjk(text: str) -> bool:
 
 
 def _cjk_char_count(text: str) -> int:
-    return sum(1 for c in (text or "") if _contains_cjk(c))
+    return len(_CJK_RE.findall(text or ""))
 
 
 def _cjk_ratio(text: str) -> float:
-    chars = [c for c in text if not c.isspace()]
-    if not chars:
+    no_space = "".join(c for c in (text or "") if not c.isspace())
+    if not no_space:
         return 0.0
-    return sum(1 for c in chars if _contains_cjk(c)) / len(chars)
+    return len(_CJK_RE.findall(no_space)) / len(no_space)
 
 
 def _normalize_punct(text: str) -> str:
@@ -57,7 +58,7 @@ class TriageResult:
 def _strip_watermarks(text: str, config) -> str:
     if not text:
         return ""
-    norm = re.sub(r"\\(?:r\\n|n|r)", "\n", text, flags=re.IGNORECASE)
+    norm = _ESCAPE_SEQ_RE.sub("\n", text)
     patterns = getattr(config, "WATERMARK_REGEX", [])
     fuzzy = getattr(config, "WATERMARK_FUZZY_TOKENS", ())
     kept = []
@@ -92,7 +93,7 @@ _CJK_INTERJECTIONS = frozenset(
 def _has_dialogue_signal(effective: str) -> bool:
     if any(ch in _DIALOGUE_SIGNAL_PUNCT for ch in effective):
         return True
-    cjk_core = "".join(ch for ch in effective if _contains_cjk(ch))
+    cjk_core = "".join(_CJK_RE.findall(effective))
     return cjk_core in _CJK_INTERJECTIONS
 
 
@@ -100,7 +101,7 @@ def _is_punct_only(effective: str) -> bool:
     core = "".join(ch for ch in effective if not ch.isspace())
     if not core:
         return False
-    return not any(ch.isalnum() or _contains_cjk(ch) for ch in core)
+    return not any(ch.isalnum() for ch in core) and not bool(_CJK_RE.search(core))
 
 
 def triage_region(original_text: str, config) -> TriageResult:
@@ -114,7 +115,8 @@ def triage_region(original_text: str, config) -> TriageResult:
     if not effective:
         return TriageResult("watermark", "")
 
-    if _cjk_count(effective) == 0:
+    cjk_n = _cjk_count(effective)
+    if cjk_n == 0:
         if (
             getattr(config, "RENDER_PUNCT_ONLY_REGIONS", True)
             and _is_punct_only(effective)
@@ -124,7 +126,7 @@ def triage_region(original_text: str, config) -> TriageResult:
         return TriageResult("no_cjk", effective)
 
     trivial_max = int(getattr(config, "OLLAMA_TRIVIAL_CJK_CHARS", 1))
-    if _cjk_count(effective) <= trivial_max:
+    if cjk_n <= trivial_max:
         if getattr(config, "TRANSLATE_SHORT_CJK_DIALOGUE", True) and (
             _has_dialogue_signal(effective)
         ):

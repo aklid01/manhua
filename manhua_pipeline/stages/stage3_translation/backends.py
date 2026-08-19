@@ -64,15 +64,8 @@ class OllamaBackend:
 
         self.ws = ws
         self.config = config
-        self.host = s.host
+        self._ollama_settings = s
         self.model = s.model
-        self.timeout = s.timeout
-        self.temperature = s.temperature
-        self.max_retries = s.max_retries
-        self.backoff = s.backoff
-        self.keep_alive = s.keep_alive
-        self.num_ctx = s.num_ctx
-        self.num_predict = s.num_predict
         self.system_prompt = bundle.get("READ_FIRST", "")
         glossary = bundle.get("glossary", [])
         self.gloss_txt = "\n".join(
@@ -211,18 +204,9 @@ class OllamaBackend:
 
     def _call_ollama(self, user_prompt: str) -> str:
         self._batch_call_count = getattr(self, "_batch_call_count", 0) + 1
-        s = be.OllamaSettings(
-            host=self.host,
-            model=self.model,
-            timeout=self.timeout,
-            temperature=self.temperature,
-            max_retries=self.max_retries,
-            backoff=self.backoff,
-            num_ctx=getattr(self, "num_ctx", 2048),
-            num_predict=getattr(self, "num_predict", 1024),
-            keep_alive=getattr(self, "keep_alive", "0"),
+        raw = be.call_ollama(
+            self._ollama_settings, self.system_prompt, user_prompt, logger, _STAGE_NAME
         )
-        raw = be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
         self._batch_response_chars = getattr(self, "_batch_response_chars", 0) + len(
             raw
         )

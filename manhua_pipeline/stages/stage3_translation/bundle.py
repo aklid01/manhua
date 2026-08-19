@@ -58,8 +58,9 @@ def _validate_response(raw, usable_ids: list[str]) -> tuple[dict, list[str]]:
         )
 
     clean = {}
+    usable_set = set(usable_ids)
     for rid, val in raw.items():
-        if rid not in usable_ids:
+        if rid not in usable_set:
             warnings.append(f"Unexpected region_id in response (ignored): {rid!r}")
             continue
         if not isinstance(val, str) or not val.strip():

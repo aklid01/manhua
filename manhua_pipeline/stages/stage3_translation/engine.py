@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 _STAGE_INDEX = 3
 _TOTAL_STAGES = 7
 _STAGE_NAME = "Translation"
+_CJK_BLOCK_RE = re.compile(r"[\u3400-\u9fff]+")
 
 
 def _partition_regions_translation(
@@ -222,6 +223,8 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
     overrides, locked, t0, advance = ctx.overrides, ctx.locked, ctx.t0, ctx.advance
 
     now = datetime.now(timezone.utc).isoformat()
+    translator_backend = getattr(config, "TRANSLATOR_BACKEND", "manual")
+    is_ollama = translator_backend == "ollama"
     results = []
     translated_count = 0
     missing_count = 0
@@ -264,7 +267,7 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
             skip_reason = None
             if rid in glossary_resolved_ids:
                 trans_source = "locked_glossary"
-            elif getattr(config, "TRANSLATOR_BACKEND", "") == "ollama":
+            elif is_ollama:
                 trans_source = f"ollama:{getattr(config, 'OLLAMA_TRANSLATE_MODEL', '')}"
             else:
                 trans_source = "llm"
@@ -276,7 +279,7 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
             missing_count += 1
 
             original = region.get("original_text", "")
-            cjk_bits = re.findall(r"[\u3400-\u9fff]+", original)
+            cjk_bits = _CJK_BLOCK_RE.findall(original)
 
             if region.get("translation_source") == "translation_recovery":
                 logger.info(
@@ -388,12 +391,12 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
         "chapter_id": ocr_data.get("chapter_id", "unknown"),
         "stage": "translation",
         "generated_at": now,
-        "translator_backend": getattr(config, "TRANSLATOR_BACKEND", "manual"),
+        "translator_backend": translator_backend,
         "translator_model": getattr(config, "OLLAMA_TRANSLATE_MODEL", None)
-        if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+        if is_ollama
         else None,
         "translator_temperature": getattr(config, "OLLAMA_TEMPERATURE", None)
-        if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+        if is_ollama
         else None,
         "prompt_version": getattr(config, "OLLAMA_PROMPT_VERSION", "translation-v1"),
         "glossary_version": glossary_version,
@@ -479,11 +482,12 @@ def run_translation(
 
     all_results = ocr_data.get("results", [])
 
-    locked_index_pre = glossary._build_locked_index(
-        glossary._locked_terms(glossary_data)
-    )
-    non_override_results = [r for r in all_results if r["region_id"] not in overrides]
-    override_results = [r for r in all_results if r["region_id"] in overrides]
+    locked_index_pre = glossary._build_locked_index(locked)
+    non_override_results, override_results = [], []
+    for r in all_results:
+        (
+            override_results if r["region_id"] in overrides else non_override_results
+        ).append(r)
 
     translatable_results, triage_hard_skipped, trivial_fallback = (
         triage._partition_by_triage(non_override_results, config, locked_index_pre)
@@ -602,8 +606,9 @@ def run_translation(
             for rid in missing_ids
             if triage._is_trivial_region(orig_by_id.get(rid, ""), config)
         ]
+        trivial_missing_set = set(trivial_missing)
         substantial_missing = [
-            rid for rid in missing_ids if rid not in set(trivial_missing)
+            rid for rid in missing_ids if rid not in trivial_missing_set
         ]
 
         substantial_total = max(1, len(usable_ids) - len(trivial_missing))
