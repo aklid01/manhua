@@ -490,6 +490,7 @@ def test_ios_does_not_merge_across_classes():
 
 def test_save_seg_failure(tmp_path):
     from PIL import Image
+
     from manhua_pipeline.stages.stage1_detection import _save_seg_failure
 
     crop = Image.new("RGB", (100, 100), color=(255, 0, 0))
@@ -511,4 +512,3 @@ def test_save_seg_failure(tmp_path):
     page_out = tmp_path / "seg_failures" / "pages" / "chapter_01_P001.png"
     assert crop_out.exists()
     assert page_out.exists()
-

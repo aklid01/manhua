@@ -161,7 +161,7 @@ TRANSLATION_RESPONSE_NAME = "translation_response.json"
 
 # ---- Ollama (local translation backend) ----
 OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_TRANSLATE_MODEL = "translategemma:4b" # testing
+OLLAMA_TRANSLATE_MODEL = "translategemma:4b"  # testing
 OLLAMA_BATCH_SIZE = 8
 OLLAMA_TIMEOUT = 120
 OLLAMA_TEMPERATURE = 0.2
