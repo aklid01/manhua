@@ -25,6 +25,7 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Paraphrase"
 
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _contains_cjk(text: str) -> bool:
@@ -33,10 +34,10 @@ def _contains_cjk(text: str) -> bool:
 
 def _cjk_ratio(text: str) -> float:
     """Fraction of non-space chars that are Han ideographs."""
-    chars = [c for c in text if not c.isspace()]
-    if not chars:
+    no_space = "".join(c for c in (text or "") if not c.isspace())
+    if not no_space:
         return 0.0
-    return sum(1 for c in chars if _contains_cjk(c)) / len(chars)
+    return len(_CJK_RE.findall(no_space)) / len(no_space)
 
 
 def _validation_input(region: dict) -> str:
@@ -123,15 +124,8 @@ class OllamaBackend:
         if not regions:
             return {}
 
-        self.host = s.host
+        self._ollama_settings = s
         self.model = s.model
-        self.timeout = s.timeout
-        self.temperature = s.temperature
-        self.max_retries = s.max_retries
-        self.backoff = s.backoff
-        self.keep_alive = s.keep_alive
-        self.num_ctx = s.num_ctx
-        self.num_predict = s.num_predict
         self.system_prompt = bundle.get("READ_FIRST", "")
         self.tone = bundle.get("tone_directive", "")
         self.shorten = bundle.get("shorten_hint", "")
@@ -274,18 +268,9 @@ class OllamaBackend:
         )
 
     def _call_ollama(self, user_prompt: str) -> str:
-        s = be.OllamaSettings(
-            host=self.host,
-            model=self.model,
-            timeout=self.timeout,
-            temperature=self.temperature,
-            max_retries=self.max_retries,
-            backoff=self.backoff,
-            num_ctx=getattr(self, "num_ctx", 2048),
-            num_predict=getattr(self, "num_predict", 1024),
-            keep_alive=getattr(self, "keep_alive", "0"),
+        return be.call_ollama(
+            self._ollama_settings, self.system_prompt, user_prompt, logger, _STAGE_NAME
         )
-        return be.call_ollama(s, self.system_prompt, user_prompt, logger, _STAGE_NAME)
 
     @staticmethod
     def _validate_batch(
@@ -451,8 +436,8 @@ def _looks_truncated(literal: str, paraphrase: str, config=None) -> bool:
         if config is not None
         else 0.45
     )
-    source_len = len(re.sub(r"\s+", "", literal or ""))
-    result_len = len(re.sub(r"\s+", "", paraphrase or ""))
+    source_len = len(_WHITESPACE_RE.sub("", literal or ""))
+    result_len = len(_WHITESPACE_RE.sub("", paraphrase or ""))
     return source_len >= min_chars and result_len < source_len * min_ratio
 
 
@@ -471,8 +456,9 @@ def _validate_response(
 
     clean = {}
     literals = literals or {}
+    usable_set = set(usable_ids)
     for rid, val in raw.items():
-        if rid not in usable_ids:
+        if rid not in usable_set:
             warnings.append(f"Unexpected region_id in response (ignored): {rid!r}")
             continue
         if not isinstance(val, str) or not val.strip():
@@ -750,6 +736,8 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
     overrides, locked, t0, advance = ctx.overrides, ctx.locked, ctx.t0, ctx.advance
 
     now = datetime.now(timezone.utc).isoformat()
+    backend = getattr(config, "PARAPHRASE_BACKEND", "manual")
+    is_ollama = backend == "ollama"
     results = []
     paraphrased_count = 0
     missing_count = 0
@@ -797,7 +785,7 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
             else:
                 para_source = (
                     f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
-                    if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama"
+                    if is_ollama
                     else "llm"
                 )
         else:
@@ -858,12 +846,12 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
         "chapter_id": trans_data.get("chapter_id", "unknown"),
         "stage": "paraphrase",
         "generated_at": now,
-        "paraphraser_backend": getattr(config, "PARAPHRASE_BACKEND", "manual"),
+        "paraphraser_backend": backend,
         "paraphraser_model": getattr(config, "OLLAMA_PARA_MODEL", None)
-        if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama"
+        if is_ollama
         else None,
         "paraphraser_temperature": getattr(config, "OLLAMA_PARA_TEMPERATURE", None)
-        if getattr(config, "PARAPHRASE_BACKEND", "") == "ollama"
+        if is_ollama
         else None,
         "prompt_version": getattr(
             config, "OLLAMA_PARA_PROMPT_VERSION", "paraphrase-v1"
