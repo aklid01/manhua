@@ -187,17 +187,9 @@ def call_ollama(
 
 # Parse and extract JSON object from LLM response text
 def parse_json(text: str) -> dict:
-    if not text or not text.strip():
-        return {}
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
-        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
-    start, end = cleaned.find("{"), cleaned.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        cleaned = cleaned[start : end + 1]
-    try:
-        obj = json.loads(cleaned)
-    except json.JSONDecodeError:
-        return {}
-    return obj if isinstance(obj, dict) else {}
+    from manhua_pipeline.io.parse_result import parse_json_result
+
+    res = parse_json_result(text)
+    return (
+        res.value if res.status in ("success", "repaired", "partial_recovered") else {}
+    )

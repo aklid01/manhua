@@ -262,7 +262,14 @@ class OllamaBackend:
         from manhua_pipeline.io.parse_result import parse_json_result
 
         result = parse_json_result(text)
-        if result.status == "success":
+        if result.status in ("success", "repaired", "partial_recovered"):
+            if result.status != "success":
+                logger.info(
+                    "[%s] JSON response %s (recovered %d keys)",
+                    _STAGE_NAME,
+                    result.status,
+                    len(result.value),
+                )
             return result.value
 
         event_by_status = {
