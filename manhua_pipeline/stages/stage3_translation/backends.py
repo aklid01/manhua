@@ -162,12 +162,16 @@ class OllamaBackend:
         accepted.update(acc3)
 
         if missing:
+            parsed_last = self._parse_json(raw, self)
+            missing_vals = {
+                rid: parsed_last.get(rid, "<missing_key>") for rid in sorted(missing)
+            }
             logger.warning(
-                "[%s] Giving up on %d region(s) after recovery: %s | last raw output: %r",
+                "[%s] Giving up on %d region(s) after recovery: %s | values: %r",
                 _STAGE_NAME,
                 len(missing),
                 sorted(missing),
-                raw[:300],
+                missing_vals,
             )
         return accepted
 
