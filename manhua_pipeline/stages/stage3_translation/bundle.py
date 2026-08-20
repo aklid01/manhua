@@ -26,6 +26,7 @@ _PROMPT_INSTRUCTIONS = (
     "return an EMPTY string for it - do NOT translate or transliterate watermarks. "
     "Treat any URL, domain, or site-name-like text as a watermark. "
     "If a line MIXES real dialogue with a watermark, return only the dialogue and drop the watermark part. "
+    "Output values MUST be in English - never return Chinese text in the values. "
     'Return a JSON object mapping region_id -> english string, e.g. {"P001_R001": "..."}'
 )
 

@@ -177,18 +177,25 @@ class OllamaBackend:
             [
                 {
                     "region_id": r["region_id"],
-                    "original_text": r.get("effective_text") or r["original_text"],
+                    "chinese_text": r.get("effective_text") or r["original_text"],
                 }
                 for r in chunk
             ],
             ensure_ascii=False,
         )
-        strict_note = (
-            "\nSTRICT: Return ONLY a valid JSON object. No prose, no code fences. "
-            "One key per region_id. Do not merge or omit any region."
-            if strict
-            else ""
-        )
+        if strict:
+            strict_note = (
+                "\nCRITICAL: You MUST translate every 'chinese_text' into fluent US ENGLISH. "
+                "Output values MUST be in English (never return Chinese text). "
+                "Return ONLY a valid JSON object mapping region_id -> english_text, e.g. "
+                '{"P001_R001": "English translation here"}. No prose, no code fences.'
+            )
+        else:
+            strict_note = (
+                "\nTranslate each 'chinese_text' into natural US English. "
+                "Output values MUST be in English. "
+                'Return a JSON object mapping region_id -> english_translation, e.g. {"P001_R001": "..."}.'
+            )
         gloss = (
             ("GLOSSARY (keep exactly):\n" + self.gloss_txt + "\n\n")
             if self.gloss_txt
@@ -196,8 +203,8 @@ class OllamaBackend:
         )
         return (
             gloss
-            + "Translate each object's original_text. Return a JSON object mapping "
-            "region_id -> english. REGIONS:\n" + payload + strict_note
+            + "TASK: Translate the following Chinese dialogue into faithful US English.\n"
+            "INPUT REGIONS:\n" + payload + strict_note
         )
 
     # Send chat request to Ollama backend
