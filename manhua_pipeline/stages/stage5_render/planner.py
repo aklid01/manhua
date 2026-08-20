@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 from manhua_pipeline.logging_setup import get_logger
 from manhua_pipeline.stages.stage5_render import debug, geometry, inpainting, typography
@@ -183,10 +183,11 @@ def _plan_and_erase_region(
         bubble_mask_source = "text_rect_fallback"
         fill_color = (255, 255, 255)
 
-    def _is_dark(c: tuple[int, int, int]) -> bool:
-        return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] < 96
-
-    if fill_color is not None and _is_dark(fill_color) and coverage < min_cov:
+    if (
+        fill_color is not None
+        and inpainting._is_dark(fill_color)
+        and coverage < min_cov
+    ):
         logger.warning(
             "[%d/%d %s] Page %d %s -> dark fill %s at low coverage %.2f; "
             "falling back to white.",
@@ -383,6 +384,11 @@ def _plan_and_erase_region(
         text_to_draw = final_text.upper()
 
     font_path = getattr(config, "FONT_PATH", "assets/fonts/ComicNeue-Bold.ttf")
+    erode_px = int(getattr(config, "LAYOUT_INTERIOR_ERODE_PX", 10))
+    if erode_px > 0 and bubble_mask is not None:
+        eroded_layout_mask = bubble_mask.filter(ImageFilter.MinFilter(erode_px * 2 + 1))
+    else:
+        eroded_layout_mask = bubble_mask
     font, lines, font_size, overflow, placements = typography.fit_and_place_text(
         draw=draw,
         final_text=text_to_draw,
@@ -392,11 +398,15 @@ def _plan_and_erase_region(
         page_width=page_img.width,
         bubble_mask=bubble_mask,
         bubble_box=bubble_box,
+        pre_eroded_mask=eroded_layout_mask,
     )
 
-    erode_px = int(getattr(config, "LAYOUT_INTERIOR_ERODE_PX", 10))
     placements = typography._clamp_placements_to_mask(
-        placements, bubble_mask, bubble_box, erode_px=erode_px
+        placements,
+        bubble_mask,
+        bubble_box,
+        erode_px=erode_px,
+        pre_eroded_mask=eroded_layout_mask,
     )
 
     plan.font = font

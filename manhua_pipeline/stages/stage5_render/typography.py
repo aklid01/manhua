@@ -258,20 +258,24 @@ def fit_and_place_text(
     page_width: int | None = None,
     bubble_mask: Image.Image | None = None,
     bubble_box: Box | None = None,
+    pre_eroded_mask: Image.Image | None = None,
 ) -> tuple[ImageFont.ImageFont, list[str], int, bool, list[dict]]:
     resolved_max_pt = effective_max_pt(config, page_width)
     min_pt = getattr(config, "FONT_MIN_PT", 9)
     step_pt = getattr(config, "FONT_STEP_PT", 1)
     line_spacing = getattr(config, "LINE_SPACING", 1.15)
 
-    eroded_mask = None
-    if bubble_mask is not None:
+    if pre_eroded_mask is not None:
+        eroded_mask = pre_eroded_mask
+    elif bubble_mask is not None:
         erode_px = int(getattr(config, "LAYOUT_INTERIOR_ERODE_PX", 10))
         if erode_px > 0:
             k = erode_px * 2 + 1
             eroded_mask = bubble_mask.filter(ImageFilter.MinFilter(k))
         else:
             eroded_mask = bubble_mask
+    else:
+        eroded_mask = None
 
     font, lines, font_size, overflow = _fit_text(
         text=final_text,
@@ -333,8 +337,11 @@ def _clamp_placements_to_mask(
     bubble_mask: Image.Image,
     bubble_box: Box,
     erode_px: int = 10,
+    pre_eroded_mask: Image.Image | None = None,
 ) -> list[dict]:
-    if erode_px > 0:
+    if pre_eroded_mask is not None:
+        mask = pre_eroded_mask
+    elif erode_px > 0:
         k = erode_px * 2 + 1
         mask = bubble_mask.filter(ImageFilter.MinFilter(k))
     else:

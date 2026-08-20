@@ -4,6 +4,7 @@ import math
 from collections import Counter
 from statistics import median
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from manhua_pipeline.stages.stage5_render.geometry import (
@@ -29,10 +30,12 @@ def _sanitize_dark_fill(
         tb = clip_box(text_box, page_img.size)
         if tb.w > 0 and tb.h > 0:
             tb_crop = page_img.crop(tb.as_xyxy())
-            bright_count = sum(
-                1
-                for p in tb_crop.getdata()
-                if (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) > 180
+            arr = np.asarray(tb_crop)
+            bright_count = int(
+                (
+                    0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]
+                    > 180
+                ).sum()
             )
             total = tb_crop.width * tb_crop.height
             if total > 0 and (bright_count / total) > 0.40:
@@ -95,7 +98,6 @@ def _image_inpaint(
 ) -> bool:
     try:
         import cv2
-        import numpy as np
     except ImportError:
         return False
 
@@ -145,7 +147,6 @@ def erase_original_text(
         text_mask = text_mask.filter(ImageFilter.MaxFilter(dilation))
 
     text_pixels = _count_mask_pixels(text_mask)
-    import numpy as np
 
     mask_overlap = Image.fromarray(
         np.minimum(np.asarray(text_mask), np.asarray(bubble_mask)).astype("uint8"),
@@ -373,7 +374,7 @@ def _dominant_fill_color(
     local_text_box: Box | None,
     config,
 ) -> tuple[int, int, int]:
-    img = bubble_crop.convert("RGB")
+    img = bubble_crop
     w, h = img.size
     if w == 0 or h == 0:
         return (255, 255, 255)
@@ -434,10 +435,11 @@ def _dominant_fill_color(
 
     if local_text_box is not None and _is_dark(raw_fill):
         tb_crop = img.crop(local_text_box.as_xyxy())
-        bright_count = sum(
-            1
-            for p in tb_crop.getdata()
-            if (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) > 180
+        arr = np.asarray(tb_crop)
+        bright_count = int(
+            (
+                0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2] > 180
+            ).sum()
         )
         total = tb_crop.width * tb_crop.height
         if total > 0 and (bright_count / total) > 0.40:
@@ -448,8 +450,6 @@ def _dominant_fill_color(
 
 # Create boolean mask of pixels within color tolerance
 def _color_close_mask(arr, fill_color: tuple[int, int, int], tol: int):
-    import numpy as np
-
     r, g, b = fill_color
     dr = np.abs(arr[:, :, 0].astype(int) - r)
     dg = np.abs(arr[:, :, 1].astype(int) - g)
@@ -481,8 +481,6 @@ def _get_radiating_thought_mask(  # noqa: C901
 ) -> Image.Image | None:
     if not getattr(config, "THOUGHT_BUBBLE_MASK_ENABLED", True) or seed_box is None:
         return None
-
-    import numpy as np
 
     width, height = bbox_img.size
     if min(width, height) < 40:
@@ -608,11 +606,9 @@ def _get_bubble_mask(
     seed_box: Box | None = None,
     fill_color: tuple[int, int, int] | None = None,
 ) -> Image.Image:
-    import numpy as np
 
-    img = bbox_img.convert("RGB")
+    img = bbox_img
     width, height = img.size
-
     mode = getattr(config, "BUBBLE_FILL_MODE", "white")
 
     if mode == "dominant" and fill_color is not None:

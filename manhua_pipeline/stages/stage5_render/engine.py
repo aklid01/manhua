@@ -208,6 +208,9 @@ def _render_single_page(
     render_dir: Path,
     config,
     run_id: str = "unknown",
+    fmt: str = "jpeg",
+    ext: str = "jpg",
+    quality: int = 93,
 ) -> tuple[list[dict], dict | None, int, int, int]:
     page_num = page["page_number"]
     filename = page["filename"]
@@ -319,9 +322,6 @@ def _render_single_page(
 
     rendered_dir = render_dir / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
-    fmt = getattr(config, "RENDER_OUTPUT_FORMAT", "jpeg").lower()
-    ext = "jpg" if fmt == "jpeg" else fmt
-    quality = getattr(config, "RENDER_OUTPUT_QUALITY", 93)
     out_path = rendered_dir / f"{page_num:03d}.{ext}"
     save_kwargs = {"quality": quality} if fmt in ("jpeg", "webp") else {}
     page_img.save(out_path, format=fmt.upper(), **save_kwargs)
@@ -417,9 +417,21 @@ def run_render(workspace: str, config, run_id: str | None = None) -> Path:
     render_dir = ws / config.STAGE_FOLDERS["render"]
     render_dir.mkdir(parents=True, exist_ok=True)
 
+    fmt = getattr(config, "RENDER_OUTPUT_FORMAT", "jpeg").lower()
+    ext = "jpg" if fmt == "jpeg" else fmt
+    quality = getattr(config, "RENDER_OUTPUT_QUALITY", 93)
+
     for page in manifest.get("pages", []):
         results, report, drawn, left, ovf = _render_single_page(
-            page, ws, regions_by_page, render_dir, config, run_id=resolved_run_id
+            page,
+            ws,
+            regions_by_page,
+            render_dir,
+            config,
+            run_id=resolved_run_id,
+            fmt=fmt,
+            ext=ext,
+            quality=quality,
         )
         if report:
             render_results.extend(results)
@@ -460,12 +472,13 @@ def run_render(workspace: str, config, run_id: str | None = None) -> Path:
     manifest["updated_at"] = now
     save_manifest(ws, config, manifest)
 
+    from manhua_pipeline.events import PipelineEvent
+    from manhua_pipeline.io.event_emitter import get_event_emitter
+
+    emitter = get_event_emitter(ws, config, logger=logger)
     for r in render_results:
         if r.get("rendered"):
-            from manhua_pipeline.events import PipelineEvent
-            from manhua_pipeline.io.event_emitter import get_event_emitter
-
-            get_event_emitter(ws, config, logger=logger).emit(
+            emitter.emit(
                 PipelineEvent(
                     event=RENDER_REGION_COMPLETED,
                     run_id=resolved_run_id,
