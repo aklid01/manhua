@@ -66,9 +66,9 @@ REGION_ID_FORMAT = "P{page:03d}_R{idx:03d}"
 
 # Stage 1 Sub-steps: Stitching & Segmentation
 STITCH_ENABLED = True
-STITCH_EDGE_EPS = 6  # Pixel distance tolerance to page border
+STITCH_EDGE_EPS = 60  # Pixel distance tolerance to page border
 STITCH_MIN_X_OVERLAP = 0.5  # Min horizontal overlap fraction to merge split boxes
-STITCH_MAX_CHAIN = 4  # Max consecutive pages a bubble can span
+STITCH_MAX_CHAIN = 6  # Max consecutive pages a bubble can span
 STITCH_TEXT_PROBE = False  # Require valid text on both halves before merging
 STITCH_TEXT_MIN_CONF = 0.15  # Text confidence floor for stitching check
 

@@ -838,15 +838,24 @@ def _link_has_text(ws, page_a, page_b, det_by_page, config, ocr_engine) -> bool:
 # Concatenate linked vertical pages into single combined image
 def _merge_page_chain(ws, head_page, other_pages, config) -> tuple:
     pdir = ws / config.STAGE_FOLDERS["pages"]
-    imgs = [Image.open(pdir / head_page["filename"]).convert("RGB")]
-    imgs += [Image.open(pdir / p["filename"]).convert("RGB") for p in other_pages]
+    head_path = pdir / head_page["filename"]
+    other_paths = [pdir / p["filename"] for p in other_pages]
+    imgs = [Image.open(head_path).convert("RGB")]
+    imgs += [Image.open(p).convert("RGB") for p in other_paths]
     W, H = max(im.width for im in imgs), sum(im.height for im in imgs)
     merged = Image.new("RGB", (W, H), (255, 255, 255))
     y = 0
     for im in imgs:
         merged.paste(im, (0, y))
         y += im.height
-    merged.save(pdir / head_page["filename"])
+    for im in imgs:
+        im.close()
+    if head_path.exists():
+        head_path.unlink()
+    merged.save(head_path)
+    for op in other_paths:
+        if op.exists():
+            op.unlink()
     return W, H, imgs[0].height
 
 
