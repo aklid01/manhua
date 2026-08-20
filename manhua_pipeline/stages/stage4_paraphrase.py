@@ -160,8 +160,8 @@ class OllamaBackend:
             json.dump(merged, fh, ensure_ascii=False, indent=2)
         return merged
 
-    # Execute recursive batch paraphrasing with targeted missing-key retries
-    def _paraphrase_batch(self, chunk, depth: int) -> dict:
+    # Execute batch paraphrasing with targeted missing-subset retries (no recursive tree explosion)
+    def _paraphrase_batch(self, chunk, depth: int = 0) -> dict:
         expected_ids = {r["region_id"] for r in chunk}
         literals = {r["region_id"]: _validation_input(r) for r in chunk}
 
@@ -185,30 +185,20 @@ class OllamaBackend:
         if not missing:
             return accepted
 
-        if len(retry_chunk) <= 1 or depth >= 4:
-            single_max = getattr(self, "single_retry_max", 3)
-            for _attempt in range(single_max):
-                if not missing:
-                    break
-                still = [r for r in chunk if r["region_id"] in missing]
-                raw = self._call_ollama(self._build_user_prompt(still, strict=True))
-                acc_n, missing, _ = self._validate_batch(
-                    self._parse_json(raw), set(missing), literals
-                )
-                accepted.update(acc_n)
-            if missing:
-                logger.warning(
-                    "[%s] Giving up on %d region(s); literal fallback will apply: %s",
-                    _STAGE_NAME,
-                    len(missing),
-                    sorted(missing),
-                )
-            return accepted
+        retry_chunk2 = [r for r in retry_chunk if r["region_id"] in missing]
+        raw = self._call_ollama(self._build_user_prompt(retry_chunk2, strict=True))
+        acc3, missing, _ = self._validate_batch(
+            self._parse_json(raw), set(missing), literals
+        )
+        accepted.update(acc3)
 
-        still = [r for r in retry_chunk if r["region_id"] in missing]
-        mid = len(still) // 2
-        accepted.update(self._paraphrase_batch(still[:mid], depth + 1))
-        accepted.update(self._paraphrase_batch(still[mid:], depth + 1))
+        if missing:
+            logger.warning(
+                "[%s] Giving up on %d region(s); literal fallback will apply: %s",
+                _STAGE_NAME,
+                len(missing),
+                sorted(missing),
+            )
         return accepted
 
     # Build user prompt JSON payload with strict instructions when required
