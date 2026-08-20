@@ -214,6 +214,9 @@ class OllamaBackend:
     # Validate returned batch dictionary against expected region IDs
     @staticmethod
     def _validate_batch(parsed: dict, expected_ids: set) -> tuple[dict, list, list]:
+        from manhua_pipeline.translation_validation import canonicalize_region_keys
+
+        parsed = canonicalize_region_keys(parsed, expected_ids)
         unexpected = [k for k in parsed if k not in expected_ids]
         if unexpected:
             for k in unexpected:
@@ -224,7 +227,7 @@ class OllamaBackend:
                 )
 
         issues = validate_expected_regions(
-            {k: v for k, v in parsed.items() if k in expected_ids},
+            parsed,
             expected_ids,
         )
         accepted = {

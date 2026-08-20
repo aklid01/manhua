@@ -258,6 +258,9 @@ class OllamaBackend:
     def _validate_batch(
         parsed: dict, expected_ids: set, literals: dict
     ) -> tuple[dict, list, list]:
+        from manhua_pipeline.translation_validation import canonicalize_region_keys
+
+        parsed = canonicalize_region_keys(parsed, expected_ids)
         accepted, unexpected = {}, []
         for k, v in parsed.items():
             if k not in expected_ids:

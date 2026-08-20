@@ -445,3 +445,24 @@ def test_load_overrides_accepts_manual_record(tmp_path):
 
     result = load_overrides(tmp_path, config)
     assert result == {"P003_R012": "Ji Qinglin"}
+
+
+# Verify canonicalize_region_keys normalizes case, padding, and single-item fallbacks
+def test_canonicalize_region_keys_fuzzy():
+    from manhua_pipeline.translation_validation import canonicalize_region_keys
+
+    expected = {"P037_R002", "P037_R003"}
+    # Case differences and missing leading zeros
+    parsed = {"p037_r002": "First", "P37_R3": "Second"}
+    res = canonicalize_region_keys(parsed, expected)
+    assert res == {"P037_R002": "First", "P037_R003": "Second"}
+
+
+# Verify single item fallback maps arbitrary key to single expected region
+def test_canonicalize_region_keys_single_item_fallback():
+    from manhua_pipeline.translation_validation import canonicalize_region_keys
+
+    expected = {"P003_R001"}
+    parsed = {"translation": "Hello world"}
+    res = canonicalize_region_keys(parsed, expected)
+    assert res == {"P003_R001": "Hello world"}

@@ -71,6 +71,58 @@ class TranslationIssue:
     source: str = "ollama"
 
 
+_REGION_KEY_RE = re.compile(r"^[pP]?(\d+)[_\-rR]+(\d+)$")
+_GENERIC_KEYS = {
+    "translation",
+    "text",
+    "output",
+    "result",
+    "english",
+    "response",
+    "translated_text",
+    "final_english",
+    "content",
+}
+
+
+# Fuzzy-normalize region keys in parsed dictionary against expected region IDs
+def canonicalize_region_keys(parsed: dict, expected_ids: set[str]) -> dict:
+    if not parsed or not expected_ids:
+        return parsed or {}
+
+    canonical = {k: v for k, v in parsed.items() if k in expected_ids}
+    remaining_parsed = {k: v for k, v in parsed.items() if k not in expected_ids}
+    remaining_expected = expected_ids - set(canonical.keys())
+
+    if not remaining_parsed or not remaining_expected:
+        return {**canonical, **remaining_parsed}
+
+    expected_norm: dict[tuple[int, int], str] = {}
+    for eid in remaining_expected:
+        m = _REGION_KEY_RE.match(eid)
+        if m:
+            expected_norm[(int(m.group(1)), int(m.group(2)))] = eid
+
+    for k, v in list(remaining_parsed.items()):
+        m = _REGION_KEY_RE.match(k)
+        if m:
+            key_norm = (int(m.group(1)), int(m.group(2)))
+            if key_norm in expected_norm:
+                target_id = expected_norm.pop(key_norm)
+                canonical[target_id] = v
+                remaining_parsed.pop(k)
+                remaining_expected.remove(target_id)
+
+    if len(remaining_expected) == 1 and len(remaining_parsed) == 1:
+        target_id = next(iter(remaining_expected))
+        k, v = next(iter(remaining_parsed.items()))
+        if k.lower() in _GENERIC_KEYS:
+            canonical[target_id] = v
+            remaining_parsed.pop(k)
+
+    return {**canonical, **remaining_parsed}
+
+
 # Validate parsed translation dictionary against expected region IDs
 def validate_expected_regions(
     parsed: dict,
@@ -79,6 +131,7 @@ def validate_expected_regions(
     attempt: int = 1,
     source: str = "ollama",
 ) -> dict[str, TranslationIssue]:
+    parsed = canonicalize_region_keys(parsed, expected_ids)
     results: dict[str, TranslationIssue] = {}
 
     for region_id in expected_ids:
