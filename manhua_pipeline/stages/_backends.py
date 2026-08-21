@@ -1,7 +1,6 @@
 # Shared LLM backend plumbing for Stage 3 (translate) and Stage 4 (paraphrase).
 
 import json
-import re
 import time
 import urllib.error
 import urllib.request

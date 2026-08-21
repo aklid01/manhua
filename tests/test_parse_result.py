@@ -1,10 +1,7 @@
 # Unit tests for JSON response parsing, auto-repair, and partial recovery.
 
-import pytest
 
 from manhua_pipeline.io.parse_result import (
-    _harvest_partial_regions,
-    _repair_json_string,
     parse_json_result,
 )
 
