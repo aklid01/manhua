@@ -297,6 +297,127 @@ def _import_folder(
     page_number = 0
     max_w = getattr(config, "IMPORT_MAX_WIDTH", 0)
 
+    stitch_small_enabled = getattr(config, "IMPORT_STITCH_SMALL_PAGES", True)
+    min_page_h = int(getattr(config, "IMPORT_MIN_PAGE_HEIGHT", 600))
+    target_stitch_h = int(getattr(config, "IMPORT_TARGET_STITCH_HEIGHT", 1800))
+    max_stitch_h = int(getattr(config, "IMPORT_MAX_STITCH_HEIGHT", 2200))
+
+    pending_slices = []
+
+    def _flush_pending():
+        nonlocal page_number, sliced_count
+        if not pending_slices:
+            return
+
+        if len(pending_slices) == 1:
+            im, src_file, src_idx, ext, needs_downscale, needs_convert = pending_slices[
+                0
+            ]
+            w, h = im.size
+            page_number += 1
+            dest_name = f"{page_number:03d}{ext}"
+            dest = pages_dir / dest_name
+            if not needs_convert and not needs_downscale:
+                shutil.copyfile(src_file, dest)
+                log_page(
+                    logger,
+                    _STAGE_INDEX,
+                    _TOTAL_STAGES,
+                    _STAGE_NAME,
+                    page_number,
+                    total,
+                    f"{src_file.name} -> {dest_name}  ({w}x{h}) [pass-through]",
+                )
+            else:
+                im_to_save = im.convert("RGB")
+                if needs_downscale:
+                    im_to_save.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
+                im_to_save.save(dest)
+                w, h = im_to_save.size
+                log_page(
+                    logger,
+                    _STAGE_INDEX,
+                    _TOTAL_STAGES,
+                    _STAGE_NAME,
+                    page_number,
+                    total,
+                    f"{src_file.name} -> {dest_name}  ({w}x{h})",
+                )
+
+            pages.append(
+                {
+                    "page_number": page_number,
+                    "filename": dest_name,
+                    "original_filename": src_file.name,
+                    "source_filename": src_file.name,
+                    "source_page_number": src_idx,
+                    "slice_index": 1,
+                    "slice_count": 1,
+                    "slice_top": 0,
+                    "slice_bottom": h,
+                    "width": w,
+                    "height": h,
+                    "global_y_offset": None,
+                    "skip": False,
+                    "skip_reason": None,
+                }
+            )
+            pending_slices.clear()
+            return
+
+        # Multiple small slices to stitch vertically
+        stacked_w = pending_slices[0][0].width
+        stacked_h = sum(s[0].height for s in pending_slices)
+        stacked_im = Image.new("RGB", (stacked_w, stacked_h))
+
+        curr_y = 0
+        src_names = []
+        for s_im, s_file, _, _, _, _ in pending_slices:
+            stacked_im.paste(s_im.convert("RGB"), (0, curr_y))
+            curr_y += s_im.height
+            src_names.append(s_file.name)
+
+        if max_w and stacked_w > max_w:
+            stacked_im.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
+            stacked_w, stacked_h = stacked_im.size
+
+        page_number += 1
+        ext = pending_slices[0][3]
+        dest_name = f"{page_number:03d}{ext}"
+        dest = pages_dir / dest_name
+        stacked_im.save(dest)
+
+        merged_src_desc = "+".join(src_names)
+        log_page(
+            logger,
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            page_number,
+            total,
+            f"[{merged_src_desc}] -> {dest_name}  ({stacked_w}x{stacked_h}) [stitched {len(pending_slices)} slices]",
+        )
+
+        pages.append(
+            {
+                "page_number": page_number,
+                "filename": dest_name,
+                "original_filename": "+".join(src_names),
+                "source_filename": src_names[0],
+                "source_page_number": pending_slices[0][2],
+                "slice_index": 1,
+                "slice_count": 1,
+                "slice_top": 0,
+                "slice_bottom": stacked_h,
+                "width": stacked_w,
+                "height": stacked_h,
+                "global_y_offset": None,
+                "skip": False,
+                "skip_reason": None,
+            }
+        )
+        pending_slices.clear()
+
     for source_index, src_file in enumerate(image_files, start=1):
         try:
             with Image.open(src_file) as im:
@@ -304,6 +425,7 @@ def _import_folder(
                 w, h = im.size
                 needs_downscale = bool(max_w and w > max_w)
                 needs_convert = src_mode not in _PASSTHROUGH_MODES
+                extension = src_file.suffix.lower()
 
                 ratio = h / w if w else 1.0
                 if ratio > _STRIP_RATIO:
@@ -320,19 +442,115 @@ def _import_folder(
                     boundaries = [(0, h)]
                 slice_count = len(boundaries)
                 needs_slice = slice_count > 1
+
                 if needs_slice:
+                    _flush_pending()
                     sliced_count += 1
+                    im = im.convert("RGB")
+                    if needs_downscale:
+                        im.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
+                        w, h = im.size
 
-                extension = src_file.suffix.lower()
+                    for slice_index, (top, bottom) in enumerate(boundaries, start=1):
+                        page_number += 1
+                        dest_name = f"{page_number:03d}{extension}"
+                        dest = pages_dir / dest_name
+                        piece = im.crop((0, top, w, bottom))
+                        piece.save(dest)
+                        piece_width, piece_height = piece.size
+                        log_page(
+                            logger,
+                            _STAGE_INDEX,
+                            _TOTAL_STAGES,
+                            _STAGE_NAME,
+                            page_number,
+                            total,
+                            f"{src_file.name} -> {dest_name}  ({piece_width}x{piece_height})",
+                        )
+                        pages.append(
+                            {
+                                "page_number": page_number,
+                                "filename": dest_name,
+                                "original_filename": src_file.name,
+                                "source_filename": src_file.name,
+                                "source_page_number": source_index,
+                                "slice_index": slice_index,
+                                "slice_count": slice_count,
+                                "slice_top": top,
+                                "slice_bottom": bottom,
+                                "width": piece_width,
+                                "height": piece_height,
+                                "global_y_offset": None,
+                                "skip": False,
+                                "skip_reason": None,
+                            }
+                        )
+                    continue
 
-                if not needs_convert and not needs_downscale and not needs_slice:
-                    page_number += 1
-                    dest_name = f"{page_number:03d}{extension}"
-                    dest = pages_dir / dest_name
-                    try:
-                        os.link(src_file, dest)
-                    except OSError:
-                        shutil.copyfile(src_file, dest)
+                if stitch_small_enabled:
+                    is_small = h < min_page_h
+                    if is_small or (
+                        pending_slices
+                        and sum(s[0].height for s in pending_slices) < target_stitch_h
+                        and h < target_stitch_h
+                    ):
+                        if not pending_slices:
+                            if is_small:
+                                pending_slices.append(
+                                    (
+                                        im.copy(),
+                                        src_file,
+                                        source_index,
+                                        extension,
+                                        needs_downscale,
+                                        needs_convert,
+                                    )
+                                )
+                                continue
+                        else:
+                            curr_pending_w = pending_slices[0][0].width
+                            curr_pending_ext = pending_slices[0][3]
+                            curr_pending_h = sum(s[0].height for s in pending_slices)
+                            if (
+                                w == curr_pending_w
+                                and extension == curr_pending_ext
+                                and curr_pending_h + h <= max_stitch_h
+                            ):
+                                pending_slices.append(
+                                    (
+                                        im.copy(),
+                                        src_file,
+                                        source_index,
+                                        extension,
+                                        needs_downscale,
+                                        needs_convert,
+                                    )
+                                )
+                                if curr_pending_h + h >= target_stitch_h:
+                                    _flush_pending()
+                                continue
+                            else:
+                                _flush_pending()
+                                if is_small:
+                                    pending_slices.append(
+                                        (
+                                            im.copy(),
+                                            src_file,
+                                            source_index,
+                                            extension,
+                                            needs_downscale,
+                                            needs_convert,
+                                        )
+                                    )
+                                    continue
+
+                _flush_pending()
+
+                page_number += 1
+                dest_name = f"{page_number:03d}{extension}"
+                dest = pages_dir / dest_name
+                if not needs_convert and not needs_downscale:
+                    shutil.copyfile(src_file, dest)
                     log_page(
                         logger,
                         _STAGE_INDEX,
@@ -342,38 +560,14 @@ def _import_folder(
                         total,
                         f"{src_file.name} -> {dest_name}  ({w}x{h}) [pass-through]",
                     )
-                    pages.append(
-                        {
-                            "page_number": page_number,
-                            "filename": dest_name,
-                            "original_filename": src_file.name,
-                            "source_filename": src_file.name,
-                            "source_page_number": source_index,
-                            "slice_index": 1,
-                            "slice_count": 1,
-                            "slice_top": 0,
-                            "slice_bottom": h,
-                            "width": w,
-                            "height": h,
-                            "global_y_offset": None,
-                            "skip": False,
-                            "skip_reason": None,
-                        }
-                    )
-                    continue
-
-                im = im.convert("RGB")
-                if needs_downscale:
-                    im.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
-                    w, h = im.size
-
-                for slice_index, (top, bottom) in enumerate(boundaries, start=1):
-                    page_number += 1
-                    dest_name = f"{page_number:03d}{extension}"
-                    dest = pages_dir / dest_name
-                    piece = im.crop((0, top, w, bottom))
-                    piece.save(dest)
-                    piece_width, piece_height = piece.size
+                else:
+                    im_to_save = im.convert("RGB")
+                    if needs_downscale:
+                        im_to_save.thumbnail(
+                            (max_w, max_w * 10), Image.Resampling.LANCZOS
+                        )
+                    im_to_save.save(dest)
+                    w, h = im_to_save.size
                     log_page(
                         logger,
                         _STAGE_INDEX,
@@ -381,27 +575,29 @@ def _import_folder(
                         _STAGE_NAME,
                         page_number,
                         total,
-                        f"{src_file.name} -> {dest_name}  ({piece_width}x{piece_height})",
+                        f"{src_file.name} -> {dest_name}  ({w}x{h})",
                     )
-                    pages.append(
-                        {
-                            "page_number": page_number,
-                            "filename": dest_name,
-                            "original_filename": src_file.name,
-                            "source_filename": src_file.name,
-                            "source_page_number": source_index,
-                            "slice_index": slice_index,
-                            "slice_count": slice_count,
-                            "slice_top": top,
-                            "slice_bottom": bottom,
-                            "width": piece_width,
-                            "height": piece_height,
-                            "global_y_offset": None,
-                            "skip": False,
-                            "skip_reason": None,
-                        }
-                    )
+
+                pages.append(
+                    {
+                        "page_number": page_number,
+                        "filename": dest_name,
+                        "original_filename": src_file.name,
+                        "source_filename": src_file.name,
+                        "source_page_number": source_index,
+                        "slice_index": 1,
+                        "slice_count": 1,
+                        "slice_top": 0,
+                        "slice_bottom": h,
+                        "width": w,
+                        "height": h,
+                        "global_y_offset": None,
+                        "skip": False,
+                        "skip_reason": None,
+                    }
+                )
         except Exception as exc:
+            _flush_pending()
             logger.warning(
                 "[%s] Source %03d/%03d - FAILED to read %s: %s",
                 _STAGE_NAME,
@@ -428,6 +624,7 @@ def _import_folder(
                     "skip_reason": "read_error",
                 }
             )
+    _flush_pending()
 
     input_format = "strip" if strip_count > total / 2 else "paginated"
     logger.info(

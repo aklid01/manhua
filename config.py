@@ -37,6 +37,10 @@ IMPORT_SLICE_TARGET_HEIGHT = 5000  # Target height (px) for each slice
 IMPORT_SLICE_SEAM_TOLERANCE = 0.20  # Search window around target height (fraction)
 IMPORT_SLICE_SEAM_BAND = 24  # Pixel band inspected for cutting seams
 IMPORT_SLICE_MAX_CONTENT_DENSITY = 0.02  # Max non-background pixel density on cut line
+IMPORT_STITCH_SMALL_PAGES = True
+IMPORT_MIN_PAGE_HEIGHT = 600
+IMPORT_TARGET_STITCH_HEIGHT = 1800
+IMPORT_MAX_STITCH_HEIGHT = 2200
 
 # Stage 1: Bubble & Text Detection
 MODEL_DETECTION = "ogkalu/comic-speech-bubble-detector-yolov8m"
