@@ -703,8 +703,132 @@ def _get_bubble_mask(
     return Image.fromarray((mask_arr * 255).astype(np.uint8), mode="L")
 
 
-# Decode base64 YOLO-seg bubble mask from region metadata
-def load_region_bubble_mask(region: dict, bubble_box) -> "Image.Image | None":
+# Normalize and sanitize YOLO segmentation mask by removing outer leaks and filling interior holes
+def _normalize_yolo_bubble_mask(
+    raw_mask: Image.Image,
+    bubble_crop: "Image.Image | None" = None,
+    text_box=None,
+    config=None,
+) -> Image.Image:
+    try:
+        import cv2
+        import numpy as np
+
+        mask_np = np.array(raw_mask)
+        if mask_np.ndim != 2:
+            return raw_mask
+
+        contours, _ = cv2.findContours(
+            (mask_np > 128).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not contours:
+            return raw_mask
+
+        filled_raw = np.zeros_like(mask_np)
+        cv2.drawContours(filled_raw, contours, -1, 255, -1)
+
+        if bubble_crop is not None:
+            crop_rgb = np.array(bubble_crop.convert("RGB"))
+            r = crop_rgb[:, :, 0].astype(float)
+            g = crop_rgb[:, :, 1].astype(float)
+            b = crop_rgb[:, :, 2].astype(float)
+
+            chroma = np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+
+            dark_thresh = float(getattr(config, "MASK_DARK_BARRIER_LUM", 65))
+            chroma_thresh = float(getattr(config, "MASK_CHROMA_BARRIER", 35))
+
+            is_outer_bg = (lum < dark_thresh) | ((chroma > chroma_thresh) & (lum < 230))
+
+            if text_box is not None:
+                safe_pad = int(getattr(config, "MASK_TEXT_SAFE_PAD_PX", 12))
+                sx0 = max(0, text_box.x - safe_pad)
+                sy0 = max(0, text_box.y - safe_pad)
+                sx1 = min(crop_rgb.shape[1], text_box.x + text_box.w + safe_pad)
+                sy1 = min(crop_rgb.shape[0], text_box.y + text_box.h + safe_pad)
+                is_outer_bg[sy0:sy1, sx0:sx1] = False
+
+            gated_mask = filled_raw.copy()
+            gated_mask[is_outer_bg] = 0
+        else:
+            gated_mask = filled_raw.copy()
+
+        open_radius = int(getattr(config, "MASK_OPEN_RADIUS_PX", 5))
+        if open_radius > 0:
+            k_size = open_radius * 2 + 1
+            k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+            opened = cv2.morphologyEx(gated_mask, cv2.MORPH_OPEN, k_open)
+        else:
+            opened = gated_mask
+
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            (opened > 128).astype(np.uint8)
+        )
+        if num_labels > 1:
+            if text_box is not None:
+                tx0, ty0 = max(0, text_box.x), max(0, text_box.y)
+                tx1, ty1 = (
+                    min(opened.shape[1], text_box.x + text_box.w),
+                    min(opened.shape[0], text_box.y + text_box.h),
+                )
+                best_label = 0
+                best_overlap = -1
+                for lab in range(1, num_labels):
+                    overlap = int((labels[ty0:ty1, tx0:tx1] == lab).sum())
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_label = lab
+
+                if best_overlap > 0:
+                    core = (labels == best_label).astype(np.uint8) * 255
+                else:
+                    largest = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+                    core = (labels == largest).astype(np.uint8) * 255
+            else:
+                largest = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+                core = (labels == largest).astype(np.uint8) * 255
+        else:
+            core = opened
+
+        core_contours, _ = cv2.findContours(
+            core, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not core_contours:
+            return raw_mask
+
+        solid_core = np.zeros_like(core)
+        cv2.drawContours(solid_core, core_contours, -1, 255, -1)
+
+        erode_radius = int(getattr(config, "MASK_INSET_RADIUS_PX", 2))
+        if erode_radius > 0:
+            k_e_size = erode_radius * 2 + 1
+            k_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_e_size, k_e_size))
+            final_mask = cv2.erode(solid_core, k_erode)
+        else:
+            final_mask = solid_core
+
+        if text_box is not None:
+            tx0, ty0 = max(0, text_box.x), max(0, text_box.y)
+            tx1, ty1 = (
+                min(final_mask.shape[1], text_box.x + text_box.w),
+                min(final_mask.shape[0], text_box.y + text_box.h),
+            )
+            final_mask[ty0:ty1, tx0:tx1] = 255
+
+        return Image.fromarray(final_mask, mode="L")
+    except Exception:
+        return raw_mask
+
+
+# Decode base64 YOLO-seg bubble mask from region metadata and normalize
+def load_region_bubble_mask(
+    region: dict,
+    bubble_box,
+    bubble_crop: "Image.Image | None" = None,
+    text_box=None,
+    config=None,
+) -> "Image.Image | None":
     bm = region.get("bubble_mask")
     if not bm or not bm.get("valid"):
         return None
@@ -717,6 +841,9 @@ def load_region_bubble_mask(region: dict, bubble_box) -> "Image.Image | None":
         target = (bubble_box.w, bubble_box.h)
         if mask.size != target:
             mask = mask.resize(target, Image.NEAREST)
-        return mask
+
+        return _normalize_yolo_bubble_mask(
+            mask, bubble_crop=bubble_crop, text_box=text_box, config=config
+        )
     except Exception:
         return None

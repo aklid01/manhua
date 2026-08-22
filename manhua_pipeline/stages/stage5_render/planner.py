@@ -115,7 +115,13 @@ def _plan_and_erase_region(
         bubble_mask = thought_bubble_mask
         bubble_mask_source = "thought_radiating_inner"
     else:
-        yolo_mask = inpainting.load_region_bubble_mask(region, bubble_box)
+        yolo_mask = inpainting.load_region_bubble_mask(
+            region,
+            bubble_box,
+            bubble_crop=bubble_crop,
+            text_box=local_text_box,
+            config=config,
+        )
         if yolo_mask is not None:
             bubble_mask = yolo_mask
             bubble_mask_source = "yolo_seg"

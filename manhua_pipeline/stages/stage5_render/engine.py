@@ -144,6 +144,7 @@ def _load_and_merge_regions(
             "bbox": region["bbox"],
             "read_region": region.get("read_region"),
             "parent_bubble": region.get("parent_bubble"),
+            "bubble_mask": region.get("bubble_mask"),
             "erase_mask": region.get("erase_mask")
             or {
                 "type": "rect",
