@@ -729,48 +729,48 @@ def _normalize_yolo_bubble_mask(
 
         if bubble_crop is not None:
             crop_rgb = np.array(bubble_crop.convert("RGB"))
+            gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
+
+            dark_thresh = int(getattr(config, "MASK_DARK_BARRIER_LUM", 85))
+            chroma_thresh = float(getattr(config, "MASK_CHROMA_BARRIER", 25))
+
+            is_dark = (gray < dark_thresh).astype(np.uint8)
+            k_stroke = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            dark_barrier = cv2.dilate(is_dark, k_stroke)
+
             r = crop_rgb[:, :, 0].astype(float)
             g = crop_rgb[:, :, 1].astype(float)
             b = crop_rgb[:, :, 2].astype(float)
-
             chroma = np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)
-            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            is_colored = ((chroma > chroma_thresh) & (gray < 235)).astype(np.uint8)
 
-            dark_thresh = float(getattr(config, "MASK_DARK_BARRIER_LUM", 65))
-            chroma_thresh = float(getattr(config, "MASK_CHROMA_BARRIER", 35))
-
-            is_outer_bg = (lum < dark_thresh) | ((chroma > chroma_thresh) & (lum < 230))
+            barrier = (dark_barrier | is_colored).astype(np.uint8)
 
             if text_box is not None:
-                safe_pad = int(getattr(config, "MASK_TEXT_SAFE_PAD_PX", 12))
+                safe_pad = int(getattr(config, "MASK_TEXT_SAFE_PAD_PX", 4))
                 sx0 = max(0, text_box.x - safe_pad)
                 sy0 = max(0, text_box.y - safe_pad)
                 sx1 = min(crop_rgb.shape[1], text_box.x + text_box.w + safe_pad)
                 sy1 = min(crop_rgb.shape[0], text_box.y + text_box.h + safe_pad)
-                is_outer_bg[sy0:sy1, sx0:sx1] = False
+                barrier[sy0:sy1, sx0:sx1] = 0
 
-            gated_mask = filled_raw.copy()
-            gated_mask[is_outer_bg] = 0
+            walkable = ((mask_np > 128) & (barrier == 0)).astype(np.uint8) * 255
         else:
-            gated_mask = filled_raw.copy()
+            walkable = (mask_np > 128).astype(np.uint8) * 255
 
         open_radius = int(getattr(config, "MASK_OPEN_RADIUS_PX", 5))
         if open_radius > 0:
             k_size = open_radius * 2 + 1
             k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-            opened = cv2.morphologyEx(gated_mask, cv2.MORPH_OPEN, k_open)
-        else:
-            opened = gated_mask
+            walkable = cv2.morphologyEx(walkable, cv2.MORPH_OPEN, k_open)
 
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-            (opened > 128).astype(np.uint8)
-        )
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(walkable)
         if num_labels > 1:
             if text_box is not None:
                 tx0, ty0 = max(0, text_box.x), max(0, text_box.y)
                 tx1, ty1 = (
-                    min(opened.shape[1], text_box.x + text_box.w),
-                    min(opened.shape[0], text_box.y + text_box.h),
+                    min(walkable.shape[1], text_box.x + text_box.w),
+                    min(walkable.shape[0], text_box.y + text_box.h),
                 )
                 best_label = 0
                 best_overlap = -1
@@ -789,7 +789,7 @@ def _normalize_yolo_bubble_mask(
                 largest = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
                 core = (labels == largest).astype(np.uint8) * 255
         else:
-            core = opened
+            core = walkable
 
         core_contours, _ = cv2.findContours(
             core, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
