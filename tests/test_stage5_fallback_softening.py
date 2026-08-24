@@ -1,4 +1,5 @@
 from PIL import Image, ImageDraw
+
 import config
 from manhua_pipeline.stages.stage5_render import inpainting
 from manhua_pipeline.stages.stage5_render.types import Box

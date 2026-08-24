@@ -181,7 +181,12 @@ def _run_yolo_seg_all_pages(
 
             try:
                 all_results = model.predict(
-                    crops, conf=conf, imgsz=640, device=device, verbose=False
+                    crops,
+                    conf=conf,
+                    imgsz=640,
+                    device=device,
+                    retina_masks=True,
+                    verbose=False,
                 )
             except Exception as exc:
                 logger.warning(

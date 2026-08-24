@@ -1,6 +1,5 @@
 # Stage 0: Normalize supported inputs (folder/ZIP/CBZ) into ordered pages and write manifest.
 
-import os
 import re
 import shutil
 import tempfile
