@@ -267,6 +267,7 @@ TEXT_ERASE_MIN_RETENTION = 0.75
 RENDER_IMAGE_INPAINT = True
 FALLBACK_ERASE_SHAPE = "oval"  # "oval" | "rounded_rect" | "rect"
 FALLBACK_ERASE_FEATHER_PX = 3  # Soft Gaussian alpha feathering radius
+PRESERVE_UNCONTAINED_SFX_ART = True  # Leave raw calligraphy SFX on artwork untouched
 
 # Radiating thought bubble mask reconstruction
 THOUGHT_BUBBLE_MASK_ENABLED = True

@@ -14,6 +14,60 @@ _STAGE_INDEX = 5
 _TOTAL_STAGES = 7
 _STAGE_NAME = "Render"
 
+_SFX_CJK_CHARS = frozenset(
+    "轰砰啪咚叮嘭哗哐唰嘣哒咔嗖嘀咻嗒嘶嗡嗤噗噼里啪啦咔嚓叮当乒乓呼嗷"
+)
+
+_SFX_ENGLISH_WORDS = frozenset(
+    {
+        "boom",
+        "bang",
+        "clash",
+        "slash",
+        "crash",
+        "rumble",
+        "thud",
+        "wham",
+        "swoosh",
+        "whoosh",
+        "zap",
+        "crack",
+        "snap",
+        "clang",
+        "swish",
+        "buzz",
+        "hum",
+        "drip",
+        "drop",
+        "creak",
+        "roar",
+        "gasp",
+        "sigh",
+        "grunt",
+        "pant",
+        "hiss",
+    }
+)
+
+
+# Check whether region text matches known SFX onomatopoeia
+def _is_sfx_region(region: dict) -> bool:
+    raw = region.get("original_text", "") or region.get("effective_text", "")
+    clean_raw = "".join(c for c in raw if not c.isspace() and c not in "!！?？.~…")
+    if (
+        clean_raw
+        and all(c in _SFX_CJK_CHARS for c in clean_raw)
+        and len(clean_raw) <= 4
+    ):
+        return True
+
+    final = region.get("final_text", "")
+    clean_en = final.strip().rstrip("!?.~ ").lower()
+    if clean_en in _SFX_ENGLISH_WORDS:
+        return True
+
+    return False
+
 
 # Compute bounding geometry, erase original artwork, and prepare rendering plan
 def _plan_and_erase_region(
@@ -184,6 +238,20 @@ def _plan_and_erase_region(
     coverage = mask_pixels / crop_area
 
     if coverage < min_cov and thought_bubble_mask is None:
+        if _is_sfx_region(region) and getattr(
+            config, "PRESERVE_UNCONTAINED_SFX_ART", True
+        ):
+            logger.info(
+                "[%d/%d %s] Page %d %s -> uncontained SFX art ('%s'); preserving raw artwork untouched.",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                page_num,
+                rid,
+                final_text,
+            )
+            return _left("left_original_sfx_art")
+
         logger.warning(
             "[%d/%d %s] Page %d %s -> low fill-mask coverage (%.3f); "
             "falling back to padded text-box erase.",
@@ -264,6 +332,19 @@ def _plan_and_erase_region(
     )
 
     if erase_meta.get("low_overlap"):
+        if _is_sfx_region(region) and getattr(
+            config, "PRESERVE_UNCONTAINED_SFX_ART", True
+        ):
+            logger.info(
+                "[%d/%d %s] Page %d %s -> SFX with low mask overlap on art; preserving raw artwork untouched.",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                page_num,
+                rid,
+            )
+            return _left("left_original_sfx_art")
+
         logger.warning(
             "[%d/%d %s] Page %d %s -> erase mask low overlap (%.2f); %s fallback.",
             _STAGE_INDEX,
