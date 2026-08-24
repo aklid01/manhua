@@ -865,12 +865,15 @@ def _normalize_yolo_bubble_mask(
             final_mask = solid_core
 
         if text_box is not None:
-            tx0, ty0 = max(0, text_box.x), max(0, text_box.y)
-            tx1, ty1 = (
-                min(final_mask.shape[1], text_box.x + text_box.w),
-                min(final_mask.shape[0], text_box.y + text_box.h),
-            )
-            final_mask[ty0:ty1, tx0:tx1] = 255
+            # Draw smooth ellipse for text core rather than stamping a sharp rectangle
+            cx = int(text_box.x + text_box.w / 2)
+            cy = int(text_box.y + text_box.h / 2)
+            ax = max(1, int(text_box.w * 0.52))
+            ay = max(1, int(text_box.h * 0.52))
+            text_ellipse = np.zeros_like(core)
+            cv2.ellipse(text_ellipse, (cx, cy), (ax, ay), 0, 0, 360, 255, -1)
+            # Clip to solid core so it never leaks outside bubble
+            final_mask = np.maximum(final_mask, np.minimum(text_ellipse, solid_core))
 
         return Image.fromarray(final_mask, mode="L")
     except Exception:
