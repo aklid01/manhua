@@ -15,7 +15,7 @@ _TOTAL_STAGES = 7
 _STAGE_NAME = "Render"
 
 _SFX_CJK_CHARS = frozenset(
-    "轰砰啪咚叮嘭哗哐唰嘣哒咔嗖嘀咻嗒嘶嗡嗤噗噼里啪啦咔嚓叮当乒乓呼嗷"
+    "轰砰啪咚叮嘭哗哐唰嘣哒咔嗖嘀咻嗒嘶嗡嗤噗噼里啪啦咔嚓叮当乒乓呼嗷吱磕咬撕裂碎踏踩甩挥震晃闪烁滴淌喷涌卷刮吹咯咕当啷啸鸣啼"
 )
 
 _SFX_ENGLISH_WORDS = frozenset(
@@ -40,30 +40,63 @@ _SFX_ENGLISH_WORDS = frozenset(
         "drip",
         "drop",
         "creak",
+        "squeak",
         "roar",
         "gasp",
         "sigh",
         "grunt",
         "pant",
         "hiss",
+        "chomp",
+        "bite",
+        "crunch",
+        "clatter",
+        "rattle",
+        "screech",
+        "thump",
+        "slam",
+        "splash",
+        "smash",
+        "flutter",
+        "rustle",
+        "tap",
+        "tick",
+        "patter",
+        "click",
+        "clank",
+        "snip",
+        "gulp",
+        "poof",
+        "puff",
+        "ding",
+        "dong",
+        "ring",
+        "beep",
+        "honk",
     }
 )
 
 
 # Check whether region text matches known SFX onomatopoeia
 def _is_sfx_region(region: dict) -> bool:
-    raw = region.get("original_text", "") or region.get("effective_text", "")
-    clean_raw = "".join(c for c in raw if not c.isspace() and c not in "!！?？.~…")
-    if (
-        clean_raw
-        and all(c in _SFX_CJK_CHARS for c in clean_raw)
-        and len(clean_raw) <= 4
+    final = (region.get("final_text", "") or "").strip()
+    # Asterisk-wrapped text (e.g. *CHOMP!*, *CREAK*, *SWOOSH*) is explicitly formatted as SFX by LLMs
+    if (final.startswith("*") and final.endswith("*")) or (
+        final.startswith("_") and final.endswith("_")
     ):
         return True
 
-    final = region.get("final_text", "")
-    clean_en = final.strip().rstrip("!?.~ ").lower()
+    clean_en = final.strip("*_!?.~ \"'").lower()
     if clean_en in _SFX_ENGLISH_WORDS:
+        return True
+
+    raw = region.get("original_text", "") or region.get("effective_text", "")
+    clean_raw = "".join(c for c in raw if not c.isspace() and c not in "!！？?.~…*_")
+    if (
+        clean_raw
+        and all(c in _SFX_CJK_CHARS for c in clean_raw)
+        and len(clean_raw) <= 6
+    ):
         return True
 
     return False

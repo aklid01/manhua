@@ -114,3 +114,36 @@ def test_non_sfx_dialogue_without_bubble_uses_fallback():
     assert plan.rendered is True
     assert plan.action == "drew"
     assert plan.bubble_mask_source == "text_rect_fallback"
+
+
+def test_asterisk_wrapped_sfx_descriptors_preserved_on_art():
+    # Sound effect descriptor formatted by LLM like *CHOMP!* or *CREAK* on art
+    page = Image.new("RGB", (300, 300), (180, 50, 40))
+    draw = ImageDraw.Draw(page)
+
+    region = {
+        "region_id": "P001_R004",
+        "page_number": 1,
+        "type": "speech_bubble",
+        "render": True,
+        "has_usable_text": True,
+        "original_text": "磕咬",
+        "final_text": "*CHOMP!*",
+        "bbox": {"x": 50, "y": 50, "w": 200, "h": 200},
+        "read_region": {"x": 50, "y": 50, "w": 200, "h": 200},
+        "parent_bubble": {"x": 50, "y": 50, "w": 200, "h": 200},
+        "bubble_mask": None,
+    }
+
+    plan = planner._plan_and_erase_region(
+        region=region,
+        page_img=page,
+        draw=draw,
+        page_num=1,
+        config=config,
+    )
+
+    # Must preserve raw art untouched and not draw a white block
+    assert plan.rendered is False
+    assert plan.action == "left_original_sfx_art"
+    assert page.getpixel((100, 100)) == (180, 50, 40)
