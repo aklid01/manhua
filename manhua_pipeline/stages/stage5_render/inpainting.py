@@ -159,7 +159,15 @@ def erase_original_text(
 
     repaired_with_image_inpaint = False
     if low_overlap:
-        erase_mask = text_mask
+        fallback_shape = str(getattr(config, "FALLBACK_ERASE_SHAPE", "oval"))
+        feather_px = int(getattr(config, "FALLBACK_ERASE_FEATHER_PX", 3))
+        erase_mask = _solid_rect_mask(
+            bubble_box,
+            erase_box,
+            shape=fallback_shape,
+            text_box=text_box,
+            feather_px=feather_px,
+        )
         is_colored = max(fill) - min(fill) > 18 and not all(
             channel >= 245 for channel in fill
         )
@@ -457,17 +465,65 @@ def _color_close_mask(arr, fill_color: tuple[int, int, int], tol: int):
     return (dr <= tol) & (dg <= tol) & (db <= tol)
 
 
-# Generate solid white rectangular mask
-def _solid_rect_mask(bubble_box: Box, erase_box: Box) -> Image.Image:
+# Generate fallback mask (smooth oval or rectangular)
+def _solid_rect_mask(
+    bubble_box: Box,
+    erase_box: Box,
+    *,
+    shape: str = "oval",
+    text_box: Box | None = None,
+    feather_px: int = 0,
+) -> Image.Image:
     mask = Image.new("L", (bubble_box.w, bubble_box.h), 0)
     draw = ImageDraw.Draw(mask)
-    local = (
-        erase_box.x - bubble_box.x,
-        erase_box.y - bubble_box.y,
-        erase_box.x2 - bubble_box.x,
-        erase_box.y2 - bubble_box.y,
+    lx0 = erase_box.x - bubble_box.x
+    ly0 = erase_box.y - bubble_box.y
+    lx1 = erase_box.x2 - bubble_box.x
+    ly1 = erase_box.y2 - bubble_box.y
+
+    if shape == "rect":
+        draw.rectangle((lx0, ly0, lx1, ly1), fill=255)
+        return mask
+
+    # Oval / Elliptical fallback
+    is_full_bubble = (
+        abs(erase_box.w - bubble_box.w) <= 16 and abs(erase_box.h - bubble_box.h) <= 16
     )
-    draw.rectangle(local, fill=255)
+    if is_full_bubble:
+        inset = 8
+        draw.ellipse(
+            (inset, inset, bubble_box.w - inset, bubble_box.h - inset), fill=255
+        )
+    else:
+        cx = (lx0 + lx1) / 2
+        cy = (ly0 + ly1) / 2
+        hw = (lx1 - lx0) / 2
+        hh = (ly1 - ly0) / 2
+        pad_scale = 1.15
+        ex0 = max(0, int(cx - hw * pad_scale))
+        ey0 = max(0, int(cy - hh * pad_scale))
+        ex1 = min(bubble_box.w, int(cx + hw * pad_scale))
+        ey1 = min(bubble_box.h, int(cy + hh * pad_scale))
+        draw.ellipse((ex0, ey0, ex1, ey1), fill=255)
+
+    # Always ensure text area is 100% covered by 255
+    if text_box is not None:
+        tx0 = max(0, text_box.x - bubble_box.x)
+        ty0 = max(0, text_box.y - bubble_box.y)
+        tx1 = min(bubble_box.w, text_box.x2 - bubble_box.x)
+        ty1 = min(bubble_box.h, text_box.y2 - bubble_box.y)
+        draw.rectangle((tx0, ty0, tx1, ty1), fill=255)
+    elif not is_full_bubble:
+        draw.rectangle((lx0, ly0, lx1, ly1), fill=255)
+
+    if feather_px > 0:
+        mask = mask.filter(ImageFilter.GaussianBlur(feather_px))
+        draw_core = ImageDraw.Draw(mask)
+        if text_box is not None:
+            draw_core.rectangle((tx0, ty0, tx1, ty1), fill=255)
+        elif not is_full_bubble:
+            draw_core.rectangle((lx0, ly0, lx1, ly1), fill=255)
+
     return mask
 
 

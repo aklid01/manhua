@@ -164,9 +164,18 @@ def _plan_and_erase_region(
             text_box_override=erase_text_box,
         )
 
+    fallback_shape = str(getattr(config, "FALLBACK_ERASE_SHAPE", "oval"))
+    feather_px = int(getattr(config, "FALLBACK_ERASE_FEATHER_PX", 3))
+
     erase_bubble_mask = bubble_mask
     if stitched_erase:
-        erase_bubble_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
+        erase_bubble_mask = inpainting._solid_rect_mask(
+            bubble_box,
+            erase_box,
+            shape=fallback_shape,
+            text_box=erase_text_box,
+            feather_px=feather_px,
+        )
 
     min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.40))
     mask_hist = bubble_mask.histogram()
@@ -185,7 +194,13 @@ def _plan_and_erase_region(
             rid,
             coverage,
         )
-        bubble_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
+        bubble_mask = inpainting._solid_rect_mask(
+            bubble_box,
+            erase_box,
+            shape=fallback_shape,
+            text_box=erase_text_box,
+            feather_px=feather_px,
+        )
         bubble_mask_source = "text_rect_fallback"
         fill_color = (255, 255, 255)
 
@@ -261,9 +276,21 @@ def _plan_and_erase_region(
             if erase_meta.get("repaired_with_image_inpaint")
             else "retrying with solid rect",
         )
-        fallback_mask = inpainting._solid_rect_mask(bubble_box, erase_box)
+        fallback_mask = inpainting._solid_rect_mask(
+            bubble_box,
+            erase_box,
+            shape=fallback_shape,
+            text_box=erase_text_box,
+            feather_px=feather_px,
+        )
         if erase_meta.get("repaired_with_image_inpaint"):
-            bubble_mask = inpainting._solid_rect_mask(bubble_box, bubble_box)
+            bubble_mask = inpainting._solid_rect_mask(
+                bubble_box,
+                bubble_box,
+                shape=fallback_shape,
+                text_box=erase_text_box,
+                feather_px=feather_px,
+            )
             bubble_mask_source = "image_inpaint_layout"
         else:
             erase_meta = inpainting.erase_original_text(
