@@ -207,6 +207,8 @@ OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
 # Length sanity check thresholds to catch dropped text
 PARAPHRASE_MIN_TEXT_LENGTH_RATIO = 0.45
 PARAPHRASE_MIN_TEXT_LENGTH_CHARS = 80
+PARAPHRASE_CHECK_TRUNCATION = None  # None: auto (False for MCP/manual, True for Ollama)
+PARAPHRASE_ALLOW_STRIPPING = True  # Accept "" from paraphrase to skip watermarks/promos
 
 PARAPHRASE_RUDE_MARKERS = [
     "fuck",

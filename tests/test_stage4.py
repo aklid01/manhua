@@ -301,10 +301,11 @@ def test_translation_recovery_prompt_requires_translation_first(tmp_path):
     assert "translate the CJK" in bundle["READ_FIRST"]
 
 
-# Verify suspiciously truncated paraphrases are rejected in favor of literal translation
-def test_truncated_paraphrase_falls_back_to_literal():
+# Verify suspiciously truncated paraphrases are rejected when truncation checking is enabled
+def test_truncated_paraphrase_falls_back_to_literal(monkeypatch):
     from manhua_pipeline.stages.stage4_paraphrase import _validate_response
 
+    monkeypatch.setattr(config, "PARAPHRASE_CHECK_TRUNCATION", True)
     literal = (
         "She's called Jiu, a Palaan person. She works as a security guard at a "
         "local enterprise in Huan City, an immigrant worker with a work permit."
@@ -317,6 +318,82 @@ def test_truncated_paraphrase_falls_back_to_literal():
     )
     assert clean == {}
     assert any("suspiciously short" in warning for warning in warnings)
+
+
+# Verify strong backend (MCP) bypasses truncation check by default
+def test_mcp_bypasses_truncation_check(monkeypatch):
+    from manhua_pipeline.stages.stage4_paraphrase import _validate_response
+
+    monkeypatch.setattr(config, "PARAPHRASE_CHECK_TRUNCATION", None)
+    monkeypatch.setattr(config, "PARAPHRASE_BACKEND", "mcp")
+    literal = (
+        "She's called Jiu, a Palaan person. She works as a security guard at a "
+        "local enterprise in Huan City, an immigrant worker with a work permit."
+    )
+    clean, warnings = _validate_response(
+        {"P001_R001": "Her name's Jiu."},
+        ["P001_R001"],
+        config=config,
+        literals={"P001_R001": literal},
+    )
+    assert clean == {"P001_R001": "Her name's Jiu."}
+    assert not any("suspiciously short" in warning for warning in warnings)
+
+
+# Verify empty paraphrase string is stripped when PARAPHRASE_ALLOW_STRIPPING is enabled
+def test_watermark_stripped_when_allow_stripping_enabled(tmp_path):
+    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
+
+    ws = tmp_path / "workspace"
+    _setup(
+        ws,
+        [
+            _tr_entry("P001_R001", "baozimh.com watermark", translated=True),
+            _tr_entry("P001_R002", "Hello!", translated=True),
+        ],
+    )
+    run_paraphrase(str(ws), config)
+    (ws / "stage4_paraphrase" / "paraphrase_response.json").write_text(
+        json.dumps({"P001_R001": "", "P001_R002": "Hey!"}), encoding="utf-8"
+    )
+    out = run_paraphrase(str(ws), config)
+    assert out is not None
+    pp = json.loads(
+        (ws / "stage4_paraphrase" / "paraphrase.json").read_text(encoding="utf-8")
+    )
+    by_id = {r["region_id"]: r for r in pp["results"]}
+    assert by_id["P001_R001"]["final_text"] == ""
+    assert by_id["P001_R001"]["paraphrased"] is True
+    assert by_id["P001_R001"]["skip_reason"] == "watermark_stripped"
+    assert by_id["P001_R001"]["paraphrase_source"] == "paraphrase_stripped"
+    assert by_id["P001_R002"]["final_text"] == "Hey!"
+
+
+# Verify empty paraphrase string falls back to literal when PARAPHRASE_ALLOW_STRIPPING is disabled
+def test_empty_paraphrase_falls_back_when_stripping_disabled(tmp_path, monkeypatch):
+    from manhua_pipeline.stages.stage4_paraphrase import run_paraphrase
+
+    monkeypatch.setattr(config, "PARAPHRASE_ALLOW_STRIPPING", False)
+    ws = tmp_path / "workspace"
+    _setup(
+        ws,
+        [
+            _tr_entry("P001_R001", "baozimh.com watermark", translated=True),
+        ],
+    )
+    run_paraphrase(str(ws), config)
+    (ws / "stage4_paraphrase" / "paraphrase_response.json").write_text(
+        json.dumps({"P001_R001": ""}), encoding="utf-8"
+    )
+    out = run_paraphrase(str(ws), config)
+    assert out is not None
+    pp = json.loads(
+        (ws / "stage4_paraphrase" / "paraphrase.json").read_text(encoding="utf-8")
+    )
+    r = pp["results"][0]
+    assert r["final_text"] == "baozimh.com watermark"
+    assert r["paraphrased"] is False
+    assert r["paraphrase_source"] == "literal_fallback"
 
 
 # Verify missing paraphrase regions fall back to literal translation

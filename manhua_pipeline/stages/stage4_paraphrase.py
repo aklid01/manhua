@@ -420,26 +420,56 @@ def _validate_response(
     clean = {}
     literals = literals or {}
     usable_set = set(usable_ids)
+
+    backend_name = (
+        getattr(config, "PARAPHRASE_BACKEND", "manual")
+        if config is not None
+        else "manual"
+    )
+    check_truncation = (
+        getattr(config, "PARAPHRASE_CHECK_TRUNCATION", None)
+        if config is not None
+        else None
+    )
+    if check_truncation is None:
+        check_truncation = backend_name == "ollama"
+
+    allow_stripping = bool(
+        getattr(config, "PARAPHRASE_ALLOW_STRIPPING", True)
+        if config is not None
+        else True
+    )
+
     for rid, val in raw.items():
         if rid not in usable_set:
             warnings.append(f"Unexpected region_id in response (ignored): {rid!r}")
             continue
-        if not isinstance(val, str) or not val.strip():
-            warnings.append(f"Empty/non-string value for {rid!r} - treated as missing.")
+        if not isinstance(val, str):
+            warnings.append(f"Non-string value for {rid!r} - treated as missing.")
             continue
-        if _cjk_ratio(val) > 0.30:
+
+        value = val.strip()
+        if not value:
+            if allow_stripping:
+                clean[rid] = ""
+            else:
+                warnings.append(f"Empty value for {rid!r} - treated as missing.")
+            continue
+
+        if _cjk_ratio(value) > 0.30:
             warnings.append(
                 f"Residual CJK in paraphrase for {rid!r} - treated as missing."
             )
             continue
-        value = val.strip()
+
         literal = literals.get(rid, "")
-        if _looks_truncated(literal, value, config):
+        if check_truncation and _looks_truncated(literal, value, config):
             warnings.append(
                 f"Paraphrase for {rid!r} is suspiciously short compared with its "
                 "literal translation - treated as missing."
             )
             continue
+
         clean[rid] = value
 
     for rid in usable_ids:
@@ -728,19 +758,26 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
 
     for region in usable:
         rid = region["region_id"]
-        final_text = paraphrase_map.get(rid, "")
-        if final_text:
-            paraphrased = True
-            skip_reason = None
-            reg = _detect_register(final_text, rude_markers)
-            if region.get("translation_source") == "translation_recovery":
-                para_source = "translation_recovery"
+        if rid in paraphrase_map:
+            final_text = paraphrase_map[rid]
+            if final_text:
+                paraphrased = True
+                skip_reason = None
+                reg = _detect_register(final_text, rude_markers)
+                if region.get("translation_source") == "translation_recovery":
+                    para_source = "translation_recovery"
+                else:
+                    para_source = (
+                        f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
+                        if is_ollama
+                        else "llm"
+                    )
             else:
-                para_source = (
-                    f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
-                    if is_ollama
-                    else "llm"
-                )
+                final_text = ""
+                paraphrased = True
+                skip_reason = "watermark_stripped"
+                reg = "neutral"
+                para_source = "paraphrase_stripped"
         else:
             final_text = region.get("literal_translation") or ""
             paraphrased = False
@@ -752,13 +789,16 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
             )
             missing_count += 1
 
-        if paraphrased:
+        if paraphrased and final_text:
             paraphrased_count += 1
         total_chars += len(final_text)
 
-        final_text, conflict = _enforce_glossary(
-            region.get("literal_translation") or "", final_text, locked
-        )
+        if final_text:
+            final_text, conflict = _enforce_glossary(
+                region.get("literal_translation") or "", final_text, locked
+            )
+        else:
+            conflict = False
 
         results.append(
             {
