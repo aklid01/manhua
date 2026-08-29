@@ -119,48 +119,23 @@ class OllamaBackend:
         self.shorten = bundle.get("shorten_hint", "")
         glossary = bundle.get("glossary", [])
         self.gloss_txt = "\n".join(
-            f"{t['source_term']} = {t['target_term']}" for t in glossary
+            f"{t['source_term']} -> {t['target_term']}" for t in glossary
         )
 
-        batch_size = getattr(config, "OLLAMA_PARA_BATCH_SIZE", 15)
-        total = len(regions)
-        n_batches = (total + batch_size - 1) // batch_size
-        logger.info(
-            "[%d/%d %s] Ollama: %d regions, %d batch(es), model=%s",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            total,
-            n_batches,
-            self.model,
-        )
-
-        merged: dict = {}
-        for bi in range(n_batches):
-            chunk = regions[bi * batch_size : (bi + 1) * batch_size]
-            t_batch = time.monotonic()
-            accepted = self._paraphrase_batch(chunk, depth=0)
-            merged.update(accepted)
-            logger.info(
-                "[%d/%d %s] Batch %d/%d: expected %d, accepted %d, missing %d (%.1fs)",
-                _STAGE_INDEX,
-                _TOTAL_STAGES,
-                _STAGE_NAME,
-                bi + 1,
-                n_batches,
-                len(chunk),
-                len(accepted),
-                len(chunk) - len(accepted),
-                time.monotonic() - t_batch,
-            )
+        batch_size = s.batch_size
+        results: dict = {}
+        for i in range(0, len(regions), batch_size):
+            chunk = regions[i : i + batch_size]
+            results.update(self._paraphrase_batch(chunk))
 
         para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
-        response_path = para_dir / config.PARAPHRASE_RESPONSE_NAME
-        with response_path.open("w", encoding="utf-8") as fh:
-            json.dump(merged, fh, ensure_ascii=False, indent=2)
-        return merged
+        para_dir.mkdir(parents=True, exist_ok=True)
+        resp_path = para_dir / paths.response_name
+        with resp_path.open("w", encoding="utf-8") as fh:
+            json.dump(results, fh, ensure_ascii=False, indent=2)
+        return results
 
-    # Execute batch paraphrasing with targeted missing-subset retries (no recursive tree explosion)
+    # Process and retry batch of paraphrase regions
     def _paraphrase_batch(self, chunk, depth: int = 0) -> dict:
         expected_ids = {r["region_id"] for r in chunk}
         literals = {r["region_id"]: _validation_input(r) for r in chunk}
@@ -201,16 +176,16 @@ class OllamaBackend:
             )
         return accepted
 
-    # Build user prompt JSON payload with strict instructions when required
-    def _build_user_prompt(self, chunk, strict: bool) -> str:
+    # Build user prompt for paraphrase batch
+    def _build_user_prompt(self, chunk: list[dict], strict: bool = False) -> str:
         payload = json.dumps(
             [
                 {
                     "region_id": r["region_id"],
                     "literal_translation": r.get("literal_translation", ""),
+                    "translation_task": r.get("translation_task", "paraphrase"),
                     **(
                         {
-                            "translation_task": "translate_and_paraphrase",
                             "input_text": r.get("original_text", ""),
                         }
                         if r.get("translation_task") == "translate_and_paraphrase"
@@ -319,31 +294,29 @@ def _enforce_glossary(
         target = term.get("target_term", "")
         if not target:
             continue
-        if target in literal_en:
-            if target not in paraphrased_en:
-                conflict = True
+        pat = r"\b" + re.escape(target) + r"\b"
+        in_lit = bool(re.search(pat, literal_en, re.IGNORECASE))
+        in_par = bool(re.search(pat, paraphrased_en, re.IGNORECASE))
+        if in_lit and not in_par:
+            conflict = True
+            logger.warning(
+                "[%s] Glossary target %r dropped in paraphrase %r -> restored from literal %r",
+                _STAGE_NAME,
+                target,
+                paraphrased_en,
+                literal_en,
+            )
+            paraphrased_en = literal_en
+            break
     return paraphrased_en, conflict
 
 
-# Heuristically classify emotional register (rude, label, or neutral)
+# Detect whether paraphrased text matches rude or vulgar vocabulary
 def _detect_register(text: str, rude_markers: list[str]) -> str:
-    lower_text = text.lower()
-
-    if any(marker in lower_text for marker in rude_markers):
-        return "rude"
-    if "!!" in text or text.count("!") >= 2:
-        return "rude"
-
-    words = text.split()
-    for w in words:
-        w_clean = "".join(c for c in w if c.isalpha())
-        if len(w_clean) >= 2 and w_clean.isupper():
+    lower = text.lower()
+    for m in rude_markers:
+        if re.search(r"\b" + re.escape(m.lower()) + r"\b", lower):
             return "rude"
-
-    clean_ends = not any(lower_text.endswith(p) for p in [".", "?", "!"])
-    if len(text) <= 25 and (clean_ends or "—" in text or "-" in text or ":" in text):
-        return "label"
-
     return "neutral"
 
 
@@ -404,12 +377,42 @@ def _looks_truncated(literal: str, paraphrase: str, config=None) -> bool:
     return source_len >= min_chars and result_len < source_len * min_ratio
 
 
+# Enrich translation result regions with parent_bubble from detection.json if available
+def _enrich_regions_with_detection(
+    all_results: list[dict], ws: Path | None, config
+) -> None:
+    if ws is None or config is None:
+        return
+    stage_folders = getattr(config, "STAGE_FOLDERS", {})
+    det_folder = stage_folders.get("detection", "stage1_detection")
+    det_path = ws / det_folder / "detection.json"
+    if not det_path.exists():
+        return
+    try:
+        with det_path.open("r", encoding="utf-8") as fh:
+            det_data = json.load(fh)
+        det_map = {r["region_id"]: r for r in det_data.get("regions", [])}
+        for r in all_results:
+            rid = r.get("region_id")
+            if rid in det_map:
+                det_r = det_map[rid]
+                if "parent_bubble" not in r:
+                    r["parent_bubble"] = det_r.get("parent_bubble")
+    except Exception as exc:
+        logger.warning(
+            "[%s] Could not load detection.json for parent_bubble enrichment: %s",
+            _STAGE_NAME,
+            exc,
+        )
+
+
 # Validate raw LLM paraphrase dictionary against expected region IDs
 def _validate_response(
     raw,
     usable_ids: list[str],
     config=None,
     literals: dict[str, str] | None = None,
+    parent_bubbles: dict[str, dict | None] | None = None,
 ) -> tuple[dict, list[str]]:
     warnings = []
     if not isinstance(raw, dict):
@@ -419,34 +422,73 @@ def _validate_response(
 
     clean = {}
     literals = literals or {}
+    parent_bubbles = parent_bubbles or {}
     usable_set = set(usable_ids)
+
+    backend_name = (
+        getattr(config, "PARAPHRASE_BACKEND", "manual")
+        if config is not None
+        else "manual"
+    )
+    check_truncation = (
+        getattr(config, "PARAPHRASE_CHECK_TRUNCATION", None)
+        if config is not None
+        else None
+    )
+    if check_truncation is None:
+        check_truncation = backend_name == "ollama"
+
     for rid, val in raw.items():
         if rid not in usable_set:
             warnings.append(f"Unexpected region_id in response (ignored): {rid!r}")
             continue
-        if not isinstance(val, str) or not val.strip():
+        if not isinstance(val, str):
             warnings.append(f"Empty/non-string value for {rid!r} - treated as missing.")
             continue
-        if _cjk_ratio(val) > 0.30:
+
+        value = val.strip()
+        has_parent = (
+            (parent_bubbles[rid] is not None) if rid in parent_bubbles else True
+        )
+
+        if not value:
+            if not has_parent:
+                clean[rid] = ""
+            else:
+                warnings.append(
+                    f"Empty value for {rid!r} inside speech bubble - treated as missing."
+                )
+            continue
+
+        if _cjk_ratio(value) > 0.30:
             warnings.append(
                 f"Residual CJK in paraphrase for {rid!r} - treated as missing."
             )
             continue
-        value = val.strip()
+
         literal = literals.get(rid, "")
-        if _looks_truncated(literal, value, config):
+        if check_truncation and _looks_truncated(literal, value, config):
             warnings.append(
                 f"Paraphrase for {rid!r} is suspiciously short compared with its "
                 "literal translation - treated as missing."
             )
             continue
+
         clean[rid] = value
 
     for rid in usable_ids:
         if rid not in clean:
-            warnings.append(
-                f"Missing paraphrase for {rid!r} - will fall back to literal."
+            has_parent = (
+                (parent_bubbles[rid] is not None) if rid in parent_bubbles else True
             )
+            if has_parent:
+                warnings.append(
+                    f"Missing paraphrase for {rid!r} - will fall back to literal."
+                )
+            else:
+                warnings.append(
+                    f"Missing paraphrase for uncontained {rid!r} - will be skipped from rendering."
+                )
 
     return clean, warnings
 
@@ -552,6 +594,7 @@ def run_paraphrase(
     )
 
     all_results = trans_data.get("results", [])
+    _enrich_regions_with_detection(all_results, ws, config)
     overridden_regions, usable, skipped = _partition_regions_paraphrase(
         all_results, overrides, config
     )
@@ -590,10 +633,17 @@ def run_paraphrase(
         return None
 
     usable_ids = [r["region_id"] for r in usable]
+    parent_bubbles = {
+        r["region_id"]: r.get("parent_bubble") for r in usable if "parent_bubble" in r
+    }
     try:
         literals = {r["region_id"]: _validation_input(r) for r in usable}
         paraphrase_map, val_warnings = _validate_response(
-            raw_response, usable_ids, config=config, literals=literals
+            raw_response,
+            usable_ids,
+            config=config,
+            literals=literals,
+            parent_bubbles=parent_bubbles,
         )
     except ValueError as exc:
         raise ValueError(
@@ -728,37 +778,66 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
 
     for region in usable:
         rid = region["region_id"]
-        final_text = paraphrase_map.get(rid, "")
-        if final_text:
-            paraphrased = True
-            skip_reason = None
-            reg = _detect_register(final_text, rude_markers)
-            if region.get("translation_source") == "translation_recovery":
-                para_source = "translation_recovery"
+        has_parent = (
+            region.get("parent_bubble") is not None
+            if "parent_bubble" in region
+            else True
+        )
+        if rid in paraphrase_map:
+            final_text = paraphrase_map[rid]
+            if final_text:
+                paraphrased = True
+                skip_reason = None
+                reg = _detect_register(final_text, rude_markers)
+                if region.get("translation_source") == "translation_recovery":
+                    para_source = "translation_recovery"
+                else:
+                    para_source = (
+                        f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
+                        if is_ollama
+                        else "llm"
+                    )
             else:
-                para_source = (
-                    f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
-                    if is_ollama
-                    else "llm"
+                final_text = ""
+                paraphrased = True
+                skip_reason = (
+                    "watermark_stripped" if not has_parent else "empty_paraphrase"
                 )
+                reg = "neutral"
+                para_source = "paraphrase_stripped"
         else:
-            final_text = region.get("literal_translation") or ""
-            paraphrased = False
-            recovery_failed = region.get("translation_source") == "translation_recovery"
-            skip_reason = "translation_recovery_failed" if recovery_failed else None
-            reg = _detect_register(final_text, rude_markers)
-            para_source = (
-                "translation_recovery_failed" if recovery_failed else "literal_fallback"
-            )
-            missing_count += 1
+            if has_parent:
+                final_text = region.get("literal_translation") or ""
+                paraphrased = False
+                recovery_failed = (
+                    region.get("translation_source") == "translation_recovery"
+                )
+                skip_reason = "translation_recovery_failed" if recovery_failed else None
+                reg = _detect_register(final_text, rude_markers)
+                para_source = (
+                    "translation_recovery_failed"
+                    if recovery_failed
+                    else "literal_fallback"
+                )
+                missing_count += 1
+            else:
+                final_text = ""
+                paraphrased = False
+                skip_reason = "uncontained_skipped"
+                reg = "neutral"
+                para_source = "uncontained_fallback"
+                missing_count += 1
 
-        if paraphrased:
+        if paraphrased and final_text:
             paraphrased_count += 1
         total_chars += len(final_text)
 
-        final_text, conflict = _enforce_glossary(
-            region.get("literal_translation") or "", final_text, locked
-        )
+        if final_text:
+            final_text, conflict = _enforce_glossary(
+                region.get("literal_translation") or "", final_text, locked
+            )
+        else:
+            conflict = False
 
         results.append(
             {
@@ -873,6 +952,7 @@ def build_paraphrase_bundle(chapter_dir: str | Path, config) -> dict:
     overrides = load_overrides(ws, config)
 
     all_results = trans_data.get("results", [])
+    _enrich_regions_with_detection(all_results, ws, config)
     _, usable, _ = _partition_regions_paraphrase(
         all_results, overrides, config, log=False
     )
@@ -906,14 +986,22 @@ def write_paraphrase_response(
     overrides = load_overrides(ws, config)
 
     all_results = trans_data.get("results", [])
+    _enrich_regions_with_detection(all_results, ws, config)
     _, usable, _ = _partition_regions_paraphrase(
         all_results, overrides, config, log=False
     )
 
     usable_ids = [r["region_id"] for r in usable]
     literals = {r["region_id"]: _validation_input(r) for r in usable}
+    parent_bubbles = {
+        r["region_id"]: r.get("parent_bubble") for r in usable if "parent_bubble" in r
+    }
     clean_map, warnings = _validate_response(
-        mapping, usable_ids, config=config, literals=literals
+        mapping,
+        usable_ids,
+        config=config,
+        literals=literals,
+        parent_bubbles=parent_bubbles,
     )
 
     para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
