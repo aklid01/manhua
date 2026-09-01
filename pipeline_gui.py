@@ -495,20 +495,15 @@ class SettingsDialog(QDialog):
         gb_models = QGroupBox("Detection & OCR Engines")
         g3 = QGridLayout(gb_models)
 
-        g3.addWidget(QLabel("Detector Backend:"), 0, 0)
-        self.cmb_detector = QComboBox()
-        self.cmb_detector.addItems(["rtdetr", "yolov8"])
-        g3.addWidget(self.cmb_detector, 0, 1)
-
-        g3.addWidget(QLabel("Detector GPU:"), 1, 0)
+        g3.addWidget(QLabel("Detector GPU:"), 0, 0)
         self.chk_det_gpu = QCheckBox("Enable GPU for Detection")
         self.chk_det_gpu.setChecked(True)
-        g3.addWidget(self.chk_det_gpu, 1, 1)
+        g3.addWidget(self.chk_det_gpu, 0, 1)
 
-        g3.addWidget(QLabel("OCR GPU:"), 2, 0)
+        g3.addWidget(QLabel("OCR GPU:"), 1, 0)
         self.chk_ocr_gpu = QCheckBox("Enable GPU for PaddleOCR")
         self.chk_ocr_gpu.setChecked(True)
-        g3.addWidget(self.chk_ocr_gpu, 2, 1)
+        g3.addWidget(self.chk_ocr_gpu, 1, 1)
 
         l3.addWidget(gb_models)
         l3.addStretch()
@@ -559,7 +554,6 @@ class SettingsDialog(QDialog):
                 "preserve crude/rude register; casual US English",
             )
         )
-        self.cmb_detector.setCurrentText(settings.get("detector_backend", "rtdetr"))
         self.chk_det_gpu.setChecked(settings.get("detector_use_gpu", True))
         self.chk_ocr_gpu.setChecked(settings.get("ocr_use_gpu", True))
 
@@ -571,7 +565,6 @@ class SettingsDialog(QDialog):
         _write_setting("ollama_translate_model", self.txt_trans_model.text().strip())
         _write_setting("ollama_para_model", self.txt_para_model.text().strip())
         _write_setting("paraphrase_tone", self.txt_para_tone.text().strip())
-        _write_setting("detector_backend", self.cmb_detector.currentText())
         _write_setting("detector_use_gpu", self.chk_det_gpu.isChecked())
         _write_setting("ocr_use_gpu", self.chk_ocr_gpu.isChecked())
         self.accept()

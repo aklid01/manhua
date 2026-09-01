@@ -465,6 +465,25 @@ def _color_close_mask(arr, fill_color: tuple[int, int, int], tol: int):
     return (dr <= tol) & (dg <= tol) & (db <= tol)
 
 
+# Merge overlapping stamps into one convex blob so crossing notches never
+# show in the erase outline; pure-PIL fallback keeps the raw union.
+def _convexify_mask(mask: Image.Image) -> Image.Image:
+    try:
+        import cv2
+    except ImportError:
+        return mask
+    arr = np.asarray(mask)
+    contours, _ = cv2.findContours(
+        (arr > 128).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return mask
+    hull = cv2.convexHull(np.vstack(contours))
+    out = np.zeros_like(arr)
+    cv2.fillPoly(out, [hull], 255)
+    return Image.fromarray(out, mode="L")
+
+
 # Generate fallback mask (smooth oval or rectangular)
 def _solid_rect_mask(
     bubble_box: Box,
@@ -506,21 +525,42 @@ def _solid_rect_mask(
         ey1 = min(bubble_box.h, int(cy + hh * pad_scale))
         draw.ellipse((ex0, ey0, ex1, ey1), fill=255)
 
-    # Always ensure text area is 100% covered by 255
+    # Always ensure text area is 100% covered by 255. A circumscribed ellipse
+    # (semi-axes scaled by sqrt(2)) covers every corner of the text rect while
+    # keeping a smooth outline; PIL clips the draw at the mask bounds, so the
+    # bbox must stay unclamped or the ellipse would deform near bubble edges.
+    def _stamp_text_ellipse(target: ImageDraw.ImageDraw, inflate: float = 0.0) -> None:
+        if text_box is None:
+            return
+        tx0 = text_box.x - bubble_box.x
+        ty0 = text_box.y - bubble_box.y
+        tx1 = text_box.x2 - bubble_box.x
+        ty1 = text_box.y2 - bubble_box.y
+        if tx1 <= tx0 or ty1 <= ty0:
+            return
+        tcx = (tx0 + tx1) / 2
+        tcy = (ty0 + ty1) / 2
+        ax = (tx1 - tx0) / 2 * math.sqrt(2) + 1 + inflate
+        ay = (ty1 - ty0) / 2 * math.sqrt(2) + 1 + inflate
+        target.ellipse(
+            (int(tcx - ax), int(tcy - ay), int(tcx + ax), int(tcy + ay)), fill=255
+        )
+
     if text_box is not None:
-        tx0 = max(0, text_box.x - bubble_box.x)
-        ty0 = max(0, text_box.y - bubble_box.y)
-        tx1 = min(bubble_box.w, text_box.x2 - bubble_box.x)
-        ty1 = min(bubble_box.h, text_box.y2 - bubble_box.y)
-        draw.rectangle((tx0, ty0, tx1, ty1), fill=255)
+        # Inflate the pre-blur stamp so the blur falloff lands outside the
+        # text rect; the post-blur re-stamp then hides inside the 255 plateau.
+        _stamp_text_ellipse(draw, inflate=2 * feather_px)
     elif not is_full_bubble:
         draw.rectangle((lx0, ly0, lx1, ly1), fill=255)
+
+    if text_box is not None:
+        mask = _convexify_mask(mask)
 
     if feather_px > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(feather_px))
         draw_core = ImageDraw.Draw(mask)
         if text_box is not None:
-            draw_core.rectangle((tx0, ty0, tx1, ty1), fill=255)
+            _stamp_text_ellipse(draw_core)
         elif not is_full_bubble:
             draw_core.rectangle((lx0, ly0, lx1, ly1), fill=255)
 
@@ -880,13 +920,10 @@ def _normalize_yolo_bubble_mask(
         return raw_mask
 
 
-# Decode base64 YOLO-seg bubble mask from region metadata and normalize
-def load_region_bubble_mask(
+# Decode base64 YOLO-seg bubble mask from region metadata (no normalization applied)
+def decode_raw_yolo_mask(
     region: dict,
     bubble_box,
-    bubble_crop: "Image.Image | None" = None,
-    text_box=None,
-    config=None,
 ) -> "Image.Image | None":
     bm = region.get("bubble_mask")
     if not bm or not bm.get("valid"):
@@ -900,7 +937,23 @@ def load_region_bubble_mask(
         target = (bubble_box.w, bubble_box.h)
         if mask.size != target:
             mask = mask.resize(target, Image.NEAREST)
+        return mask
+    except Exception:
+        return None
 
+
+# Decode base64 YOLO-seg bubble mask from region metadata and normalize
+def load_region_bubble_mask(
+    region: dict,
+    bubble_box,
+    bubble_crop: "Image.Image | None" = None,
+    text_box=None,
+    config=None,
+) -> "Image.Image | None":
+    mask = decode_raw_yolo_mask(region, bubble_box)
+    if mask is None:
+        return None
+    try:
         return _normalize_yolo_bubble_mask(
             mask, bubble_crop=bubble_crop, text_box=text_box, config=config
         )

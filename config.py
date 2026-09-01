@@ -43,17 +43,13 @@ IMPORT_TARGET_STITCH_HEIGHT = 1800
 IMPORT_MAX_STITCH_HEIGHT = 2200
 
 # Stage 1: Bubble & Text Detection
-MODEL_DETECTION = "ogkalu/comic-speech-bubble-detector-yolov8m"
-DETECTION_MODEL = MODEL_DETECTION
-DETECTION_CONF = 0.35
 DETECTOR_USE_GPU = True
 OVERLAY_ENABLED = False
 READING_ORDER_BAND_FRACTION = 0.02
 DEDUP_IOU_THRESHOLD = 0.90  # Merge same-class boxes with IoU above this threshold
 DEDUP_IOS_THRESHOLD = 0.85  # Merge when smaller box is >=85% contained inside larger
 
-# Detector backend
-DETECTOR_BACKEND = "rtdetr"  # "rtdetr" | "yolov8"
+# RT-DETR detector
 RTDETR_REPO = "ogkalu/comic-text-and-bubble-detector"
 RTDETR_CONF = 0.30
 RTDETR_SKIP_TEXT_FREE = True  # Skip OCR for floating SFX, watermarks, and credits
@@ -78,7 +74,7 @@ STITCH_TEXT_MIN_CONF = 0.15  # Text confidence floor for stitching check
 
 YOLO_SEG_ENABLED = True
 YOLO_SEG_MODEL = "models/best.pt"  # Relative to PROJECT_ROOT
-YOLO_SEG_CONF = 0.5  # Minimum confidence threshold for masks
+YOLO_SEG_CONF = 0.4  # Minimum confidence threshold for masks
 YOLO_SEG_DEVICE = "0"  # Device: "0" (GPU) or "cpu"
 YOLO_SEG_PAD_FRAC = 0.20  # Crop padding fraction added around bubble box
 YOLO_SEG_SAVE_FAILURES = True
@@ -258,7 +254,12 @@ BUBBLE_WHITE_THRESHOLD = 220
 BUBBLE_FILL_MODE = "dominant"  # "dominant" (extract background tone) | "white"
 BUBBLE_FILL_TOLERANCE = 42  # Color distance tolerance for background matching
 BUBBLE_FILL_MIN_COVERAGE = (
-    0.40  # Fall back to rectangular erase if coverage is below this
+    0.40  # Fall back to rectangular erase if mask density (mask pixels / mask's own
+    # tight bounding box) is below this.
+)
+BUBBLE_FILL_MIN_EXTENT = (
+    0.05  # Fall back if the mask's own bounding box covers less than this
+    # fraction of the bubble_box area (catches genuinely tiny/fragment detections)
 )
 TEXT_ERASE_PADDING_PX = 12
 TEXT_LAYOUT_PADDING_PX = 8

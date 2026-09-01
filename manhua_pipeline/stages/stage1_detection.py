@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from ultralytics import YOLO
 
 from manhua_pipeline.io.workspace import load_manifest, save_manifest
 from manhua_pipeline.logging_setup import get_logger, log_page, log_stage
@@ -432,27 +431,6 @@ def _detect_page_regions_rtdetr(page, config, ws, overlays_dir) -> list:
     return regions
 
 
-# Generator yielding bounding box coordinates, confidence, and class ID from YOLO result
-def _iter_boxes(result):
-    for box in getattr(result, "boxes", []):
-        xyxy = box.xyxy
-        if hasattr(xyxy, "tolist"):
-            xyxy = xyxy.tolist()
-        if isinstance(xyxy, list) and len(xyxy) > 0:
-            xyxy = xyxy[0]
-
-        conf = box.conf
-        if hasattr(conf, "tolist"):
-            conf = conf.tolist()
-        if isinstance(conf, list) and len(conf) > 0:
-            conf = conf[0]
-        elif hasattr(conf, "item"):
-            conf = conf.item()
-
-        cls_id = int(box.cls[0].item() if hasattr(box.cls, "item") else box.cls[0])
-        yield xyxy, conf, cls_id
-
-
 # Sort bounding boxes top-to-bottom and left-to-right within vertical bands
 def _reading_order_sort(boxes, band_height):
     bh = max(1.0, band_height)
@@ -551,164 +529,6 @@ def _dedupe_raw_boxes(raw_boxes: list[dict], config) -> list[dict]:
         )
 
     return kept
-
-
-# Resolve local model path or download weights from Hugging Face
-def _resolve_model(model_name_or_path: str, config) -> str:
-    path = Path(model_name_or_path)
-    if path.exists():
-        return str(path)
-
-    if "/" in model_name_or_path and not model_name_or_path.endswith(".pt"):
-        logger.info(
-            "[%s] Model path not found locally. Attempting to download weights from Hugging Face: %s",
-            _STAGE_NAME,
-            model_name_or_path,
-        )
-        try:
-            from huggingface_hub import hf_hub_download
-
-            filename = getattr(
-                config,
-                "DETECTION_WEIGHTS_FILENAME",
-                "comic-speech-bubble-detector.pt",
-            )
-            downloaded_path = hf_hub_download(
-                repo_id=model_name_or_path, filename=filename
-            )
-            logger.info(
-                "[%s] Successfully downloaded model to %s",
-                _STAGE_NAME,
-                downloaded_path,
-            )
-            return downloaded_path
-        except Exception as e:
-            logger.error(
-                "[%s] Failed to download model from Hugging Face: %s",
-                _STAGE_NAME,
-                e,
-            )
-            raise
-
-    return model_name_or_path
-
-
-# Transform raw YOLO bounding box predictions into candidate region dictionaries
-def _process_predictions(result, page_num: int, page_height: int) -> list:
-    names = getattr(result, "names", {})
-    raw_boxes = []
-    for xyxy, conf, cls_id in _iter_boxes(result):
-        x1, y1, x2, y2 = xyxy
-        x = int(round(x1))
-        y = int(round(y1))
-        w = int(round(x2 - x1))
-        h = int(round(y2 - y1))
-
-        cls_name = names.get(cls_id, "speech_bubble").lower()
-        region_type = "narration" if "narration" in cls_name else "speech_bubble"
-
-        if region_type == "narration":
-            style_hint = "narration"
-        else:
-            aspect_ratio = w / h if h else 1.0
-            if aspect_ratio > 2.5 and (
-                y < page_height * 0.15 or y + h > page_height * 0.85
-            ):
-                style_hint = "narration"
-            else:
-                style_hint = "round"
-
-        raw_boxes.append(
-            {
-                "page_number": page_num,
-                "type": region_type,
-                "bbox": {"x": x, "y": y, "w": w, "h": h},
-                "x": x,
-                "y": y,
-                "w": w,
-                "h": h,
-                "style_hint": style_hint,
-                "confidence": float(conf),
-                "read_region": {"x": x, "y": y, "w": w, "h": h},
-                "erase_mask": {
-                    "type": "rect",
-                    "coords": [x, y, w, h],
-                },
-                "render": True,
-            }
-        )
-    return raw_boxes
-
-
-# Render bounding boxes and region labels onto debug overlay image
-def _draw_debug_overlay(
-    img_path: Path, sorted_boxes: list, overlays_dir: Path, page_num: int
-) -> None:
-    with Image.open(img_path) as im:
-        overlay = im.copy()
-        draw = ImageDraw.Draw(overlay)
-        if not sorted_boxes:
-            draw.text((10, 10), "0 regions", fill=(255, 0, 0))
-        else:
-            for box in sorted_boxes:
-                color = (255, 0, 0) if box["type"] == "speech_bubble" else (0, 0, 255)
-                bx, by, bw, bh = box["x"], box["y"], box["w"], box["h"]
-                draw.rectangle([bx, by, bx + bw, by + bh], outline=color, width=3)
-                label = f"{box['region_id']} ({box['confidence']:.2f})"
-                draw.text((bx + 5, by + 5), label, fill=color)
-
-        dest_overlay = overlays_dir / f"{page_num:03d}_overlay.png"
-        overlay.save(dest_overlay)
-
-
-# Run YOLO model detection on single page image
-def _detect_page_regions(
-    page: dict, model, config, ws: Path, overlays_dir: Path
-) -> list:
-    page_num = page["page_number"]
-    img_path = ws / config.STAGE_FOLDERS["pages"] / page["filename"]
-    if not img_path.exists():
-        raise FileNotFoundError(f"Page file not found: {img_path}")
-
-    results = model.predict(str(img_path), conf=config.DETECTION_CONF, verbose=False)
-    if not results:
-        return []
-    result = results[0]
-
-    page_width = page.get("width", 0)
-    page_height = page.get("height", 0)
-    if page_width == 0 or page_height == 0:
-        with Image.open(img_path) as tmp_im:
-            page_width, page_height = tmp_im.size
-
-    raw_boxes = _process_predictions(result, page_num, page_height)
-    raw_boxes = _dedupe_raw_boxes(raw_boxes, config)
-    band = page_height * config.READING_ORDER_BAND_FRACTION
-    sorted_boxes = _reading_order_sort(raw_boxes, band)
-
-    page_regions = []
-    for idx, box in enumerate(sorted_boxes, start=1):
-        box["reading_order"] = idx
-        box["region_id"] = config.REGION_ID_FORMAT.format(page=page_num, idx=idx)
-
-        clean_region = {
-            "region_id": box["region_id"],
-            "page_number": box["page_number"],
-            "type": box["type"],
-            "bbox": box["bbox"],
-            "reading_order": box["reading_order"],
-            "style_hint": box["style_hint"],
-            "confidence": box["confidence"],
-            "read_region": box["read_region"],
-            "erase_mask": box["erase_mask"],
-            "render": box["render"],
-        }
-        page_regions.append(clean_region)
-
-    if getattr(config, "OVERLAY_ENABLED", True):
-        _draw_debug_overlay(img_path, sorted_boxes, overlays_dir, page_num)
-
-    return page_regions
 
 
 # Extract {x, y, w, h} rectangle dictionary from region
@@ -865,9 +685,7 @@ def _merge_page_chain(ws, head_page, other_pages, config) -> tuple:
 
 
 # Execute page stitching and renumbering on detected split chains
-def _apply_stitching(
-    ws, manifest: dict, per_page_regions: dict, model, config, overlays_dir
-):
+def _apply_stitching(ws, manifest: dict, per_page_regions: dict, config, overlays_dir):
     pages_meta = manifest.get("pages", [])
     if not getattr(config, "STITCH_ENABLED", False):
         return pages_meta, per_page_regions
@@ -916,15 +734,7 @@ def _apply_stitching(
             merged_page = dict(p)
             merged_page.update({"width": W, "height": H, "global_y_offset": seam})
             merged_page["page_number"] = seq
-            backend = getattr(config, "DETECTOR_BACKEND", "yolov8")
-            if backend == "rtdetr":
-                regions = _detect_page_regions_rtdetr(
-                    merged_page, config, ws, overlays_dir
-                )
-            else:
-                regions = _detect_page_regions(
-                    merged_page, model, config, ws, overlays_dir
-                )
+            regions = _detect_page_regions_rtdetr(merged_page, config, ws, overlays_dir)
             logger.info("[%s] Stitched chain %s -> merged page.", _STAGE_NAME, chain)
         else:
             merged_page = dict(p)
@@ -943,7 +753,7 @@ def _apply_stitching(
     return new_pages, new_regions
 
 
-# Execute full chapter detection stage using configured YOLO or RT-DETR backend
+# Execute full chapter detection stage using the RT-DETR backend
 def run_detection(workspace: str, config) -> Path:
     t0 = time.monotonic()
     ws = Path(workspace)
@@ -972,28 +782,7 @@ def run_detection(workspace: str, config) -> Path:
     if overlay_enabled:
         overlays_dir.mkdir(parents=True, exist_ok=True)
 
-    backend = getattr(config, "DETECTOR_BACKEND", "yolov8")
-    logger.info(
-        "[%d/%d %s] Detector backend: %s",
-        _STAGE_INDEX,
-        _TOTAL_STAGES,
-        _STAGE_NAME,
-        backend,
-    )
-
-    model = None
-    if backend == "yolov8":
-        resolved_model_path = _resolve_model(config.DETECTION_MODEL, config)
-        logger.info(
-            "[%d/%d %s] Loading model %s",
-            _STAGE_INDEX,
-            _TOTAL_STAGES,
-            _STAGE_NAME,
-            resolved_model_path,
-        )
-        model = YOLO(resolved_model_path)
-    elif backend == "rtdetr":
-        _get_rtdetr(config)
+    _get_rtdetr(config)
 
     total_pages = manifest.get("total_pages", 0)
     pages_processed = 0
@@ -1016,14 +805,7 @@ def run_detection(workspace: str, config) -> Path:
             continue
 
         try:
-            if backend == "rtdetr":
-                page_regions = _detect_page_regions_rtdetr(
-                    page, config, ws, overlays_dir
-                )
-            else:
-                page_regions = _detect_page_regions(
-                    page, model, config, ws, overlays_dir
-                )
+            page_regions = _detect_page_regions_rtdetr(page, config, ws, overlays_dir)
             per_page_regions[page_num] = page_regions
             pages_processed += 1
             if overlay_enabled:
@@ -1048,11 +830,11 @@ def run_detection(workspace: str, config) -> Path:
             warnings += 1
 
     new_pages_meta, new_regions_by_page = _apply_stitching(
-        ws, manifest, per_page_regions, model, config, overlays_dir
+        ws, manifest, per_page_regions, config, overlays_dir
     )
     manifest["pages"] = new_pages_meta
 
-    if getattr(config, "YOLO_SEG_ENABLED", False) and backend == "rtdetr":
+    if getattr(config, "YOLO_SEG_ENABLED", False):
         _unload_rtdetr()
         _run_yolo_seg_all_pages(new_regions_by_page, new_pages_meta, ws, config)
 
@@ -1063,9 +845,9 @@ def run_detection(workspace: str, config) -> Path:
         "chapter_id": manifest.get("chapter_id", "unknown_chapter"),
         "stage": "detection",
         "generated_at": now,
-        "model": getattr(config, "RTDETR_REPO", "ogkalu/comic-text-and-bubble-detector")
-        if backend == "rtdetr"
-        else config.DETECTION_MODEL,
+        "model": getattr(
+            config, "RTDETR_REPO", "ogkalu/comic-text-and-bubble-detector"
+        ),
         "regions": regions,
     }
     detection_json_path = detect_dir / "detection.json"

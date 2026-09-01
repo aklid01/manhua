@@ -134,7 +134,7 @@ For local translation and paraphrasing, make sure Ollama is installed and
 running, then pull the configured model:
 
 ```bash
-ollama pull qwen2.5:3b-instruct
+ollama pull translategemma:4b
 ```
 
 Set the backends in `config.py`:
@@ -309,7 +309,7 @@ Most settings are in `config.py`. The most commonly changed values are:
 | Translation  | `TRANSLATOR_BACKEND`, `OLLAMA_TRANSLATE_MODEL`, `OLLAMA_HOST`                                 |
 | Paraphrasing | `PARAPHRASE_BACKEND`, `OLLAMA_PARA_MODEL`, `OLLAMA_PARA_HOST`                                 |
 | OCR          | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`                        |
-| Detection    | `DETECTOR_BACKEND`, `DETECTION_MODEL`, `RTDETR_REPO`, `DETECTOR_USE_GPU`                      |
+| Detection    | `RTDETR_REPO`, `RTDETR_CONF`, `DETECTOR_USE_GPU`                                              |
 | YOLO-seg     | `YOLO_SEG_ENABLED`, `YOLO_SEG_MODEL`, `YOLO_SEG_CONF`, `YOLO_SEG_DEVICE`, `YOLO_SEG_PAD_FRAC` |
 | Rendering    | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                                     |
 | QA           | `SUCCESS_MAX`, `REVIEW_MAX`                                                                   |
@@ -321,7 +321,7 @@ but falls back to CPU when a compatible GPU runtime is unavailable.
 
 ### Detection and OCR details
 
-The default detector backend is RT-DETR, with YOLOv8 available as an alternate backend. Detection can skip text-free regions such as watermarks, sound effects, and credits.
+The detector backend is RT-DETR only. The earlier YOLOv8 alternate backend (`DETECTOR_BACKEND = "yolov8"`, `DETECTION_MODEL`, `DETECTION_CONF`) was removed, detection settings are now `RTDETR_REPO` and `RTDETR_CONF`. Detection can skip text-free regions such as watermarks, sound effects, and credits.
 
 OCR uses PaddleOCR with the configured `OCR_ENGINE` and Chinese language model. The current configuration prefers the Transformers engine and falls back to the Paddle engine if initialization fails. Low-confidence reads can be retried with progressively stronger preprocessing. Suspicious empty or punctuation-only dialogue regions are written to `stage2_ocr/ocr_review.json` for optional manual correction.
 
@@ -340,7 +340,7 @@ To enable YOLO-seg refinement:
 # config.py
 YOLO_SEG_ENABLED = True
 YOLO_SEG_MODEL = "models/best.pt"  # path relative to project root
-YOLO_SEG_CONF = 0.5
+YOLO_SEG_CONF = 0.4
 YOLO_SEG_DEVICE = "0"  # "0" for GPU, "cpu" for CPU
 ```
 
@@ -457,7 +457,7 @@ Confirm that the Ollama server is running and that the configured model has been
 downloaded:
 
 ```bash
-ollama pull qwen2.5:3b-instruct
+ollama pull translategemma:4b
 ```
 
 If Ollama is not available, switch the affected backend to `manual` or `mcp`.

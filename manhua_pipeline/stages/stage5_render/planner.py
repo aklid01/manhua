@@ -173,10 +173,33 @@ def _plan_and_erase_region(
     )
     bubble_crop = page_img.crop(bubble_box.as_xyxy())
 
-    if getattr(config, "BUBBLE_FILL_MODE", "white") == "dominant":
-        fill_color = inpainting._dominant_fill_color(
-            bubble_crop, local_text_box, config
+    preserved_erase_box = region.get("_erase_text_box")
+    stitched_erase = bool(preserved_erase_box)
+    mask_seed_box = local_text_box
+    if preserved_erase_box:
+        # The seam-clipped text box only spans the original text above the
+        # stitch; using it as the mask safe-zone would let the uncovered
+        # strokes below the seam carve channels out of the normalized mask.
+        full_box = geometry.intersect_boxes(
+            geometry.clip_box(
+                geometry.box_from_dict(preserved_erase_box), page_img.size
+            ),
+            bubble_box,
         )
+        if full_box and full_box.w > 0 and full_box.h > 0:
+            mask_seed_box = Box(
+                x=full_box.x - bubble_box.x,
+                y=full_box.y - bubble_box.y,
+                w=full_box.w,
+                h=full_box.h,
+            )
+
+    debug_dir = (render_dir / "debug") if render_dir else None
+    do_debug = debug_dir and debug.should_debug_region(rid, config)
+    debug_paths = {}
+
+    if getattr(config, "BUBBLE_FILL_MODE", "white") == "dominant":
+        fill_color = inpainting._dominant_fill_color(bubble_crop, mask_seed_box, config)
     else:
         fill_color = None
 
@@ -189,14 +212,14 @@ def _plan_and_erase_region(
         page_img.width,
         page_img.height,
         config,
-        seed_box=local_text_box,
+        seed_box=mask_seed_box,
         fill_color=fill_color,
     )
     thought_bubble_mask = inpainting._get_radiating_thought_mask(
         bubble_crop,
         generic_bubble_mask,
         config,
-        seed_box=local_text_box,
+        seed_box=mask_seed_box,
     )
     if thought_bubble_mask is not None:
         bubble_mask = thought_bubble_mask
@@ -206,7 +229,7 @@ def _plan_and_erase_region(
             region,
             bubble_box,
             bubble_crop=bubble_crop,
-            text_box=local_text_box,
+            text_box=mask_seed_box,
             config=config,
         )
         if yolo_mask is not None:
@@ -215,6 +238,35 @@ def _plan_and_erase_region(
         else:
             bubble_mask = generic_bubble_mask
             bubble_mask_source = "generic_fill"
+
+    if do_debug:
+        raw_yolo_mask = inpainting.decode_raw_yolo_mask(region, bubble_box)
+        if raw_yolo_mask is not None:
+            debug_paths["yolo_mask_raw"] = str(
+                debug.save_render_debug_image(
+                    raw_yolo_mask,
+                    debug_dir=debug_dir,
+                    region_id=rid,
+                    suffix="yolo_mask_raw",
+                )
+            )
+        debug_paths["bubble_mask_initial"] = str(
+            debug.save_render_debug_image(
+                bubble_mask,
+                debug_dir=debug_dir,
+                region_id=rid,
+                suffix=f"bubble_mask_initial_{bubble_mask_source}",
+            )
+        )
+    logger.info(
+        "[%d/%d %s] Page %d %s -> initial bubble_mask_source=%s",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        page_num,
+        rid,
+        bubble_mask_source,
+    )
 
     shared_parent = False
     pb = region.get("parent_bubble")
@@ -236,8 +288,6 @@ def _plan_and_erase_region(
     )
 
     erase_text_box = text_box
-    preserved_erase_box = region.get("_erase_text_box")
-    stitched_erase = bool(preserved_erase_box)
     if preserved_erase_box:
         erase_text_box = geometry.clip_box(
             geometry.box_from_dict(preserved_erase_box), page_img.size
@@ -256,6 +306,15 @@ def _plan_and_erase_region(
 
     erase_bubble_mask = bubble_mask
     if stitched_erase:
+        logger.info(
+            "[%d/%d %s] Page %d %s -> stitched region, using solid %s fallback for erase",
+            _STAGE_INDEX,
+            _TOTAL_STAGES,
+            _STAGE_NAME,
+            page_num,
+            rid,
+            fallback_shape,
+        )
         erase_bubble_mask = inpainting._solid_rect_mask(
             bubble_box,
             erase_box,
@@ -265,12 +324,31 @@ def _plan_and_erase_region(
         )
 
     min_cov = float(getattr(config, "BUBBLE_FILL_MIN_COVERAGE", 0.40))
+    min_extent = float(getattr(config, "BUBBLE_FILL_MIN_EXTENT", 0.05))
     mask_hist = bubble_mask.histogram()
     mask_pixels = mask_hist[255] if len(mask_hist) > 255 else 0
     crop_area = max(1, bubble_box.w * bubble_box.h)
-    coverage = mask_pixels / crop_area
 
-    if coverage < min_cov and thought_bubble_mask is None:
+    # Measure density within the mask's own tight bounding box, not the padded
+    # detection crop. A well-formed bubble mask (cloud/scallop/oval shapes
+    # especially) can legitimately occupy well under half of a loosely-padded
+    # bubble_box while still being a complete, solid detection; the raw
+    # coverage-vs-crop ratio alone can't distinguish that from a genuinely
+    # empty/degenerate mask. extent_ratio catches masks that are implausibly
+    # tiny fragments of the crop; coverage (density) catches masks that are
+    # sparse/fragmented even within their own footprint.
+    mask_tight_bbox = bubble_mask.getbbox()
+    if mask_tight_bbox:
+        tbx0, tby0, tbx1, tby1 = mask_tight_bbox
+        tight_area = max(1, (tbx1 - tbx0) * (tby1 - tby0))
+    else:
+        tight_area = crop_area
+    extent_ratio = tight_area / crop_area
+    coverage = mask_pixels / tight_area
+
+    is_degenerate = coverage < min_cov or extent_ratio < min_extent
+
+    if is_degenerate and thought_bubble_mask is None:
         if _is_sfx_region(region) and getattr(
             config, "PRESERVE_UNCONTAINED_SFX_ART", True
         ):
@@ -286,7 +364,7 @@ def _plan_and_erase_region(
             return _left("left_original_sfx_art")
 
         logger.warning(
-            "[%d/%d %s] Page %d %s -> low fill-mask coverage (%.3f); "
+            "[%d/%d %s] Page %d %s -> low fill-mask density (%.3f, extent=%.3f) from source=%s; "
             "falling back to padded text-box erase.",
             _STAGE_INDEX,
             _TOTAL_STAGES,
@@ -294,6 +372,8 @@ def _plan_and_erase_region(
             page_num,
             rid,
             coverage,
+            extent_ratio,
+            bubble_mask_source,
         )
         bubble_mask = inpainting._solid_rect_mask(
             bubble_box,
@@ -305,13 +385,9 @@ def _plan_and_erase_region(
         bubble_mask_source = "text_rect_fallback"
         fill_color = (255, 255, 255)
 
-    if (
-        fill_color is not None
-        and inpainting._is_dark(fill_color)
-        and coverage < min_cov
-    ):
+    if fill_color is not None and inpainting._is_dark(fill_color) and is_degenerate:
         logger.warning(
-            "[%d/%d %s] Page %d %s -> dark fill %s at low coverage %.2f; "
+            "[%d/%d %s] Page %d %s -> dark fill %s at low density %.2f; "
             "falling back to white.",
             _STAGE_INDEX,
             _TOTAL_STAGES,
@@ -322,10 +398,6 @@ def _plan_and_erase_region(
             coverage,
         )
         fill_color = (255, 255, 255)
-
-    debug_dir = (render_dir / "debug") if render_dir else None
-    do_debug = debug_dir and debug.should_debug_region(rid, config)
-    debug_paths = {}
 
     if do_debug:
         debug_paths["before"] = str(
@@ -497,9 +569,13 @@ def _plan_and_erase_region(
         erase_box=erase_box.as_dict(),
         bubble_box=bubble_box.as_dict(),
         erase_strategy=(
-            "thought_bubble_inner_mask"
-            if bubble_mask_source == "thought_radiating_inner" and not stitched_erase
-            else erase_meta.get("erase_strategy", "")
+            "stitched_solid_fallback"
+            if stitched_erase
+            else (
+                "thought_bubble_inner_mask"
+                if bubble_mask_source == "thought_radiating_inner"
+                else erase_meta.get("erase_strategy", "")
+            )
         ),
         debug_paths=debug_paths,
     )

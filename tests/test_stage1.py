@@ -31,95 +31,9 @@ def _make_manifest(ws, pages):
     return manifest
 
 
-# Mock YOLO bounding box tensor wrapper
-class _FakeBox:
-    def __init__(self, xyxy, conf, cls_val=0):
-        self.xyxy = [xyxy]
-        self.conf = [conf]
-        mock_cls = MagicMock()
-        mock_cls.item.return_value = cls_val
-        self.cls = [mock_cls]
-
-
-# Mock prediction returning two bounding boxes for reading order verification
-def _fake_predict_two_boxes(*args, **kwargs):
-    result = MagicMock()
-    result.boxes = [
-        _FakeBox((100, 400, 300, 500), 0.9),
-        _FakeBox((120, 80, 320, 180), 0.8),
-    ]
-    result.names = {0: "speech_bubble", 1: "narration"}
-    return [result]
-
-
-# Mock config helper for YOLO detection parameters
-class _YoloConfig:
-    DETECTOR_BACKEND = "yolov8"
-    OVERLAY_ENABLED = True
-
-    def __getattr__(self, name):
-        return getattr(config, name)
-
-
-_yolo_config = _YoloConfig()
-
-
-# Verify detected regions are sorted top-to-bottom and formatted to schema
-@patch(
-    "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x, *args: x,
-)
-def test_detection_builds_regions_in_reading_order(mock_resolve, tmp_path):
-    from manhua_pipeline.stages.stage1_detection import run_detection
-
-    ws = tmp_path / "workspace"
-    pages = [
-        {
-            "page_number": 1,
-            "filename": "001.png",
-            "original_filename": "a.jpg",
-            "width": 860,
-            "height": 1214,
-            "skip": False,
-            "skip_reason": None,
-            "global_y_offset": None,
-        }
-    ]
-    _make_manifest(ws, pages)
-    with patch("manhua_pipeline.stages.stage1_detection.YOLO") as MockYOLO:
-        MockYOLO.return_value.predict.side_effect = _fake_predict_two_boxes
-        run_detection(str(ws), _yolo_config)
-    det = json.loads((ws / "stage1_detection" / "detection.json").read_text())
-    assert det["stage"] == "detection"
-    regs = det["regions"]
-    assert len(regs) == 2
-    assert regs[0]["reading_order"] == 1
-    assert regs[0]["bbox"]["y"] == 80
-    assert regs[1]["bbox"]["y"] == 400
-    assert regs[0]["region_id"] == "P001_R001"
-    for r in regs:
-        assert {
-            "region_id",
-            "page_number",
-            "type",
-            "bbox",
-            "reading_order",
-            "style_hint",
-            "confidence",
-            "read_region",
-            "erase_mask",
-            "render",
-        }.issubset(r)
-        assert r["erase_mask"]["type"] == "rect"
-
-
-# Verify skipped pages are omitted from detector prediction calls
-@patch(
-    "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x, *args: x,
-)
-def test_detection_skips_unusable_pages(mock_resolve, tmp_path):
-    from manhua_pipeline.stages.stage1_detection import run_detection
+# Verify skipped pages are omitted from detector calls
+def test_detection_skips_unusable_pages(tmp_path):
+    from manhua_pipeline.stages import stage1_detection
 
     ws = tmp_path / "workspace"
     pages = [
@@ -145,125 +59,32 @@ def test_detection_skips_unusable_pages(mock_resolve, tmp_path):
         },
     ]
     _make_manifest(ws, pages)
-    with patch("manhua_pipeline.stages.stage1_detection.YOLO") as MockYOLO:
-        MockYOLO.return_value.predict.side_effect = _fake_predict_two_boxes
-        run_detection(str(ws), _yolo_config)
-        assert MockYOLO.return_value.predict.call_count == 1
-    det = json.loads((ws / "stage1_detection" / "detection.json").read_text())
-    assert all(r["page_number"] == 2 for r in det["regions"])
 
+    class MockConfig:
+        STITCH_ENABLED = False
+        OVERLAY_ENABLED = False
+        YOLO_SEG_ENABLED = False
 
-# Verify detection outputs empty region list when no bubbles are found
-@patch(
-    "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x, *args: x,
-)
-def test_detection_zero_boxes(mock_resolve, tmp_path):
-    from manhua_pipeline.stages.stage1_detection import run_detection
+        def __getattr__(self, name):
+            return getattr(config, name)
 
-    ws = tmp_path / "workspace"
-    pages = [
-        {
-            "page_number": 1,
-            "filename": "001.png",
-            "original_filename": "a.jpg",
-            "width": 860,
-            "height": 1214,
-            "skip": False,
-            "skip_reason": None,
-            "global_y_offset": None,
-        }
-    ]
-    _make_manifest(ws, pages)
-
-    def _empty_predict(*a, **k):
-        r = MagicMock()
-        r.boxes = []
-        r.names = {}
-        return [r]
-
-    with patch("manhua_pipeline.stages.stage1_detection.YOLO") as MockYOLO:
-        MockYOLO.return_value.predict.side_effect = _empty_predict
-        run_detection(str(ws), _yolo_config)
-    det = json.loads((ws / "stage1_detection" / "detection.json").read_text())
-    assert det["regions"] == []
-
-
-# Verify detection model is initialized once across multi-page chapter runs
-@patch(
-    "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x, *args: x,
-)
-def test_detection_model_loaded_once(mock_resolve, tmp_path):
-    from manhua_pipeline.stages.stage1_detection import run_detection
-
-    ws = tmp_path / "workspace"
-    pages = [
-        {
-            "page_number": i,
-            "filename": f"{i:03d}.png",
-            "original_filename": f"{i}.jpg",
-            "width": 860,
-            "height": 1214,
-            "skip": False,
-            "skip_reason": None,
-            "global_y_offset": None,
-        }
-        for i in range(1, 4)
-    ]
-    _make_manifest(ws, pages)
-    with patch("manhua_pipeline.stages.stage1_detection.YOLO") as MockYOLO:
-        MockYOLO.return_value.predict.side_effect = _fake_predict_two_boxes
-        run_detection(str(ws), _yolo_config)
-        MockYOLO.assert_called_once()
-        assert MockYOLO.return_value.predict.call_count == 3
-
-
-# Verify debug overlay image is saved even when zero regions are detected
-@patch(
-    "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x, *args: x,
-)
-def test_detection_overlay_saved_when_zero_regions(mock_resolve, tmp_path):
-    from manhua_pipeline.stages.stage1_detection import run_detection
-
-    ws = tmp_path / "workspace"
-    pages = [
-        {
-            "page_number": 1,
-            "filename": "001.png",
-            "original_filename": "a.jpg",
-            "width": 860,
-            "height": 1214,
-            "skip": False,
-            "skip_reason": None,
-            "global_y_offset": None,
-        }
-    ]
-    _make_manifest(ws, pages)
-
-    def _empty_predict(*a, **k):
-        r = MagicMock()
-        r.boxes = []
-        r.names = {}
-        return [r]
-
-    with patch("manhua_pipeline.stages.stage1_detection.YOLO") as MockYOLO:
-        MockYOLO.return_value.predict.side_effect = _empty_predict
-        run_detection(str(ws), _yolo_config)
+    with (
+        patch.object(
+            stage1_detection, "_get_rtdetr", return_value=(MagicMock(), MagicMock())
+        ),
+        patch.object(
+            stage1_detection, "_detect_page_regions_rtdetr", return_value=[]
+        ) as mock_detect,
+    ):
+        stage1_detection.run_detection(str(ws), MockConfig())
+        assert mock_detect.call_count == 1
 
     det = json.loads((ws / "stage1_detection" / "detection.json").read_text())
     assert det["regions"] == []
-    overlay = ws / "stage1_detection" / "overlays" / "001_overlay.png"
-    assert overlay.exists()
 
 
 # Verify RT-DETR model detection, parent-bubble association, and reading order sorting
-@patch(
-    "manhua_pipeline.stages.stage1_detection._resolve_model",
-    side_effect=lambda x, *args: x,
-)
-def test_detection_rtdetr_backend(mock_resolve, tmp_path):
+def test_detection_rtdetr_backend(tmp_path):
     from manhua_pipeline.stages.stage1_detection import run_detection
 
     ws = tmp_path / "workspace"
@@ -282,7 +103,6 @@ def test_detection_rtdetr_backend(mock_resolve, tmp_path):
     _make_manifest(ws, pages)
 
     class MockConfig:
-        DETECTOR_BACKEND = "rtdetr"
         RTDETR_REPO = "ogkalu/comic-text-and-bubble-detector"
         RTDETR_CONF = 0.30
         RTDETR_CLASS_BUBBLE = 0
@@ -320,9 +140,7 @@ def test_detection_rtdetr_backend(mock_resolve, tmp_path):
         "manhua_pipeline.stages.stage1_detection._get_rtdetr",
         return_value=(mock_model, mock_processor),
     ):
-        with patch("manhua_pipeline.stages.stage1_detection.YOLO") as MockYOLO:
-            run_detection(str(ws), cfg)
-            MockYOLO.assert_not_called()
+        run_detection(str(ws), cfg)
 
     det = json.loads((ws / "stage1_detection" / "detection.json").read_text())
     assert det["stage"] == "detection"
