@@ -2,6 +2,7 @@
 
 import copy
 import json
+import shutil
 import time
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -201,8 +202,34 @@ def _clip_region_to_stitch(region: dict, stitch_y: int) -> dict:
     return region
 
 
+# Byte-copy a region-free page into rendered/ preserving source format
+def _copy_region_free_page(
+    page_num: int, orig_path: Path, filename: str, render_dir: Path, ws: Path
+) -> dict:
+    rendered_dir = render_dir / "rendered"
+    rendered_dir.mkdir(parents=True, exist_ok=True)
+    src_ext = Path(filename).suffix.lower() or ".jpg"
+    out_path = rendered_dir / f"{page_num:03d}{src_ext}"
+    shutil.copyfile(orig_path, out_path)
+    logger.info(
+        "[%d/%d %s] Page %d -> copied %s (no regions, lossless passthrough)",
+        _STAGE_INDEX,
+        _TOTAL_STAGES,
+        _STAGE_NAME,
+        page_num,
+        out_path.relative_to(ws),
+    )
+    return {
+        "page_number": page_num,
+        "output_file": str(out_path.relative_to(ws)),
+        "regions_drawn": 0,
+        "regions_left": 0,
+        "passthrough": True,
+    }
+
+
 # Render erased backgrounds and overlaid English text on single page image
-def _render_single_page(
+def _render_single_page(  # noqa: C901
     page: dict,
     ws: Path,
     regions_by_page: dict,
@@ -274,6 +301,10 @@ def _render_single_page(
                     continue
             clipped.append(r)
         page_regions = clipped
+
+    if not page_regions:
+        report = _copy_region_free_page(page_num, orig_path, filename, render_dir, ws)
+        return [], report, 0, 0, 0
 
     render_regions = [r for r in page_regions if r.get("render", True)]
 
@@ -347,7 +378,7 @@ def _render_single_page(
 
 
 # Execute Stage 5 rendering stage across all pages and write render.json
-def run_render(workspace: str, config, run_id: str | None = None) -> Path:
+def run_render(workspace: str, config, run_id: str | None = None) -> Path:  # noqa: C901
     t0 = time.monotonic()
     ws = Path(workspace)
     resolved_run_id = run_id or getattr(config, "_run_id", "unknown")

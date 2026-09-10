@@ -825,3 +825,116 @@ def test_stitched_page_keeps_yolo_mask_for_erase(tmp_path, monkeypatch):
     assert result["bubble_mask_source"] == "yolo_seg"
     assert result["erase_strategy"] != "stitched_solid_fallback"
     assert result["erase_text_box"]["y"] + result["erase_text_box"]["h"] > stitch_y
+
+
+# Verify zero-region pages are byte-copied losslessly instead of decoded and re-encoded
+def test_zero_region_page_copied_losslessly(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
+    )
+
+    ws = tmp_path / "workspace"
+    (ws / "pages").mkdir(parents=True, exist_ok=True)
+    img1 = Image.new("RGB", (400, 600), (255, 255, 255))
+    ImageDraw.Draw(img1).rectangle((55, 230, 75, 245), fill=(0, 0, 0))
+    img1.save(ws / "pages" / "001.png")
+    Image.new("RGB", (400, 600), (120, 120, 200)).save(ws / "pages" / "002.png")
+
+    manifest = {
+        "chapter_id": "t",
+        "total_pages": 2,
+        "pages": [
+            {
+                "page_number": 1,
+                "filename": "001.png",
+                "original_filename": "001.png",
+                "skip": False,
+                "width": 400,
+                "height": 600,
+            },
+            {
+                "page_number": 2,
+                "filename": "002.png",
+                "original_filename": "002.png",
+                "skip": False,
+                "width": 400,
+                "height": 600,
+            },
+        ],
+        "current_stage": "render",
+        "completed_stages": [],
+        "warning_count": 0,
+        "status": "in_progress",
+    }
+    (ws / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    r001 = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "type": "speech_bubble",
+        "bbox": {"x": 50, "y": 200, "w": 150, "h": 80},
+        "read_region": {"x": 50, "y": 200, "w": 150, "h": 80},
+        "parent_bubble": {"x": 30, "y": 180, "w": 190, "h": 120},
+        "erase_mask": {"type": "rect", "coords": [30, 180, 190, 120]},
+        "reading_order": 1,
+        "style_hint": "round",
+        "confidence": 0.95,
+        "render": True,
+    }
+    det = {
+        "chapter_id": "t",
+        "stage": "detection",
+        "generated_at": "now",
+        "model": "m",
+        "regions": [r001],
+    }
+    ocr = {
+        "chapter_id": "t",
+        "stage": "ocr",
+        "results": [
+            {"region_id": "P001_R001", "page_number": 1, "has_usable_text": True},
+        ],
+    }
+    para = {
+        "chapter_id": "t",
+        "stage": "paraphrase",
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "page_number": 1,
+                "final_text": "Hello.",
+                "register": "neutral",
+                "paraphrased": True,
+            },
+        ],
+    }
+
+    (ws / "stage1_detection").mkdir(parents=True, exist_ok=True)
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(det), encoding="utf-8"
+    )
+    (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
+    (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr), encoding="utf-8")
+    (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(
+        json.dumps(para), encoding="utf-8"
+    )
+
+    stage5_render.run_render(str(ws), config)
+
+    rendered_dir = ws / "stage5_render" / "rendered"
+    assert (rendered_dir / "001.jpg").exists()
+
+    copied = rendered_dir / "002.png"
+    assert copied.exists()
+    assert copied.read_bytes() == (ws / "pages" / "002.png").read_bytes()
+
+    render = json.loads((ws / "stage5_render" / "render.json").read_text())
+    reports = {p["page_number"]: p for p in render["pages"]}
+    assert reports[2]["passthrough"] is True
+    assert reports[2]["regions_drawn"] == 0
+    assert reports[2]["output_file"].endswith("002.png")
+
+    assert reports[1].get("passthrough") is not True
+    results_by_id = {r["region_id"]: r for r in render["results"]}
+    assert results_by_id["P001_R001"]["rendered"] is True
