@@ -237,3 +237,167 @@ def test_submit_paraphrase_without_pending_bundle_errors(tmp_path, monkeypatch):
     res = srv.submit_paraphrase("chap_a", {"P001_R001": "hello"})
     assert "error" in res
     assert "no pending bundle" in res["error"]
+
+
+# Write a seed glossary.json into the series base directory
+def _seed_glossary(base: Path, terms: list) -> Path:
+    path = base / config.GLOSSARY_NAME
+    path.write_text(
+        json.dumps(
+            {
+                "version": "v1.0",
+                "updated_at": "2026-08-11T10:23:00.000000+00:00",
+                "_readme": "Series glossary.",
+                "terms": terms,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+# Read back the on-disk glossary as a dict
+def _read_glossary(base: Path) -> dict:
+    return json.loads((base / config.GLOSSARY_NAME).read_text(encoding="utf-8"))
+
+
+# Verify MCP update_glossary appends new terms and updates existing ones in place
+def test_update_glossary_upserts_new_and_existing(tmp_path, monkeypatch):
+    from manhua_pipeline.adapters import mcp_server as srv
+
+    base = tmp_path / "SeriesA"
+    base.mkdir()
+    _seed_glossary(
+        base,
+        [
+            {
+                "source_term": "姐姐",
+                "target_term": "big sister",
+                "locked": False,
+                "notes": "existing note",
+            }
+        ],
+    )
+    monkeypatch.setattr(srv, "get_output_dir", lambda: str(base))
+
+    res = srv.update_glossary(
+        [
+            {"source_term": "姐姐", "target_term": "Sis"},
+            {"source_term": "哥哥", "target_term": "big brother", "locked": True},
+        ]
+    )
+
+    assert "error" not in res
+    assert res["written"] == 2
+    assert res["total_terms"] == 2
+
+    terms = {t["source_term"]: t for t in _read_glossary(base)["terms"]}
+    # Existing entry updated in place, not duplicated.
+    assert terms["姐姐"]["target_term"] == "Sis"
+    # Omitted optional fields must not clobber what is on disk.
+    assert terms["姐姐"]["notes"] == "existing note"
+    assert terms["哥哥"]["target_term"] == "big brother"
+    assert terms["哥哥"]["locked"] is True
+
+
+# Verify MCP update_glossary refuses to overwrite a locked term
+def test_update_glossary_warns_and_skips_locked(tmp_path, monkeypatch):
+    from manhua_pipeline.adapters import mcp_server as srv
+
+    base = tmp_path / "SeriesA"
+    base.mkdir()
+    _seed_glossary(
+        base,
+        [
+            {
+                "source_term": "姐姐",
+                "target_term": "big sister",
+                "locked": True,
+                "notes": "",
+            }
+        ],
+    )
+    monkeypatch.setattr(srv, "get_output_dir", lambda: str(base))
+
+    res = srv.update_glossary([{"source_term": "姐姐", "target_term": "Sis"}])
+
+    assert res["written"] == 0
+    assert res["skipped"] == 1
+    assert res["warning_count"] == 1
+    assert "姐姐" in res["warnings"][0]
+    assert _read_glossary(base)["terms"][0]["target_term"] == "big sister"
+
+    # Resubmitting the identical target is not a conflict, so it is allowed.
+    res2 = srv.update_glossary([{"source_term": "姐姐", "target_term": "big sister"}])
+    assert res2["written"] == 1
+    assert res2["warning_count"] == 0
+
+
+# Verify MCP update_glossary warns on invalid entries but still writes valid ones
+def test_update_glossary_validation_warnings(tmp_path, monkeypatch):
+    from manhua_pipeline.adapters import mcp_server as srv
+
+    base = tmp_path / "SeriesA"
+    base.mkdir()
+    _seed_glossary(base, [])
+    monkeypatch.setattr(srv, "get_output_dir", lambda: str(base))
+
+    res = srv.update_glossary(
+        [
+            "not-an-object",
+            {"target_term": "orphan"},
+            {"source_term": "哥哥"},
+            {"source_term": "姐姐", "target_term": "big sister", "locked": "yes"},
+            {"source_term": "姐姐", "target_term": "Sis"},
+            {"source_term": "妹妹", "target_term": "little sister", "bogus": 1},
+        ]
+    )
+
+    assert res["written"] == 2
+    assert res["skipped"] == 4
+    assert res["warning_count"] == len(res["warnings"])
+    joined = " ".join(res["warnings"])
+    assert "not a JSON object" in joined
+    assert "source_term" in joined
+    assert "target_term" in joined
+    assert "locked" in joined
+    assert "bogus" in joined
+
+    terms = {t["source_term"]: t for t in _read_glossary(base)["terms"]}
+    # Duplicate source_term: first occurrence wins.
+    assert terms["姐姐"]["target_term"] == "big sister"
+    assert terms["姐姐"]["locked"] is False
+    assert "bogus" not in terms["妹妹"]
+
+
+# Verify MCP update_glossary preserves file metadata and applies optional-field defaults
+def test_update_glossary_preserves_metadata_and_defaults(tmp_path, monkeypatch):
+    from manhua_pipeline.adapters import mcp_server as srv
+
+    base = tmp_path / "SeriesA"
+    base.mkdir()
+    path = _seed_glossary(base, [])
+    before = path.read_text(encoding="utf-8")
+    monkeypatch.setattr(srv, "get_output_dir", lambda: str(base))
+
+    res = srv.update_glossary([{"source_term": "姐姐", "target_term": "big sister"}])
+
+    assert res["written"] == 1
+    data = _read_glossary(base)
+    # Top-level metadata survives the round-trip.
+    assert data["version"] == "v1.0"
+    assert data["_readme"] == "Series glossary."
+    assert data["updated_at"] != "2026-08-11T10:23:00.000000+00:00"
+    # Optional fields default rather than being omitted.
+    assert data["terms"][0]["locked"] is False
+    assert data["terms"][0]["notes"] == ""
+
+    # An all-invalid submission must not touch the file at all.
+    res2 = srv.update_glossary([{"source_term": "  ", "target_term": "x"}])
+    assert res2["written"] == 0
+    assert res2["warning_count"] == 1
+    assert path.read_text(encoding="utf-8") != before  # written above
+    srv.update_glossary([])
+    assert _read_glossary(base)["terms"][0]["target_term"] == "big sister"

@@ -12,6 +12,10 @@ if str(root_dir) not in sys.path:
 from fastmcp import FastMCP
 
 import config
+from manhua_pipeline.io.glossary_series import (
+    load_series_glossary,
+    update_glossary_terms,
+)
 from manhua_pipeline.io.settings import get_output_dir
 from manhua_pipeline.logging_setup import get_logger, setup_logging
 from manhua_pipeline.stages.stage3_translation import (
@@ -185,10 +189,38 @@ def submit_paraphrase(chapter: str, mapping: dict) -> dict:
 def get_glossary() -> dict:
     """Return the series-level locked glossary with character names and terms."""
     try:
-        from manhua_pipeline.io.glossary_series import load_series_glossary
-
         base = _base()
         return load_series_glossary(base, config)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+def update_glossary(terms: list[dict]) -> dict:
+    """Add or update series glossary terms.
+
+    Pass a list of term objects shaped like entries in glossary.json:
+    {"source_term": "姐姐", "target_term": "big sister", "locked": false, "notes": "..."}.
+
+    'source_term' and 'target_term' are required. 'locked' (default false) and
+    'notes' (default "") are optional. Entries are matched against existing terms
+    by 'source_term' and updated in place; new source_terms are appended. Terms
+    already marked "locked": true are never overwritten - changing one requires
+    unlocking it in a separate call.
+
+    The response includes a 'warnings' array and 'warning_count'. If warnings is
+    not empty, fix the flagged entries and resubmit - do not ignore them.
+    """
+    try:
+        base = _base()
+        res = update_glossary_terms(base, config, terms)
+        logger.info(
+            "MCP update_glossary(n=%d, written=%d, warnings=%d)",
+            len(terms),
+            res.get("written", 0),
+            res.get("warning_count", 0),
+        )
+        return res
     except Exception as exc:
         return {"error": str(exc)}
 

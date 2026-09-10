@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from manhua_pipeline.logging_setup import get_logger
+from manhua_pipeline.manual_overrides import atomic_write_json
 
 logger = get_logger(__name__)
 
@@ -71,3 +72,165 @@ def append_glossary_term(
             json.dump(g, fh, ensure_ascii=False, indent=2)
     except Exception as exc:
         logger.warning("Failed to save series glossary to %s: %s", p, exc)
+
+
+# Fields a glossary term may carry. Unknown keys are dropped with a warning.
+_ALLOWED_TERM_KEYS = {
+    "source_term",
+    "target_term",
+    "locked",
+    "notes",
+    "category",
+    "term_id",
+    "auto_seeded",
+    "source",
+    "source_region",
+    "request_id",
+}
+
+_OPTIONAL_KEYS = _ALLOWED_TERM_KEYS - {"source_term", "target_term"}
+
+
+# Validate and upsert glossary entries into the series glossary
+def update_glossary_terms(base_dir: Path, config, entries: list) -> dict:
+    if not isinstance(entries, list):
+        raise ValueError("terms must be a list of JSON objects.")
+
+    path = series_glossary_path(base_dir, config)
+    glossary = load_series_glossary(base_dir, config)
+
+    warnings: list[str] = []
+    terms = glossary.get("terms")
+    if not isinstance(terms, list):
+        warnings.append("Glossary 'terms' is not a list - resetting it to empty.")
+        terms = []
+        glossary["terms"] = terms
+
+    index = {t.get("source_term"): t for t in terms if isinstance(t, dict)}
+    seen: set[str] = set()
+    written = 0
+    skipped = 0
+
+    for i, raw in enumerate(entries, start=1):
+        if not isinstance(raw, dict):
+            warnings.append(f"Entry #{i} is not a JSON object - skipped.")
+            skipped += 1
+            continue
+
+        source = raw.get("source_term")
+        if not isinstance(source, str) or not source.strip():
+            warnings.append(
+                f"Entry #{i} is missing required field 'source_term' - skipped."
+            )
+            skipped += 1
+            continue
+        source = source.strip()
+
+        target = raw.get("target_term")
+        if not isinstance(target, str) or not target.strip():
+            warnings.append(
+                f"Entry #{i} ({source!r}) is missing required field "
+                "'target_term' - skipped."
+            )
+            skipped += 1
+            continue
+        target = target.strip()
+
+        if source in seen:
+            warnings.append(
+                f"Duplicate source_term {source!r} in submission - "
+                "the first occurrence was kept."
+            )
+            skipped += 1
+            continue
+
+        unknown = sorted(set(raw) - _ALLOWED_TERM_KEYS)
+        if unknown:
+            warnings.append(
+                f"Entry #{i} ({source!r}) has unknown field(s) "
+                f"{', '.join(unknown)} - ignored."
+            )
+
+        existing = index.get(source)
+        if existing is not None:
+            current = (existing.get("target_term") or "").strip()
+            if existing.get("locked") and current and current != target:
+                warnings.append(
+                    f"Locked term {source!r} already maps to {current!r} - refusing "
+                    f"to overwrite with {target!r}. Unlock it first if this change is "
+                    "intended."
+                )
+                skipped += 1
+                continue
+
+            existing["target_term"] = target
+            # Only override optional fields the caller actually supplied, so a
+            # partial submission cannot silently unlock a term or wipe its notes.
+            if "locked" in raw:
+                if isinstance(raw["locked"], bool):
+                    existing["locked"] = raw["locked"]
+                else:
+                    warnings.append(
+                        f"Entry #{i} ({source!r}): 'locked' must be a boolean - "
+                        "existing value kept."
+                    )
+            if "notes" in raw:
+                if isinstance(raw["notes"], str):
+                    existing["notes"] = raw["notes"]
+                else:
+                    warnings.append(
+                        f"Entry #{i} ({source!r}): 'notes' must be a string - "
+                        "existing value kept."
+                    )
+        else:
+            locked = raw.get("locked", False)
+            if not isinstance(locked, bool):
+                warnings.append(
+                    f"Entry #{i} ({source!r}): 'locked' must be a boolean - "
+                    "defaulted to false."
+                )
+                locked = False
+            notes = raw.get("notes", "")
+            if not isinstance(notes, str):
+                warnings.append(
+                    f"Entry #{i} ({source!r}): 'notes' must be a string - "
+                    "defaulted to empty."
+                )
+                notes = ""
+            entry = {
+                "source_term": source,
+                "target_term": target,
+                "locked": locked,
+                "notes": notes,
+            }
+            for key in _OPTIONAL_KEYS:
+                if key in raw and key not in ("locked", "notes"):
+                    entry[key] = raw[key]
+            terms.append(entry)
+            index[source] = entry
+
+        seen.add(source)
+        written += 1
+
+    summary = {
+        "written": written,
+        "skipped": skipped,
+        "warnings": warnings,
+        "warning_count": len(warnings),
+        "path": str(path),
+        "total_terms": len(terms),
+    }
+
+    if not written:
+        return summary
+
+    glossary["updated_at"] = datetime.now(timezone.utc).isoformat()
+    atomic_write_json(path, glossary)
+    logger.info(
+        "[Glossary] Updated %s (%d written, %d skipped, %d warnings)",
+        path,
+        written,
+        skipped,
+        len(warnings),
+    )
+    return summary
