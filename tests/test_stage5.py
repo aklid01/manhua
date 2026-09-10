@@ -1,5 +1,7 @@
 # Unit tests for Stage 5 text layout, font fitting, inpainting erasure, and page rendering.
 
+import base64
+import io
 import json
 
 from PIL import Image, ImageDraw, ImageFont
@@ -15,6 +17,13 @@ from manhua_pipeline.stages.stage5_render import (
     grow_layout_box,
     intersect_boxes,
 )
+
+
+# Helper to encode a PIL mask as base64 PNG for bubble_mask metadata
+def _b64_png(mask):
+    buf = io.BytesIO()
+    mask.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 # Helper to configure mock workspace with test images and stage outputs
@@ -709,3 +718,110 @@ def test_stitched_page_clips_bubble_at_stitch_boundary(tmp_path, monkeypatch):
 
     rendered = Image.open(ws / "stage5_render" / "rendered" / "001.jpg").convert("RGB")
     assert rendered.getpixel((65, 337)) == (255, 255, 255)
+
+
+# Verify a regenerated YOLO mask is kept for stitched erases instead of solid fallback
+def test_stitched_page_keeps_yolo_mask_for_erase(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        stage5_render, "_load_font", lambda p, pt, cfg: ImageFont.load_default()
+    )
+
+    stitch_y = 300
+    page_h = stitch_y * 2
+
+    ws = tmp_path / "workspace"
+    (ws / "pages").mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", (400, page_h), (255, 255, 255))
+    ImageDraw.Draw(img).rectangle((55, 330, 75, 345), fill=(0, 0, 0))
+    img.save(ws / "pages" / "001.png")
+
+    manifest = {
+        "chapter_id": "t",
+        "total_pages": 1,
+        "pages": [
+            {
+                "page_number": 1,
+                "filename": "001.png",
+                "original_filename": "001.png",
+                "skip": False,
+                "width": 400,
+                "height": page_h,
+                "global_y_offset": stitch_y,
+            }
+        ],
+        "current_stage": "render",
+        "completed_stages": [],
+        "warning_count": 0,
+        "status": "in_progress",
+    }
+    (ws / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    mask = Image.new("L", (200, 200), 255)
+    bubble_mask = {
+        "mask_b64": _b64_png(mask),
+        "confidence": 0.93,
+        "valid": True,
+    }
+
+    r001 = {
+        "region_id": "P001_R001",
+        "page_number": 1,
+        "type": "speech_bubble",
+        "bbox": {"x": 50, "y": 200, "w": 150, "h": 180},
+        "read_region": {"x": 50, "y": 200, "w": 150, "h": 180},
+        "parent_bubble": {"x": 20, "y": 180, "w": 200, "h": 200},
+        "erase_mask": {"type": "rect", "coords": [20, 180, 200, 200]},
+        "bubble_mask": bubble_mask,
+        "reading_order": 1,
+        "style_hint": "round",
+        "confidence": 0.95,
+        "render": True,
+    }
+
+    det = {
+        "chapter_id": "t",
+        "stage": "detection",
+        "generated_at": "now",
+        "model": "m",
+        "regions": [r001],
+    }
+    ocr = {
+        "chapter_id": "t",
+        "stage": "ocr",
+        "results": [
+            {"region_id": "P001_R001", "page_number": 1, "has_usable_text": True},
+        ],
+    }
+    para = {
+        "chapter_id": "t",
+        "stage": "paraphrase",
+        "results": [
+            {
+                "region_id": "P001_R001",
+                "page_number": 1,
+                "final_text": "Hello.",
+                "register": "neutral",
+                "paraphrased": True,
+            },
+        ],
+    }
+
+    (ws / "stage1_detection").mkdir(parents=True, exist_ok=True)
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(det), encoding="utf-8"
+    )
+    (ws / "stage2_ocr").mkdir(parents=True, exist_ok=True)
+    (ws / "stage2_ocr" / "ocr.json").write_text(json.dumps(ocr), encoding="utf-8")
+    (ws / "stage4_paraphrase").mkdir(parents=True, exist_ok=True)
+    (ws / "stage4_paraphrase" / "paraphrase.json").write_text(
+        json.dumps(para), encoding="utf-8"
+    )
+
+    stage5_render.run_render(str(ws), config)
+
+    render = json.loads((ws / "stage5_render" / "render.json").read_text())
+    result = render["results"][0]
+
+    assert result["bubble_mask_source"] == "yolo_seg"
+    assert result["erase_strategy"] != "stitched_solid_fallback"
+    assert result["erase_text_box"]["y"] + result["erase_text_box"]["h"] > stitch_y

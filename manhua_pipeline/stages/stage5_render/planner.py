@@ -304,8 +304,11 @@ def _plan_and_erase_region(
     fallback_shape = str(getattr(config, "FALLBACK_ERASE_SHAPE", "oval"))
     feather_px = int(getattr(config, "FALLBACK_ERASE_FEATHER_PX", 3))
 
+    # Keep a regenerated YOLO mask for stitched erases; only maskless stitched
+    # regions need the solid fallback (thought/generic masks can carve channels).
     erase_bubble_mask = bubble_mask
-    if stitched_erase:
+    used_stitched_solid = stitched_erase and bubble_mask_source != "yolo_seg"
+    if used_stitched_solid:
         logger.info(
             "[%d/%d %s] Page %d %s -> stitched region, using solid %s fallback for erase",
             _STAGE_INDEX,
@@ -570,7 +573,7 @@ def _plan_and_erase_region(
         bubble_box=bubble_box.as_dict(),
         erase_strategy=(
             "stitched_solid_fallback"
-            if stitched_erase
+            if used_stitched_solid
             else (
                 "thought_bubble_inner_mask"
                 if bubble_mask_source == "thought_radiating_inner"
