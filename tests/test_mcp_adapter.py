@@ -372,6 +372,35 @@ def test_update_glossary_validation_warnings(tmp_path, monkeypatch):
     assert "bogus" not in terms["妹妹"]
 
 
+# Verify MCP update_glossary rejects source terms that are not CJK text
+def test_update_glossary_rejects_non_cjk_source(tmp_path, monkeypatch):
+    from manhua_pipeline.adapters import mcp_server as srv
+
+    base = tmp_path / "SeriesA"
+    base.mkdir()
+    _seed_glossary(base, [])
+    monkeypatch.setattr(srv, "get_output_dir", lambda: str(base))
+
+    res = srv.update_glossary(
+        [
+            {"source_term": "big sister", "target_term": "Sis"},
+            {"source_term": "姐姐", "target_term": "big sister"},
+        ]
+    )
+
+    assert "error" not in res
+    assert res["written"] == 1
+    assert res["skipped"] == 1
+    assert res["warning_count"] == 1
+    assert "must be CJK" in res["warnings"][0]
+    assert "big sister" in res["warnings"][0]
+
+    # Only the CJK source term reached the glossary.
+    terms = {t["source_term"]: t for t in _read_glossary(base)["terms"]}
+    assert set(terms) == {"姐姐"}
+    assert terms["姐姐"]["target_term"] == "big sister"
+
+
 # Verify MCP update_glossary preserves file metadata and applies optional-field defaults
 def test_update_glossary_preserves_metadata_and_defaults(tmp_path, monkeypatch):
     from manhua_pipeline.adapters import mcp_server as srv

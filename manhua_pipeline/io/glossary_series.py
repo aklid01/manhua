@@ -91,6 +91,42 @@ _ALLOWED_TERM_KEYS = {
 _OPTIONAL_KEYS = _ALLOWED_TERM_KEYS - {"source_term", "target_term"}
 
 
+# Check whether text contains CJK characters
+def _has_cjk(text: str) -> bool:
+    return any(
+        ("\u3400" <= ch <= "\u9fff") or ("\uf900" <= ch <= "\ufaff")
+        for ch in (text or "")
+    )
+
+
+# Validate a submission entry's required fields. Return ((source, target), None)
+# on success or (None, warning) when the entry must be rejected.
+def _validate_entry_fields(
+    raw: dict, index: int
+) -> tuple[tuple[str, str] | None, str | None]:
+    source = raw.get("source_term")
+    if not isinstance(source, str) or not source.strip():
+        return (
+            None,
+            f"Entry #{index} is missing required field 'source_term' - skipped.",
+        )
+    source = source.strip()
+
+    target = raw.get("target_term")
+    if not isinstance(target, str) or not target.strip():
+        return None, (
+            f"Entry #{index} ({source!r}) is missing required field "
+            "'target_term' - skipped."
+        )
+
+    if not _has_cjk(source):
+        return None, (
+            f"Entry #{index} ({source!r}): 'source_term' must be CJK text - skipped."
+        )
+
+    return (source, target.strip()), None
+
+
 # Validate and upsert glossary entries into the series glossary
 def update_glossary_terms(base_dir: Path, config, entries: list) -> dict:
     if not isinstance(entries, list):
@@ -117,24 +153,12 @@ def update_glossary_terms(base_dir: Path, config, entries: list) -> dict:
             skipped += 1
             continue
 
-        source = raw.get("source_term")
-        if not isinstance(source, str) or not source.strip():
-            warnings.append(
-                f"Entry #{i} is missing required field 'source_term' - skipped."
-            )
+        fields, reject = _validate_entry_fields(raw, i)
+        if reject is not None:
+            warnings.append(reject)
             skipped += 1
             continue
-        source = source.strip()
-
-        target = raw.get("target_term")
-        if not isinstance(target, str) or not target.strip():
-            warnings.append(
-                f"Entry #{i} ({source!r}) is missing required field "
-                "'target_term' - skipped."
-            )
-            skipped += 1
-            continue
-        target = target.strip()
+        source, target = fields
 
         if source in seen:
             warnings.append(

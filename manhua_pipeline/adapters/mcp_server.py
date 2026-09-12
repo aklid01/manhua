@@ -202,7 +202,9 @@ def update_glossary(terms: list[dict]) -> dict:
     Pass a list of term objects shaped like entries in glossary.json:
     {"source_term": "姐姐", "target_term": "big sister", "locked": false, "notes": "..."}.
 
-    'source_term' and 'target_term' are required. 'locked' (default false) and
+    'source_term' and 'target_term' are required. A 'source_term' must be CJK
+    text; entries whose source term contains no CJK characters are rejected
+    with a warning. 'locked' (default false) and
     'notes' (default "") are optional. Entries are matched against existing terms
     by 'source_term' and updated in place; new source_terms are appended. Terms
     already marked "locked": true are never overwritten - changing one requires
