@@ -360,6 +360,8 @@ def test_ocr_engine_fallback():
         OCR_LANG = "ch"
         OCR_VERSION = "PP-OCRv6"
         OCR_USE_GPU = False
+        OCR_DET_LIMIT_SIDE_LEN = 1600
+        OCR_DET_LIMIT_TYPE = "max"
 
     with patch("paddleocr.PaddleOCR") as mock_paddle_ocr:
         mock_paddle_ocr.side_effect = [ValueError("Failed preferred"), MagicMock()]
@@ -367,6 +369,100 @@ def test_ocr_engine_fallback():
         engine = _get_ocr(MockConfig)
         assert engine is not None
         assert stage2_ocr._ACTIVE_OCR_ENGINE == "paddle"
+        for call in mock_paddle_ocr.call_args_list:
+            assert call.kwargs["text_det_limit_side_len"] == 1600
+            assert call.kwargs["text_det_limit_type"] == "max"
+
+
+# Verify det input cap kwargs are omitted entirely when the cap is disabled
+def test_ocr_det_limit_disabled_omits_kwargs():
+    import manhua_pipeline.stages.stage2_ocr as stage2_ocr
+    from manhua_pipeline.stages.stage2_ocr import _get_ocr
+
+    stage2_ocr._OCR_ENGINE = None
+    stage2_ocr._ACTIVE_OCR_ENGINE = None
+
+    class MockConfig:
+        OCR_ENGINE = "transformers"
+        OCR_LANG = "ch"
+        OCR_VERSION = "PP-OCRv6"
+        OCR_USE_GPU = False
+        OCR_DET_LIMIT_SIDE_LEN = 0
+        OCR_DET_LIMIT_TYPE = "max"
+
+    with patch("paddleocr.PaddleOCR") as mock_paddle_ocr:
+        mock_paddle_ocr.return_value = MagicMock()
+        _get_ocr(MockConfig)
+
+    assert mock_paddle_ocr.call_count == 1
+    assert "text_det_limit_side_len" not in mock_paddle_ocr.call_args.kwargs
+    assert "text_det_limit_type" not in mock_paddle_ocr.call_args.kwargs
+
+
+# Verify oversized crops log a det-cap notice while small crops stay silent
+def test_ocr_oversized_crop_logs_det_cap(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from manhua_pipeline.stages import stage2_ocr as s2
+
+    ws = tmp_path / "series" / "ch1"
+    (ws / "pages").mkdir(parents=True)
+    (ws / "stage1_detection").mkdir(parents=True)
+    Image.new("RGB", (1500, 3500), (255, 255, 255)).save(ws / "pages" / "001.png")
+    (ws / "manifest.json").write_text(
+        json.dumps(
+            {
+                "chapter_id": "ch1",
+                "pages": [{"page_number": 1, "filename": "001.png", "skip": False}],
+                "completed_stages": ["import", "detect"],
+                "current_stage": "ocr",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ws / "stage1_detection" / "detection.json").write_text(
+        json.dumps(
+            {
+                "regions": [
+                    {
+                        "region_id": "P001_R001",
+                        "page_number": 1,
+                        "type": "speech_bubble",
+                        "read_region": {"x": 100, "y": 300, "w": 1200, "h": 2400},
+                        "bbox": {"x": 100, "y": 300, "w": 1200, "h": 2400},
+                        "is_free_text": False,
+                    },
+                    {
+                        "region_id": "P001_R002",
+                        "page_number": 1,
+                        "type": "speech_bubble",
+                        "read_region": {"x": 100, "y": 300, "w": 400, "h": 500},
+                        "bbox": {"x": 100, "y": 300, "w": 400, "h": 500},
+                        "is_free_text": False,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(s2, "_read_best", lambda e, c, cfg: ("你好", 0.9, 0.9, False))
+    monkeypatch.setattr(s2, "_get_ocr", lambda cfg: object())
+    monkeypatch.setattr(s2, "_close_ocr", lambda: None)
+
+    with caplog.at_level(logging.INFO, logger="manhua_pipeline.stages.stage2_ocr"):
+        s2.run_ocr(str(ws), config)
+
+    cap_texts = [rec.message for rec in caplog.records]
+    big = [t for t in cap_texts if "P001_R001" in t and "det input cap" in t]
+    assert len(big) == 1
+    assert "1200x2400" in big[0]
+    assert "1600" in big[0]
+    assert not [t for t in cap_texts if "P001_R002" in t and "det input cap" in t]
+
+    ocr = json.loads((ws / "stage2_ocr" / "ocr.json").read_text(encoding="utf-8"))
+    assert ocr["ocr_det_limit_side_len"] == 1600
+    assert ocr["ocr_det_limit_type"] == "max"
 
 
 # Verify _close_ocr releases engine resources and clears singleton reference

@@ -103,6 +103,15 @@ def _get_ocr(config):
 
     fallback_engine = "paddle" if preferred_engine == "transformers" else "transformers"
 
+    det_limit = int(getattr(config, "OCR_DET_LIMIT_SIDE_LEN", 0) or 0)
+    det_limit_type = getattr(config, "OCR_DET_LIMIT_TYPE", "max")
+    # PaddleOCR filters None-valued kwargs, so omit the keys entirely when disabled
+    det_limit_kwargs = (
+        {"text_det_limit_side_len": det_limit, "text_det_limit_type": det_limit_type}
+        if det_limit > 0
+        else {}
+    )
+
     try:
         logger.info(
             "[%s] Initializing PaddleOCR with preferred engine: %s (device=%s)",
@@ -119,6 +128,7 @@ def _get_ocr(config):
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
+            **det_limit_kwargs,
         )
         _ACTIVE_OCR_ENGINE = preferred_engine
         return _OCR_ENGINE
@@ -140,6 +150,7 @@ def _get_ocr(config):
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
+        **det_limit_kwargs,
     )
     _ACTIVE_OCR_ENGINE = fallback_engine
     return _OCR_ENGINE
@@ -381,6 +392,17 @@ def _ocr_region(
         status = "no_text"
     else:
         crop_im = page_im.crop((x0, y0, x1, y1))
+        det_limit = int(getattr(config, "OCR_DET_LIMIT_SIDE_LEN", 0) or 0)
+        if det_limit > 0 and max(crop_im.size) * 2 > det_limit:
+            logger.info(
+                "[%s] Crop %s (%dx%d) exceeds det input cap %d after 2x pass; "
+                "detection runs downscaled (recognition unaffected)",
+                _STAGE_NAME,
+                region.get("region_id", "?"),
+                crop_im.width,
+                crop_im.height,
+                det_limit,
+            )
         original_text, mean_conf, min_conf, watermark_filtered = _read_best(
             ocr_engine, crop_im, config
         )
@@ -664,6 +686,10 @@ def run_ocr(workspace: str, config) -> Path:
         "ocr_version": getattr(config, "OCR_VERSION", None),
         "ocr_language": getattr(config, "OCR_LANG", "ch"),
         "ocr_device": "gpu" if getattr(config, "OCR_USE_GPU", False) else "cpu",
+        "ocr_det_limit_side_len": int(
+            getattr(config, "OCR_DET_LIMIT_SIDE_LEN", 0) or 0
+        ),
+        "ocr_det_limit_type": getattr(config, "OCR_DET_LIMIT_TYPE", None),
         "paddleocr_package_version": paddleocr_version,
         "results": results,
     }

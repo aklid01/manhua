@@ -95,6 +95,10 @@ OCR_RETRY_ENABLED = True
 OCR_RETRY_MAX = 2  # Extra retry attempts on low-confidence boxes (up to 3 total)
 OCR_RETRY_FLOOR = 0.30  # Minimum confidence to attempt OCR retry passes
 
+# Detection input cap
+OCR_DET_LIMIT_SIDE_LEN = 1600
+OCR_DET_LIMIT_TYPE = "max"  # "max": downscale only when longer than the cap
+
 OCR_REVIEW_ENABLED = True
 OCR_REVIEW_TYPES = ("speech_bubble", "narration")
 OCR_REVIEW_DUMP_CROPS = True
