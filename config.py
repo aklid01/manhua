@@ -77,7 +77,7 @@ YOLO_SEG_MODEL = "models/best.pt"  # Relative to PROJECT_ROOT
 YOLO_SEG_CONF = 0.4  # Minimum confidence threshold for masks
 YOLO_SEG_DEVICE = "0"  # Device: "0" (GPU) or "cpu"
 YOLO_SEG_PAD_FRAC = 0.20  # Crop padding fraction added around bubble box
-YOLO_SEG_SAVE_FAILURES = True
+YOLO_SEG_SAVE_FAILURES = False
 YOLO_SEG_FAILURES_DIR = "debug/seg_failures"
 
 # Stage 2: OCR & Filtering
