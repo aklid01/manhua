@@ -6,3 +6,4 @@ numpy>=1.24
 
 fastmcp>=3.4,<4
 transformers>=4.40.0
+requests>=2.31

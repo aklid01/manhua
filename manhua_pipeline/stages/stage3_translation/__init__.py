@@ -14,6 +14,7 @@ from manhua_pipeline.stages.stage3_translation.backends import (
     ManualBackend,
     McpBackend,
     OllamaBackend,
+    OpenAICompatBackend,
     TranslatorBackend,
     _get_backend,
 )
@@ -83,6 +84,7 @@ _SUBMODULE_MAP = {
     "ManualBackend": backends,
     "McpBackend": backends,
     "OllamaBackend": backends,
+    "OpenAICompatBackend": backends,
     "_get_backend": backends,
     "_locked_terms": glossary,
     "_build_locked_index": glossary,
@@ -136,6 +138,7 @@ __all__ = [
     "ManualBackend",
     "McpBackend",
     "OllamaBackend",
+    "OpenAICompatBackend",
     "_get_backend",
     "_locked_terms",
     "_build_locked_index",

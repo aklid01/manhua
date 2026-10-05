@@ -15,6 +15,25 @@ from manhua_pipeline.stages import _backends as be
 
 logger = get_logger(__name__)
 
+# System prompt hardening and style instructions for OpenAI-compatible paraphrase
+_OPENAI_PARAPHRASE_SYSTEM_HARDENING = (
+    "\n\nSTYLE REFINEMENT:\n"
+    "- Tone down on Gen Z or internet slang and excessive short forms / phonetic spellings.\n"
+    "- Keep dialogue natural, punchy, and conversational without sounding overly casual, meme-like, or robotic.\n"
+    "- ZERO CJK: The localized output must contain ZERO Chinese/CJK characters. "
+    "Translate or romanize any leftover Chinese names, titles, or words into English."
+)
+_OPENAI_PARAPHRASE_STYLE_BLOCK = (
+    "STYLE: Tone down on Gen Z or internet slang and excessive short forms. "
+    "Keep dialogue natural, punchy, and conversational without sounding overly casual, meme-like, or robotic.\n"
+    "CRITICAL REQUIREMENT - ZERO CHINESE / CJK CHARACTERS:\n"
+    "- The output must be 100% in English (Latin alphabet).\n"
+    "- If any Chinese/CJK characters remain in the input or literal translation "
+    "(such as untranslated names, titles, or honorifics like \u536b\u5927\u54e5, \u5e08\u5085, \u5b97\u4e3b), "
+    "translate or romanize them into natural English (e.g. 'Brother Wei', 'Master', 'Sect Master').\n"
+    "- NEVER leave Chinese/CJK characters in the final output string.\n"
+)
+
 _STAGE_INDEX = 4
 _TOTAL_STAGES = 7
 _STAGE_NAME = "Paraphrase"
@@ -311,6 +330,301 @@ class OllamaBackend:
         return be.parse_json(text)
 
 
+# Backend implementing OpenAI-compatible paraphrase with provider failover
+class OpenAICompatBackend:
+    def request(self, bundle: dict, ws: Path, config) -> dict | None:
+        from manhua_pipeline.stages._openai_compat import (
+            load_provider_chain,
+            probe_and_rank_providers,
+        )
+
+        global_cfg, providers = load_provider_chain("paraphrase", config)
+        if not global_cfg.get("enabled", True):
+            logger.info(
+                "[%d/%d %s] openai_compat disabled in settings.json.",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+            )
+            return None
+        if not providers:
+            logger.warning(
+                "[%d/%d %s] openai_compat: no providers in "
+                "settings.json paraphrase_fallback.",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+            )
+            return None
+
+        paths = be.BackendPaths(
+            "paraphrase",
+            config.PARAPHRASE_PROMPT_NAME,
+            config.PARAPHRASE_RESPONSE_NAME,
+        )
+        be.write_bundle(bundle, ws, config, paths)
+
+        regions = bundle.get("regions", [])
+        if not regions:
+            return {}
+
+        self.system_prompt = (bundle.get("READ_FIRST", "") or "").strip() + (
+            _OPENAI_PARAPHRASE_SYSTEM_HARDENING
+        )
+        self.tone = bundle.get("tone_directive", "")
+        self.shorten = bundle.get("shorten_hint", "")
+        glossary = bundle.get("glossary", [])
+        self.gloss_txt = "\n".join(
+            f"{t['source_term']} = {t['target_term']}" for t in glossary
+        )
+        self.max_retries = int(global_cfg.get("max_retries_per_model", 5))
+        self.default_bs = int(global_cfg.get("batch_size", 20))
+        self.default_concurrency = int(global_cfg.get("concurrency", 2))
+        self.timeout = float(global_cfg.get("timeout", 120.0))
+        self.temperature = float(
+            getattr(
+                config,
+                "OPENAI_COMPAT_PARA_TEMPERATURE",
+                getattr(config, "OLLAMA_PARA_TEMPERATURE", 0.7),
+            )
+        )
+
+        if bool(getattr(config, "OPENAI_COMPAT_PROBE_ENABLED", True)):
+            providers = probe_and_rank_providers(providers, self.timeout, logger)
+        if not providers:
+            logger.warning(
+                "[%d/%d %s] openai_compat: no healthy providers.",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+            )
+            return None
+
+        import concurrent.futures
+        import threading
+
+        merged: dict[str, str] = {}
+        lock = threading.Lock()
+        total = len(regions)
+        for prov in providers:
+            needed = [r for r in regions if r["region_id"] not in merged]
+            if not needed:
+                break
+            name = prov.get("name", "Unknown")
+            if not prov.get("base_url") or not prov.get("model"):
+                continue
+            prov_bs = int(prov.get("batch_size") or self.default_bs)
+            prov_conc = max(1, int(prov.get("concurrency") or self.default_concurrency))
+            n_chunks = (len(needed) + prov_bs - 1) // prov_bs
+            logger.info(
+                "[%d/%d %s] openai_compat: %s (%s) | %d pending -> %d batch(es), "
+                "bs=%d conc=%d",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                name,
+                prov.get("model", ""),
+                len(needed),
+                n_chunks,
+                prov_bs,
+                prov_conc,
+            )
+            chunks = [
+                needed[bi * prov_bs : (bi + 1) * prov_bs] for bi in range(n_chunks)
+            ]
+            stop = threading.Event()
+            stream = bool(prov.get("stream", True))
+
+            def _solve(bi: int, chunk: list[dict]):
+                res = self._solve_batch(prov, chunk, stream, bi, n_chunks, lock)
+                merged.update(res)
+                # Detect fatal failure by checking provider abandon flag
+                if getattr(self, "_fatal_provider", None) == prov.get("name"):
+                    stop.set()
+                return res
+
+            self._fatal_provider = None
+            if prov_conc > 1 and len(chunks) > 1:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=prov_conc) as ex:
+                    futs = [ex.submit(_solve, bi, ch) for bi, ch in enumerate(chunks)]
+                    concurrent.futures.wait(futs)
+            else:
+                for bi, ch in enumerate(chunks):
+                    _solve(bi, ch)
+                    if stop.is_set():
+                        break
+            if stop.is_set():
+                self._fatal_provider = None
+                continue
+        if len(merged) < len(regions):
+            missing = [r["region_id"] for r in regions if r["region_id"] not in merged]
+            logger.warning(
+                "[%d/%d %s] openai_compat: %d region(s) unresolved by any provider.",
+                _STAGE_INDEX,
+                _TOTAL_STAGES,
+                _STAGE_NAME,
+                len(missing),
+            )
+        para_dir = ws / config.STAGE_FOLDERS["paraphrase"]
+        with (para_dir / config.PARAPHRASE_RESPONSE_NAME).open(
+            "w", encoding="utf-8"
+        ) as fh:
+            json.dump(merged, fh, ensure_ascii=False, indent=2)
+        _ = total
+        return merged
+
+    def _solve_batch(self, prov, chunk, stream, bi: int, n_chunks: int, lock) -> dict:
+        from manhua_pipeline.stages._openai_compat import (
+            FatalProviderError,
+            _compute_backoff,
+            call_openai_chat,
+            contains_cjk,
+            parse_llm_json,
+            sanitize_dialogue_text,
+        )
+
+        name = prov.get("name", "Unknown")
+        chunk_ids = {r["region_id"] for r in chunk}
+        accepted: dict[str, str] = {}
+        max_size = len(chunk)
+        consec_fail = 0
+        for attempt in range(1, self.max_retries + 1):
+            todo = [r for r in chunk if r["region_id"] not in accepted]
+            if not todo:
+                break
+            to_send = todo[:max_size]
+            prompt = self._build_openai_user_prompt(to_send)
+            try:
+                raw = call_openai_chat(
+                    prov.get("base_url", ""),
+                    prov.get("headers", {}),
+                    prov.get("model", ""),
+                    self.system_prompt,
+                    prompt,
+                    api_key=prov.get("api_key", ""),
+                    timeout=self.timeout,
+                    stream=stream,
+                    temperature=self.temperature,
+                )
+                parsed = parse_llm_json(raw)
+                got = 0
+                with lock:
+                    for r in to_send:
+                        rid = r["region_id"]
+                        if rid in parsed and isinstance(parsed[rid], str):
+                            val = sanitize_dialogue_text(parsed[rid])
+                            if contains_cjk(val):
+                                continue
+                            accepted[rid] = val
+                            got += 1
+                    if got:
+                        logger.info(
+                            "[%s] [%s Batch %d/%d] attempt %d/%d: accepted %d/%d "
+                            "(batch %d/%d)",
+                            _STAGE_NAME,
+                            name,
+                            bi + 1,
+                            n_chunks,
+                            attempt,
+                            self.max_retries,
+                            got,
+                            len(to_send),
+                            len(accepted),
+                            len(chunk_ids),
+                        )
+                    else:
+                        logger.info(
+                            "[%s] [%s Batch %d/%d] attempt %d/%d: no matching IDs",
+                            _STAGE_NAME,
+                            name,
+                            bi + 1,
+                            n_chunks,
+                            attempt,
+                            self.max_retries,
+                        )
+                consec_fail = 0
+                if len(accepted) == len(chunk_ids):
+                    break
+            except FatalProviderError as exc:
+                with lock:
+                    logger.warning(
+                        "[%s] [%s] fatal, abandoning provider: %s",
+                        _STAGE_NAME,
+                        name,
+                        exc,
+                    )
+                self._fatal_provider = prov.get("name")
+                break
+            except Exception as exc:
+                consec_fail += 1
+                retry_after = getattr(exc, "retry_after", None)
+                with lock:
+                    logger.warning(
+                        "[%s] [%s Batch %d/%d] attempt %d failed: %s",
+                        _STAGE_NAME,
+                        name,
+                        bi + 1,
+                        n_chunks,
+                        attempt,
+                        exc,
+                    )
+                if consec_fail >= 2 and max_size > 5:
+                    max_size = max(5, max_size // 2)
+                    consec_fail = 0
+                    with lock:
+                        logger.info(
+                            "[%s] [%s] shrinking request size to %d",
+                            _STAGE_NAME,
+                            name,
+                            max_size,
+                        )
+            if attempt < self.max_retries and len(accepted) < len(chunk_ids):
+                time.sleep(_compute_backoff(attempt, retry_after))
+        return accepted
+
+    # Construct JSON user prompt payload for OpenAI-compatible paraphrase chunk
+    def _build_openai_user_prompt(self, chunk: list[dict]) -> str:
+        import json as _json
+
+        payload = _json.dumps(
+            [
+                {
+                    "region_id": r["region_id"],
+                    "literal_translation": r.get("literal_translation", ""),
+                    **(
+                        {
+                            "translation_task": "translate_and_paraphrase",
+                            "input_text": r.get("original_text", ""),
+                        }
+                        if r.get("translation_task") == "translate_and_paraphrase"
+                        else {}
+                    ),
+                }
+                for r in chunk
+            ],
+            ensure_ascii=False,
+        )
+        gloss = (
+            f"GLOSSARY (keep exactly):\n{self.gloss_txt}\n\n" if self.gloss_txt else ""
+        )
+        directives = ""
+        if self.tone:
+            directives += f"TONE: {self.tone}\n"
+        if self.shorten:
+            directives += f"{self.shorten}\n"
+        directives += _OPENAI_PARAPHRASE_STYLE_BLOCK
+        return (
+            directives
+            + gloss
+            + "For translation_task=paraphrase, rewrite the literal_translation into punchy, "
+            "natural spoken US English. For translation_task=translate_and_paraphrase, "
+            "translate the CJK input_text into English and then rewrite it naturally. "
+            "Return ONLY a valid JSON object mapping region_id -> final_english string, "
+            'e.g. {"P001_R001": "..."}. Do not wrap in markdown or prose.\n'
+            "REGIONS:\n" + payload
+        )
+
+
 # Instantiate configured paraphrase backend instance
 def _get_backend(config) -> ParaphraseBackend:
     name = getattr(config, "PARAPHRASE_BACKEND", "manual")
@@ -320,8 +634,10 @@ def _get_backend(config) -> ParaphraseBackend:
         return McpBackend()
     if name == "ollama":
         return OllamaBackend()
+    if name == "openai_compat":
+        return OpenAICompatBackend()
     raise ValueError(
-        f"Unknown PARAPHRASE_BACKEND: {name!r}. Use 'manual', 'mcp', or 'ollama'."
+        f"Unknown PARAPHRASE_BACKEND: {name!r}. Use 'manual', 'mcp', 'ollama', or 'openai_compat'."
     )
 
 
@@ -452,7 +768,7 @@ def _validate_response(
         else None
     )
     if check_truncation is None:
-        check_truncation = backend_name == "ollama"
+        check_truncation = backend_name in ("ollama", "openai_compat")
 
     allow_stripping = bool(
         getattr(config, "PARAPHRASE_ALLOW_STRIPPING", True)
@@ -655,7 +971,7 @@ def run_paraphrase(
         logger.warning("[%s] %s", _STAGE_NAME, w)
 
     backend_name = getattr(config, "PARAPHRASE_BACKEND", "manual")
-    if backend_name == "ollama" and usable_ids:
+    if backend_name in ("ollama", "openai_compat") and usable_ids:
         ratio = len(paraphrase_map) / len(usable_ids)
         min_ratio = getattr(config, "OLLAMA_PARA_MIN_COMPLETION_RATIO", 0.80)
         if ratio < min_ratio:
@@ -742,7 +1058,7 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
 
     now = datetime.now(timezone.utc).isoformat()
     backend = getattr(config, "PARAPHRASE_BACKEND", "manual")
-    is_ollama = backend == "ollama"
+    is_ollama = backend in ("ollama", "openai_compat")
     results = []
     paraphrased_count = 0
     missing_count = 0
@@ -788,9 +1104,13 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
                     para_source = "translation_recovery"
                 else:
                     para_source = (
-                        f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
-                        if is_ollama
-                        else "llm"
+                        "openai_compat"
+                        if backend == "openai_compat"
+                        else (
+                            f"ollama:{getattr(config, 'OLLAMA_PARA_MODEL', '')}"
+                            if is_ollama
+                            else "llm"
+                        )
                     )
             else:
                 final_text = ""
@@ -858,14 +1178,26 @@ def _write_output(ctx: ParaphraseWriteContext) -> Path:
         "stage": "paraphrase",
         "generated_at": now,
         "paraphraser_backend": backend,
-        "paraphraser_model": getattr(config, "OLLAMA_PARA_MODEL", None)
-        if is_ollama
-        else None,
-        "paraphraser_temperature": getattr(config, "OLLAMA_PARA_TEMPERATURE", None)
-        if is_ollama
-        else None,
-        "prompt_version": getattr(
-            config, "OLLAMA_PARA_PROMPT_VERSION", "paraphrase-v1"
+        "paraphraser_model": (
+            getattr(config, "OLLAMA_PARA_MODEL", None) if backend == "ollama" else None
+        ),
+        "paraphraser_temperature": (
+            getattr(config, "OLLAMA_PARA_TEMPERATURE", None)
+            if backend == "ollama"
+            else (
+                getattr(config, "OPENAI_COMPAT_PARA_TEMPERATURE", None)
+                if backend == "openai_compat"
+                else None
+            )
+        ),
+        "prompt_version": (
+            getattr(
+                config,
+                "OPENAI_COMPAT_PARAPHRASE_PROMPT_VERSION",
+                "paraphrase-openai-v1",
+            )
+            if backend == "openai_compat"
+            else getattr(config, "OLLAMA_PARA_PROMPT_VERSION", "paraphrase-v1")
         ),
         "tone_directive": getattr(
             config,

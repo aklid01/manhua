@@ -103,10 +103,9 @@ def _handle_unresolved_region(
     translation_map: dict,
     glossary_data: dict,
 ) -> bool:
-    if (
-        getattr(config, "TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE", True)
-        and getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
-    ):
+    if getattr(config, "TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE", True) and getattr(
+        config, "TRANSLATOR_BACKEND", ""
+    ) in ("ollama", "openai_compat"):
         region["translation_source"] = "translation_recovery"
         logger.warning(
             "[%s] %s -> handing original CJK to Stage 4 translation recovery",
@@ -228,7 +227,7 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
 
     now = datetime.now(timezone.utc).isoformat()
     translator_backend = getattr(config, "TRANSLATOR_BACKEND", "manual")
-    is_ollama = translator_backend == "ollama"
+    is_ollama = translator_backend in ("ollama", "openai_compat")
     results = []
     translated_count = 0
     missing_count = 0
@@ -271,6 +270,8 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
             skip_reason = None
             if rid in glossary_resolved_ids:
                 trans_source = "locked_glossary"
+            elif translator_backend == "openai_compat":
+                trans_source = "openai_compat"
             elif is_ollama:
                 trans_source = f"ollama:{getattr(config, 'OLLAMA_TRANSLATE_MODEL', '')}"
             else:
@@ -396,13 +397,29 @@ def _write_output(ctx: TranslationWriteContext) -> Path:
         "stage": "translation",
         "generated_at": now,
         "translator_backend": translator_backend,
-        "translator_model": getattr(config, "OLLAMA_TRANSLATE_MODEL", None)
-        if is_ollama
-        else None,
-        "translator_temperature": getattr(config, "OLLAMA_TEMPERATURE", None)
-        if is_ollama
-        else None,
-        "prompt_version": getattr(config, "OLLAMA_PROMPT_VERSION", "translation-v1"),
+        "translator_model": (
+            getattr(config, "OLLAMA_TRANSLATE_MODEL", None)
+            if translator_backend == "ollama"
+            else None
+        ),
+        "translator_temperature": (
+            getattr(config, "OLLAMA_TEMPERATURE", None)
+            if translator_backend == "ollama"
+            else (
+                getattr(config, "OPENAI_COMPAT_TRANSLATE_TEMPERATURE", None)
+                if translator_backend == "openai_compat"
+                else None
+            )
+        ),
+        "prompt_version": (
+            getattr(
+                config,
+                "OPENAI_COMPAT_TRANSLATION_PROMPT_VERSION",
+                "translation-openai-v1",
+            )
+            if translator_backend == "openai_compat"
+            else getattr(config, "OLLAMA_PROMPT_VERSION", "translation-v1")
+        ),
         "glossary_version": glossary_version,
         "results": results,
     }
@@ -603,7 +620,7 @@ def run_translation(
     backend_name = getattr(config, "TRANSLATOR_BACKEND", "manual")
     trivial_missing: list[str] = []
     substantial_missing: list[str] = []
-    if backend_name == "ollama" and usable_ids:
+    if backend_name in ("ollama", "openai_compat") and usable_ids:
         orig_by_id = {r["region_id"]: r.get("original_text", "") for r in usable}
         missing_ids = [rid for rid in usable_ids if rid not in translation_map]
         trivial_missing = [
@@ -623,12 +640,17 @@ def run_translation(
 
     if len(translation_map) == 0 and not (
         getattr(config, "TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE", True)
-        and getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+        and getattr(config, "TRANSLATOR_BACKEND", "") in ("ollama", "openai_compat")
         and usable
     ):
+        _label = (
+            "Ollama"
+            if getattr(config, "TRANSLATOR_BACKEND", "") == "ollama"
+            else getattr(config, "TRANSLATOR_BACKEND", "Backend")
+        )
         raise ValueError(
-            "Ollama returned zero usable translations. Not advancing. "
-            "Check model output and `ollama serve`."
+            f"{_label} returned zero usable translations. Not advancing. "
+            "Check model output and provider configuration."
         )
 
     if trivial_missing:

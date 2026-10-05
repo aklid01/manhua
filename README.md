@@ -56,11 +56,12 @@ Stage 7.
 The translation and paraphrase stages can use different backends. Configure
 them independently in `config.py`.
 
-| Backend  | Description                                                     | Suitable when                                       |
-| -------- | --------------------------------------------------------------- | --------------------------------------------------- |
-| `manual` | Writes a JSON prompt bundle. You provide and save the response. | You want full control or do not have a local model. |
-| `mcp`    | Exposes pending work through the included MCP server.           | You use an MCP-capable agent or client.             |
-| `ollama` | Sends requests to a local Ollama server.                        | You want an automated local workflow.               |
+| Backend         | Description                                                                  | Suitable when                                                           |
+| --------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `manual`        | Writes a JSON prompt bundle. You provide and save the response.              | You want full control or do not have a local model.                     |
+| `mcp`           | Exposes pending work through the included MCP server.                        | You use an MCP-capable agent or client.                                 |
+| `ollama`        | Sends requests to a local Ollama server.                                     | You want an automated local workflow.                                   |
+| `openai_compat` | Routes requests to OpenAI-compatible HTTP APIs with provider fallback chains. | You want automated cloud or self-hosted API models with health probing. |
 
 The current defaults are:
 
@@ -72,7 +73,8 @@ PARAPHRASE_BACKEND = "mcp"
 This combination uses Ollama for literal translation and an MCP client for
 language refinement. For a fully local workflow, set both backends to
 `ollama`. For a workflow without a GPU or agent integration, set one or both to
-`manual`.
+`manual`. For cloud or local API endpoints with automatic failover, set one or
+both to `openai_compat`.
 
 ## Installation
 
@@ -232,11 +234,11 @@ After changing an override, rerun `translate`, `paraphrase`, `render`, and
 
 ### Translation recovery and contextual retry
 
-The local Ollama translator is best-effort. When it cannot produce a valid
-translation for a meaningful region, the original CJK text is handed to Stage
-4, where the stronger paraphrase backend performs a combined
+The local Ollama and OpenAI-compatible translators are best-effort. When either
+cannot produce a valid translation for a meaningful region, the original CJK text
+is handed to Stage 4, where the stronger paraphrase backend performs a combined
 translate-and-paraphrase recovery. This is the normal path when
-`PARAPHRASE_BACKEND = "mcp"`.
+`PARAPHRASE_BACKEND = "mcp"` or when using a capable LLM paraphrase backend.
 
 Stage 3's extra one-region contextual retry is disabled by default because it
 duplicates work before the stronger Stage 4 backend runs. Enable
@@ -304,16 +306,18 @@ The series-level `glossary.json` stores locked names and terms. Chapter-level
 
 Most settings are in `config.py`. The most commonly changed values are:
 
-| Area         | Settings                                                                                      |
-| ------------ | --------------------------------------------------------------------------------------------- |
-| Translation  | `TRANSLATOR_BACKEND`, `OLLAMA_TRANSLATE_MODEL`, `OLLAMA_HOST`                                 |
-| Paraphrasing | `PARAPHRASE_BACKEND`, `OLLAMA_PARA_MODEL`, `OLLAMA_PARA_HOST`                                 |
-| OCR          | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`                        |
-| Detection    | `RTDETR_REPO`, `RTDETR_CONF`, `DETECTOR_USE_GPU`                                              |
-| YOLO-seg     | `YOLO_SEG_ENABLED`, `YOLO_SEG_MODEL`, `YOLO_SEG_CONF`, `YOLO_SEG_DEVICE`, `YOLO_SEG_PAD_FRAC` |
-| Rendering    | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                                     |
-| QA           | `SUCCESS_MAX`, `REVIEW_MAX`                                                                   |
-| Packaging    | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                                                 |
+| Area          | Settings                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| Translation   | `TRANSLATOR_BACKEND`, `OLLAMA_TRANSLATE_MODEL`, `OLLAMA_HOST`                                   |
+| Paraphrasing  | `PARAPHRASE_BACKEND`, `OLLAMA_PARA_MODEL`, `OLLAMA_PARA_HOST`                                   |
+| OpenAI-compat | `OPENAI_COMPAT_TIMEOUT`, `OPENAI_COMPAT_MAX_RETRIES`, `OPENAI_COMPAT_BATCH_SIZE`, `OPENAI_COMPAT_CONCURRENCY`, `OPENAI_COMPAT_STREAM`, `OPENAI_COMPAT_PROBE_ENABLED`, `OPENAI_COMPAT_TRANSLATE_TEMPERATURE`, `OPENAI_COMPAT_PARA_TEMPERATURE` |
+| Import        | `IMPORT_SLICE_TARGET_HEIGHT`, `IMPORT_SLICE_SEAM_TOLERANCE`, `IMPORT_SLICE_SEAM_BAND`, `IMPORT_SLICE_CONTENT_THRESHOLD`, `IMPORT_MAX_WIDTH` |
+| OCR           | `OCR_ENGINE`, `OCR_VERSION`, `OCR_CONFIDENCE_THRESHOLD`, `OCR_USE_GPU`                          |
+| Detection     | `RTDETR_REPO`, `RTDETR_CONF`, `DETECTOR_USE_GPU`                                                |
+| YOLO-seg      | `YOLO_SEG_ENABLED`, `YOLO_SEG_MODEL`, `YOLO_SEG_CONF`, `YOLO_SEG_DEVICE`, `YOLO_SEG_PAD_FRAC`   |
+| Rendering     | `FONT_PATH`, `FONT_MAX_PT`, `FONT_MIN_PT`, `LINE_SPACING`                                       |
+| QA            | `SUCCESS_MAX`, `REVIEW_MAX`                                                                     |
+| Packaging     | `VALID_PACKAGE_FORMATS`, `PACKAGE_IMAGE_EXTS`                                                   |
 
 The bundled font is `assets/fonts/ComicNeue-Bold.ttf`. Set `FONT_PATH` to a
 different font if required. GPU use is enabled by default for detection and OCR
@@ -401,6 +405,57 @@ An MCP client can launch the server with a configuration similar to:
 
 The MCP server reads the configured series directory from `settings.json`, so
 set it with `--set-output-dir` before starting the server.
+
+### OpenAI-compatible backend
+
+The `openai_compat` backend allows Stage 3 (translation) and Stage 4 (paraphrasing) to call OpenAI-compatible HTTP chat completion APIs (such as OpenRouter, DeepSeek, vLLM, or local proxies) with automatic provider fallback, parallel health check probing, streaming SSE support, and zero-CJK prompt hardening.
+
+Configure the backends in `config.py`:
+
+```python
+TRANSLATOR_BACKEND = "openai_compat"
+PARAPHRASE_BACKEND = "openai_compat"
+```
+
+Provider fallback chains and settings are configured in `settings.json` under `translate_fallback` and `paraphrase_fallback`:
+
+```json
+{
+  "translate_fallback": {
+    "enabled": true,
+    "max_retries_per_model": 5,
+    "batch_size": 20,
+    "concurrency": 3,
+    "timeout": 120,
+    "providers": [
+      {
+        "name": "primary-provider",
+        "base_url": "https://api.example.com/v1",
+        "model": "model-name",
+        "api_key": "YOUR_API_KEY",
+        "batch_size": 20,
+        "concurrency": 2,
+        "stream": true
+      }
+    ],
+    "disabled_providers": []
+  },
+  "paraphrase_fallback": {
+    "enabled": true,
+    "max_retries_per_model": 5,
+    "batch_size": 20,
+    "concurrency": 2,
+    "timeout": 120,
+    "providers": [ ... ]
+  }
+}
+```
+
+Key features:
+- **Provider failover**: Automatically fails over to the next configured provider if an endpoint encounters fatal errors or exhausts retry limits.
+- **Parallel health probing**: Checks provider connectivity in parallel before execution and demotes slow or unresponsive endpoints.
+- **Hardened prompts**: Enforces strict JSON output mapping with zero leftover CJK characters and verbatim glossary application.
+- **Streaming and connection pooling**: Supports streaming responses and connection pooling via `requests` with standard library `urllib` fallback.
 
 ## Optional touch-up editor
 

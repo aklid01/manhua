@@ -37,6 +37,9 @@ IMPORT_SLICE_TARGET_HEIGHT = 5000  # Target height (px) for each slice
 IMPORT_SLICE_SEAM_TOLERANCE = 0.20  # Search window around target height (fraction)
 IMPORT_SLICE_SEAM_BAND = 24  # Pixel band inspected for cutting seams
 IMPORT_SLICE_MAX_CONTENT_DENSITY = 0.02  # Max non-background pixel density on cut line
+IMPORT_SLICE_CONTENT_THRESHOLD = (
+    245  # Grayscale value below which a pixel counts as content
+)
 IMPORT_STITCH_SMALL_PAGES = True
 IMPORT_MIN_PAGE_HEIGHT = 600
 IMPORT_TARGET_STITCH_HEIGHT = 1800
@@ -145,7 +148,7 @@ WATERMARK_FUZZY_TOKENS = (
 )
 
 # Stage 3: Translation
-TRANSLATOR_BACKEND = "ollama"  # "ollama" | "mcp" | "manual"
+TRANSLATOR_BACKEND = "ollama"  # "ollama" | "mcp" | "manual" | "openai_compat"
 TRANSLATION_PROMPT_NAME = "translation_prompt.json"
 TRANSLATION_RESPONSE_NAME = "translation_response.json"
 
@@ -185,7 +188,7 @@ TRANSLATION_FAILURE_HANDOFF_TO_PARAPHRASE = (
 )
 
 # Stage 4: Paraphrase
-PARAPHRASE_BACKEND = "mcp"  # "mcp" | "ollama" | "manual"
+PARAPHRASE_BACKEND = "mcp"  # "mcp" | "ollama" | "manual" | "openai_compat"
 PARAPHRASE_PROMPT_NAME = "paraphrase_prompt.json"
 PARAPHRASE_RESPONSE_NAME = "paraphrase_response.json"
 PARAPHRASE_TONE_DIRECTIVE = "preserve crude/rude register; casual US English"
@@ -203,6 +206,18 @@ OLLAMA_PARA_NUM_CTX = 2048
 OLLAMA_PARA_NUM_PREDICT = 1024
 OLLAMA_PARA_KEEP_ALIVE = "15m"
 OLLAMA_PARA_PROMPT_VERSION = "paraphrase-v1"
+
+# OpenAI-compatible backend defaults (fallback settings when omitted from settings.json)
+OPENAI_COMPAT_TIMEOUT = 120
+OPENAI_COMPAT_MAX_RETRIES = 5
+OPENAI_COMPAT_BATCH_SIZE = 20
+OPENAI_COMPAT_CONCURRENCY = 3
+OPENAI_COMPAT_STREAM = True
+OPENAI_COMPAT_PROBE_ENABLED = True
+OPENAI_COMPAT_TRANSLATE_TEMPERATURE = 0.2
+OPENAI_COMPAT_PARA_TEMPERATURE = 0.7
+OPENAI_COMPAT_TRANSLATION_PROMPT_VERSION = "translation-openai-v1"
+OPENAI_COMPAT_PARAPHRASE_PROMPT_VERSION = "paraphrase-openai-v1"
 
 # Length sanity check thresholds to catch dropped text
 PARAPHRASE_MIN_TEXT_LENGTH_RATIO = 0.45

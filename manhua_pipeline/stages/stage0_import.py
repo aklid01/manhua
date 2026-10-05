@@ -449,6 +449,20 @@ def _import_folder(
                     if needs_downscale:
                         im.thumbnail((max_w, max_w * 10), Image.Resampling.LANCZOS)
                         w, h = im.size
+                        # Boundaries were detected on the pre-downscale image;
+                        # re-detect on the actual image being cropped so slice
+                        # coordinates always match. Falls back to proportional
+                        # scaling if no seam is found at the smaller size.
+                        orig_h = boundaries[-1][1]
+                        scaled = _safe_slice_boundaries(im, config)
+                        if scaled is not None:
+                            boundaries = scaled
+                        else:
+                            s = h / orig_h if orig_h else 1.0
+                            boundaries = [
+                                (int(t * s), int(b * s)) for t, b in boundaries
+                            ]
+                        slice_count = len(boundaries)
 
                     for slice_index, (top, bottom) in enumerate(boundaries, start=1):
                         page_number += 1
