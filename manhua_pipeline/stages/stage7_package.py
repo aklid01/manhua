@@ -11,12 +11,12 @@ from manhua_pipeline.logging_setup import get_logger, log_stage
 logger = get_logger(__name__)
 _STAGE_INDEX, _TOTAL_STAGES, _STAGE_NAME = 7, 7, "Package"
 
-_DIGIT_RE = re.compile(r"\d+")
+_DIGIT_RE = re.compile(r"\d+\.\d+|\d+")
 
 
-# Natural sorting key based on embedded integer numbers
+# Natural sorting key based on embedded integer and decimal numbers
 def _natural_key(p: Path) -> tuple:
-    nums = tuple(int(n) for n in _DIGIT_RE.findall(p.name))
+    nums = tuple(float(n) if "." in n else int(n) for n in _DIGIT_RE.findall(p.name))
     return nums if nums else (float("inf"),)
 
 

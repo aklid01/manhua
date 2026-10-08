@@ -25,9 +25,11 @@ _STRIP_RATIO = 5.0
 _PASSTHROUGH_MODES = {"RGB", "L", "YCbCr"}
 
 
-# Numeric sorting key extracting embedded integer runs from filename
+# Numeric sorting key extracting embedded integer and decimal runs from filename
 def _numeric_key(p: Path) -> tuple:
-    nums = tuple(int(n) for n in re.findall(r"\d+", p.name))
+    nums = tuple(
+        float(n) if "." in n else int(n) for n in re.findall(r"\d+\.\d+|\d+", p.name)
+    )
     return (nums, p.name)
 
 

@@ -21,6 +21,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
 import os
+import re
 import sys
 import time
 import traceback
@@ -77,15 +78,31 @@ def _load_stage(name):
     return getattr(module, func_name)
 
 
+_FLOAT_RUN_RE = re.compile(r"(\d+\.\d+|\d+)")
+
+
+def _natural_sort_key(path: Path) -> list:
+    """Chapter/file ordering that treats embedded decimals (12.5, 144.45) as numbers."""
+    key = []
+    for tok in _FLOAT_RUN_RE.split(path.name):
+        if tok.isdigit():
+            key.append(int(tok))
+        elif tok.count(".") == 1 and tok.replace(".", "", 1).isdigit():
+            key.append(float(tok))
+        else:
+            key.append(tok.lower())
+    return key
+
+
 def _iter_batch_inputs(folder: Path) -> list[Path]:
-    """CBZ/ZIP files in a folder, lexically sorted (assumes user pre-sorted names)."""
+    """CBZ/ZIP files in a folder, naturally sorted (9 < 10; 12 < 12.5 < 13)."""
     return sorted(
         (
             p
             for p in folder.iterdir()
             if p.is_file() and p.suffix.lower() in {".cbz", ".zip"}
         ),
-        key=lambda p: p.name,
+        key=_natural_sort_key,
     )
 
 
