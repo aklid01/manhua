@@ -243,7 +243,11 @@ translate-and-paraphrase recovery. This is the normal path when
 Stage 3's extra one-region contextual retry is disabled by default because it
 duplicates work before the stronger Stage 4 backend runs. Enable
 `OLLAMA_CONTEXTUAL_RETRY_ENABLED = True` only when a local contextual retry is
-preferred or Stage 4 recovery is unavailable. Single-character CJK/SFX
+preferred or Stage 4 recovery is unavailable. The OpenAI-compatible translator
+follows the same rule: provider failover covers transport errors (timeouts,
+429s, 5xx), but a provider that returns HTTP 200 with missing or invalid
+translations hands the remainder to Stage 4 instead of trying the next
+translation provider. Single-character CJK/SFX
 passthrough remains a separate route and is not affected.
 
 ### Common options

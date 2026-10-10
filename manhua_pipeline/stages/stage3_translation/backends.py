@@ -328,6 +328,13 @@ class OllamaBackend:
 
 # Backend implementing OpenAI-compatible translation with provider failover
 class OpenAICompatBackend:
+    # Validation gaps hand off to Stage 4 recovery instead of the next
+    # translation provider. Transport failover is preserved: a provider that
+    # raises through all retries still yields to the next configured provider.
+    FAIL_FAST_ON_VALIDATION_GAP = True
+    # Cap strict reprompts on validation gaps. Stage 4 recovery handles the
+    # remainder better than repeated same-model retries.
+    MAX_VALIDATION_ATTEMPTS = 2
     def request(self, bundle: dict, ws: Path, config) -> dict | None:
         from manhua_pipeline.stages._openai_compat import (
             load_provider_chain,
@@ -430,15 +437,23 @@ class OpenAICompatBackend:
             import threading
 
             stop = threading.Event()
+            validation_halt = threading.Event()
             lock = threading.Lock()
 
             def _one(bi: int, chunk: list[dict]):
-                accepted = self._translate_via_provider(
+                accepted, failed_transport = self._translate_via_provider(
                     prov, chunk, lock, bi, n_batches
                 )
                 if accepted is None:
                     stop.set()
                     return {}
+                if (
+                    self.FAIL_FAST_ON_VALIDATION_GAP
+                    and not failed_transport
+                    and set(accepted or {}) != {r["region_id"] for r in chunk}
+                ):
+                    validation_halt.set()
+                    stop.set()
                 return accepted
 
             if prov_conc > 1 and len(chunks) > 1:
@@ -456,6 +471,16 @@ class OpenAICompatBackend:
                     merged.update(_one(bi, ch) or {})
                     if stop.is_set():
                         break
+            if validation_halt.is_set():
+                logger.info(
+                    "[%d/%d %s] Validation gap on %s: handing remainder to Stage 4 "
+                    "recovery instead of next provider.",
+                    _STAGE_INDEX,
+                    _TOTAL_STAGES,
+                    _STAGE_NAME,
+                    name,
+                )
+                break
 
         trans_dir = ws / config.STAGE_FOLDERS["translation"]
         response_path = trans_dir / config.TRANSLATION_RESPONSE_NAME
@@ -473,6 +498,8 @@ class OpenAICompatBackend:
         name = prov.get("name", "Unknown")
         expected_ids = {r["region_id"] for r in chunk}
         accepted: dict = {}
+        failed_transport = False
+        max_validation_attempts = max(1, min(self.max_retries, self.MAX_VALIDATION_ATTEMPTS))
         with lock:
             self._batch_calls = 0
         for attempt in range(1, self.max_retries + 1):
@@ -520,6 +547,11 @@ class OpenAICompatBackend:
                     )
                 if len(accepted) == len(expected_ids):
                     break
+                if (
+                    self.FAIL_FAST_ON_VALIDATION_GAP
+                    and attempt >= max_validation_attempts
+                ):
+                    break
             except FatalProviderError as exc:
                 with lock:
                     logger.warning(
@@ -528,8 +560,9 @@ class OpenAICompatBackend:
                         name,
                         exc,
                     )
-                return None
+                return None, False
             except Exception as exc:
+                failed_transport = True
                 retry_after = getattr(exc, "retry_after", None)
                 with lock:
                     logger.warning(
@@ -543,7 +576,7 @@ class OpenAICompatBackend:
                     )
                 if attempt < self.max_retries:
                     time.sleep(_compute_backoff(attempt, retry_after))
-        return accepted
+        return accepted, failed_transport
 
     # Construct JSON user prompt payload for OpenAI-compatible translation batch
     def _build_openai_user_prompt(self, chunk, strict: bool) -> str:
