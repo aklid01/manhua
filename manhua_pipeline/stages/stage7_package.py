@@ -31,11 +31,19 @@ def _collect(render_dir: Path, config) -> list[Path]:
     )
 
 
+# Known input archive suffixes. Only these are stripped from manifest names.
+# A blind Path.stem would treat the ".5" in "39.5" as a suffix and truncate it.
+_ARCHIVE_SUFFIXES = {".cbz", ".zip"}
+
+
 # Determine base chapter archive name from manifest or workspace
 def _base_name(ws: Path, manifest: dict) -> str:
     for key in ("source_archive", "source_filename", "original_name"):
         if manifest.get(key):
-            return Path(manifest[key]).stem
+            name = Path(manifest[key]).name
+            if Path(name).suffix.lower() in _ARCHIVE_SUFFIXES:
+                return Path(name).stem
+            return name
     return ws.name
 
 

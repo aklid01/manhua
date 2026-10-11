@@ -87,3 +87,31 @@ def test_mixed_extensions_all_included(tmp_path):
     pkg = ws / config.STAGE_FOLDERS["package"]
     with zipfile.ZipFile(pkg / "0_002_.zip") as zf:
         assert zf.namelist() == ["001.jpg", "002.webp", "003.png"]
+
+
+# Verify float chapter keeps its decimal in the archive name (39.5, not 39)
+def test_float_chapter_name_preserved(tmp_path):
+    ws = tmp_path / "39.5"
+    render = ws / config.STAGE_FOLDERS["render"] / "rendered"
+    render.mkdir(parents=True)
+    Image.new("RGB", (50, 70)).save(render / "001.png")
+    (ws / config.MANIFEST_NAME).write_text(
+        json.dumps({"chapter_id": "39_5", "source_archive": "39.5"})
+    )
+
+    out = s7.run_package(str(ws), config, ["zip", "cbz"])
+    assert {p.name for p in out} == {"39.5.zip", "39.5.cbz"}
+
+
+# Verify full archive filenames do not lose the decimal either
+def test_float_archive_name_preserved(tmp_path):
+    ws = tmp_path / "144.36"
+    render = ws / config.STAGE_FOLDERS["render"] / "rendered"
+    render.mkdir(parents=True)
+    Image.new("RGB", (50, 70)).save(render / "001.png")
+    (ws / config.MANIFEST_NAME).write_text(
+        json.dumps({"chapter_id": "144_36", "source_archive": "144.36.cbz"})
+    )
+
+    out = s7.run_package(str(ws), config, ["zip"])
+    assert {p.name for p in out} == {"144.36.zip"}
