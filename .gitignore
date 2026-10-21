@@ -30,5 +30,6 @@ outputs/
 Thumbs.db
 graft/
 GEMINI.md
+AGENTS.md
 automation.py
 debug/
