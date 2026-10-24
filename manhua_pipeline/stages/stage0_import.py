@@ -106,6 +106,11 @@ def _safe_slice_boundaries(image: Image.Image, config) -> list[tuple[int, int]] 
         boundaries.append(seam)
         desired = seam + target
 
+    if not boundaries:
+        # Page qualifies for slicing but is too short to cut at the configured
+        # target: surface the config mismatch instead of passing through silently.
+        return None
+
     points = [0, *boundaries, height]
     return list(zip(points, points[1:]))
 
@@ -435,7 +440,7 @@ def _import_folder(
                 boundaries = _safe_slice_boundaries(im, config)
                 if boundaries is None:
                     logger.warning(
-                        "[%s] %s is unusually tall but no safe seam was found; keeping intact",
+                        "[%s] %s qualifies for slicing but no safe seam was found at the configured target; keeping intact",
                         _STAGE_NAME,
                         src_file.name,
                     )

@@ -33,7 +33,7 @@ IMPORT_MAX_WIDTH = 1500  # Max page width in px (proportional downscale; 0 to di
 IMPORT_SLICE_ENABLED = True
 IMPORT_SLICE_TRIGGER_RATIO = 5.0  # Height-to-width ratio required to trigger slicing
 IMPORT_SLICE_MIN_HEIGHT = 4000  # Minimum page height (px) required for slicing
-IMPORT_SLICE_TARGET_HEIGHT = 5000  # Target height (px) for each slice
+IMPORT_SLICE_TARGET_HEIGHT = 2200  # Target height (px) per slice; must stay <= 2/3 of IMPORT_SLICE_MIN_HEIGHT so triggered strips can always be cut
 IMPORT_SLICE_SEAM_TOLERANCE = 0.20  # Search window around target height (fraction)
 IMPORT_SLICE_SEAM_BAND = 24  # Pixel band inspected for cutting seams
 IMPORT_SLICE_MAX_CONTENT_DENSITY = 0.02  # Max non-background pixel density on cut line
